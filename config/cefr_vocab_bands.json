@@ -1,0 +1,93 @@
+{
+  "_meta": {
+    "description": "CEFR A1-C1 banded vocabulary used by the CEFRVocabFilter. Words not in any band are treated as 'unknown' and ignored when computing the above-band ratio (charitable default — replace this file with a fuller CEFR-aligned corpus such as Cambridge English Profile or CEFR-J for production filtering). C2 is open: any word not in A1-C1 is implicitly C2.",
+    "bands_cumulative_target_size": {
+      "A1": 500,
+      "A2": 1500,
+      "B1": 3000,
+      "B2": 4000,
+      "C1": 6000,
+      "C2": null
+    },
+    "current_word_counts_note": "Starter list only — coverage is ~50-80 representative content words per band. Expand against a real CEFR corpus before relying on absolute pass/fail rates."
+  },
+  "bands": {
+    "A1": [
+      "house", "home", "family", "mother", "father", "brother", "sister", "son", "daughter", "friend",
+      "name", "food", "water", "milk", "bread", "fruit", "rice", "school", "work", "job",
+      "day", "night", "morning", "afternoon", "evening", "time", "year", "month", "week", "hour",
+      "minute", "car", "book", "room", "table", "chair", "door", "window", "hand", "eye",
+      "face", "head", "body", "dog", "cat", "baby", "child", "man", "woman", "boy",
+      "girl", "people", "weather", "money", "phone", "city", "street", "store", "shop", "park",
+      "eat", "drink", "sleep", "see", "look", "want", "like", "love", "play", "talk",
+      "read", "write", "walk", "run", "sit", "stand", "give", "take", "get", "find",
+      "make", "say", "tell", "ask", "help", "learn", "live", "watch", "listen", "know",
+      "think", "feel", "need", "try", "start", "stop", "open", "close", "buy", "sell",
+      "good", "bad", "big", "small", "new", "old", "young", "happy", "sad", "hot",
+      "cold", "warm", "cool", "fast", "slow", "easy", "hard", "tired", "busy", "ready",
+      "free", "full", "empty", "clean", "dirty", "nice", "beautiful"
+    ],
+    "A2": [
+      "weekend", "vacation", "holiday", "traffic", "party", "meeting", "breakfast", "lunch", "dinner", "market",
+      "bus", "train", "taxi", "plane", "library", "museum", "beach", "mountain", "river", "lake",
+      "garden", "flower", "animal", "neighbor", "classmate", "doctor", "nurse", "teacher", "student", "office",
+      "hospital", "restaurant", "kitchen", "bedroom", "bathroom", "ticket", "trip", "journey", "photo", "picture",
+      "visit", "arrive", "leave", "prepare", "finish", "continue", "change", "decide", "agree", "disagree",
+      "suggest", "explain", "describe", "prefer", "choose", "remember", "forget", "return", "travel", "drive",
+      "fly", "swim", "cook", "bake", "wash", "dress", "carry", "bring", "send", "receive",
+      "comfortable", "expensive", "cheap", "dangerous", "important", "wonderful", "terrible", "careful", "polite", "friendly",
+      "funny", "boring", "interesting", "healthy", "sick", "wet", "dry", "loud", "quiet", "famous"
+    ],
+    "B1": [
+      "opinion", "suggestion", "recommendation", "schedule", "appointment", "environment", "transportation", "decision", "advantage", "disadvantage",
+      "experience", "problem", "solution", "situation", "condition", "atmosphere", "region", "area", "distance", "direction",
+      "attempt", "effort", "success", "failure", "purpose", "reason", "result", "effect", "cause", "benefit",
+      "consider", "discuss", "complain", "argue", "manage", "succeed", "organize", "arrange", "depend", "expect",
+      "hope", "plan", "imagine", "realize", "notice", "mention", "claim", "contain", "include", "exclude",
+      "increase", "decrease", "improve", "develop", "produce", "provide", "require", "involve", "achieve", "discover",
+      "convenient", "reasonable", "affordable", "reliable", "available", "sufficient", "professional", "traditional", "modern", "similar",
+      "different", "possible", "impossible", "necessary", "ordinary", "unusual", "particular", "general", "common", "specific",
+      "actually", "definitely", "probably", "hopefully", "eventually", "frequently", "occasionally", "recently", "immediately", "certainly"
+    ],
+    "B2": [
+      "significance", "perspective", "implication", "tendency", "distinction", "contradiction", "transformation", "sustainability", "framework", "approach",
+      "strategy", "analysis", "hypothesis", "evidence", "criterion", "alternative", "consequence", "outcome", "factor", "variable",
+      "indicator", "dimension", "context", "phenomenon", "tension", "compromise", "trade-off", "assumption", "interpretation", "implication",
+      "emphasize", "demonstrate", "evaluate", "anticipate", "identify", "indicate", "integrate", "contribute", "illustrate", "undermine",
+      "reveal", "conclude", "propose", "assume", "presume", "encounter", "undertake", "accommodate", "distinguish", "encompass",
+      "facilitate", "constitute", "diminish", "perpetuate", "validate", "implement", "establish", "maintain", "characterize", "regulate",
+      "significant", "substantial", "prominent", "ambiguous", "sophisticated", "controversial", "fundamental", "intricate", "comprehensive", "deliberate",
+      "inherent", "plausible", "considerable", "remarkable", "subtle", "explicit", "implicit", "feasible", "viable", "credible",
+      "subsequently", "consequently", "evidently", "presumably", "notably", "particularly", "primarily", "essentially", "ultimately", "arguably"
+    ],
+    "C1": [
+      "hegemony", "paradigm", "narrative", "dichotomy", "juxtaposition", "nuance", "contention", "premise", "presupposition", "conjecture",
+      "intricacy", "polemic", "austerity", "autonomy", "advocacy", "ambivalence", "antipathy", "apprehension", "candor", "coherence",
+      "corollary", "ramification", "manifestation", "embodiment", "underpinning", "predicament", "discrepancy", "convergence", "divergence", "synthesis",
+      "postulate", "contemplate", "exacerbate", "mitigate", "juxtapose", "articulate", "scrutinize", "repudiate", "vindicate", "propagate",
+      "instigate", "reconcile", "transcend", "oscillate", "capitulate", "abdicate", "extrapolate", "delineate", "espouse", "discern",
+      "elucidate", "permeate", "subjugate", "supplant", "subsume", "renounce", "engender", "circumvent",
+      "nuanced", "paradoxical", "ostensible", "irrevocable", "ubiquitous", "mercurial", "recondite", "salient", "tangential", "vehement",
+      "austere", "capricious", "contentious", "equivocal", "incongruous", "indelible", "inexorable", "ineffable", "innocuous", "inscrutable",
+      "arguably", "conceivably", "ostensibly", "paradoxically", "conspicuously", "tellingly", "demonstrably", "incontrovertibly"
+    ]
+  },
+  "stopwords": [
+    "a", "an", "the", "and", "or", "but", "if", "in", "on", "at", "by", "for", "with",
+    "to", "of", "from", "up", "down", "over", "under", "into", "onto", "off", "out",
+    "this", "that", "these", "those", "what", "which", "who", "whom", "whose", "when",
+    "where", "why", "how", "my", "your", "his", "her", "its", "our", "their", "me",
+    "you", "him", "us", "them", "i", "we", "they", "he", "she", "it",
+    "am", "is", "are", "was", "were", "been", "being", "will", "would", "can",
+    "could", "should", "must", "may", "might", "shall", "do", "does", "did", "doing",
+    "has", "have", "had", "having", "not", "no", "yes", "so", "very", "just", "only",
+    "too", "also", "even", "still", "yet", "more", "less", "most", "least", "any",
+    "all", "some", "none", "much", "many", "few", "little", "every", "each", "both",
+    "either", "neither", "again", "ever", "never", "here", "there", "now", "then",
+    "as", "than", "like", "such", "because", "since", "while", "until", "during",
+    "before", "after", "about", "against", "between", "through", "above", "below",
+    "be", "been", "being", "would", "could", "should", "ought",
+    "n't", "'s", "'re", "'ve", "'m", "'ll", "'d", "got",
+    "okay", "ok"
+  ]
+}

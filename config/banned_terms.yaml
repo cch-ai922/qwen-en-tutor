@@ -1,0 +1,127 @@
+# banned_terms.yaml
+#
+# 기계적 regex 필터(``BannedTermsFilter``) 가 사용하는 카테고리/단어 목록.
+#
+# 두 종류의 카테고리가 있을 수 있습니다.
+#
+# (1) 회피 주제 (politics/religion/...) - LOCALE 과 무관하게 어떤 country
+#     에서도 동일하게 차단합니다. avoided_topics 가 ``config/locale.yaml`` 에
+#     정의되어 있고 그 name 과 같은 카테고리 키가 여기 있으면 mechanical
+#     필터가 cheap 한 1차 차단망 역할을 합니다.
+#
+# (2) 국가별 회피 단어 - 특정 country 에서 자주 새는 Western 단어, 정치
+#     인물 이름 등은 country 마다 다르므로 ``config/locale.yaml`` 로 country
+#     를 바꿀 때 함께 직접 채워 두면 됩니다 (선택). 기본값은 비어 있습니다.
+#
+# 매칭은 case-sensitive (Western proper noun 만 잡도록).
+# 카테고리는 비워 두어도 BannedTermsFilter 는 정상 동작합니다.
+
+# ---------------------------------------------------------------------------
+# 회피 주제 - LOCALE 의 avoided_topics 와 매핑
+# ---------------------------------------------------------------------------
+# 카테고리 이름은 LocaleConfig.avoided_topics[].name 과 맞춰 두는 게
+# 좋습니다 (locale_judge / metrics 리포트가 같은 키로 묶입니다).
+# 단어 자체는 한 country 에 묶이지 않는 보편적인 정치/종교/알코올 용어만
+# 두었습니다.
+
+politics:
+  - government
+  - election
+  - elections
+  - parliament
+  - senator
+  - senators
+  - regime
+  - dictator
+  - dictatorship
+  - politician
+  - politicians
+  - sanctions
+  - sanction
+  - protests
+  - protest
+  - protesters
+  - protestors
+  - revolution
+  - coup
+  - opposition party
+  - ruling party
+  - vote
+  - voted
+  - voting
+  - voter
+  - voters
+  - ballot
+  - constitution
+
+religion:
+  - religious
+  - sect
+  - sectarian
+  - clergy
+  - clerics
+  - cleric
+  - mosque
+  - mosques
+  - church
+  - churches
+  - synagogue
+  - temple
+  - temples
+  - bishop
+  - priest
+  - imam
+  - rabbi
+  - sermon
+  - prayer
+  - praying
+  - pray
+  - god
+  - allah
+  - jesus
+  - christ
+  - heaven
+  - hell
+  - sin
+  - sinful
+
+alcohol_dating:
+  - alcohol
+  - alcoholic
+  - drunk
+  - drinking
+  - beer
+  - wine
+  - whiskey
+  - vodka
+  - cocktail
+  - bar
+  - bars
+  - pub
+  - pubs
+  - nightclub
+  - nightclubs
+  - dating
+  - boyfriend
+  - girlfriend
+  - hookup
+  - hookups
+  - flirt
+  - flirting
+  - romance
+  - romantic
+
+partisan_history:
+  - regime change
+  - civil war
+  - colonial
+  - colonialism
+  - imperialism
+  - communist
+  - communism
+  - socialist
+  - socialism
+  - fascist
+  - fascism
+  - Nazi
+  - dictatorship

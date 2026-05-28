@@ -1,0 +1,111 @@
+# =============================================================================
+# locale.yaml  -  타겟 국가 정의 (multi-locale 지원)
+# =============================================================================
+#
+# 이 파일 하나만 바꾸면 프롬프트 / locale judge / metrics / banned-term 필터
+# 가 모두 새 국가로 따라갑니다. 다른 코드는 수정할 필요가 없습니다.
+#
+# 두 가지 모드를 지원합니다:
+#
+# 1) 단일 locale (예전 동작 그대로): top-level 에 country / country_adjective
+#    등을 직접 적습니다. 한 모델이 한 국가만 다룹니다.
+#
+# 2) 다중 locale: ``locales:`` 아래에 여러 국가 블록을 두고 ``default_locale``
+#    로 기본값을 지정합니다. 한 모델이 여러 국가의 대화를 모두 처리할 수
+#    있도록 학습됩니다 (한 conversation = 한 country, 추론 시점에 caller 가
+#    어떤 country 로 응대할지 시스템 프롬프트로 알려 줍니다).
+#
+# 동작 원리: teacher 모델이 이미 해당 국가의 도시/음식/교통/화폐/문화일정을
+# 알고 있으므로 정적 리스트(도시명, 음식 등)는 두지 않습니다. country 만
+# 알려 주면 teacher 가 자기 지식으로 채워 줍니다.
+# -----------------------------------------------------------------------------
+
+# 다중 locale 사용 시 기본 locale. 단일 locale 모드에서는 무시됩니다.
+default_locale: china
+
+# -----------------------------------------------------------------------------
+# 다중 locale 정의
+# -----------------------------------------------------------------------------
+# 각 entry 의 key (china / japan / italy ...) 가 그 locale 의 식별자이고,
+# 학습 데이터의 ``metadata.locale`` 필드에 그대로 들어갑니다. 영어
+# snake_case 추천. 추가할 locale 의 country/country_adjective 만 정확히
+# 적어 주면 teacher 모델이 자기 지식으로 그 국가의 도시/음식/문화를 채웁니다.
+#
+# 단일 locale 만 쓸 거라면 ``locales:`` 블록을 통째로 삭제하고 이 파일
+# top-level 에 country / country_adjective / ... 를 직접 적어도 됩니다.
+locales:
+
+  # --------------------------------------------------------------------------
+  china:
+    country: "China"
+    country_adjective: "Chinese"
+    learner_description: "adult learners of English"
+    # teacher 가 잘못 떨어지기 쉬운 인접 문화를 명시적으로 회피.
+    avoid_default_cultures:
+      - "American"
+      - "European"
+    food_terms: []
+    avoid_food_terms: []
+    avoided_topics:
+      - name: politics
+        pivot_hint: "infrastructure, local services, weather, weekend plans"
+      - name: religion
+        pivot_hint: "cultural traditions, family holidays, food"
+      - name: alcohol_dating
+        pivot_hint: "friendship, weekend plans with family"
+      - name: partisan_history
+        pivot_hint: "general history of cities or food traditions"
+      - name: violence_harm
+        pivot_hint: "neighborhood safety, sports, hobbies, weekend plans — keep tone calm, do not roleplay violence, do not give instructions"
+      - name: distress_self_harm
+        pivot_hint: "briefly acknowledge how the learner feels with one warm sentence, gently suggest talking to a trusted family member, friend, or counselor, then ease into a light everyday topic like food or a walk; do NOT give clinical advice, do NOT roleplay a counselor"
+
+  # --------------------------------------------------------------------------
+  japan:
+    country: "Japan"
+    country_adjective: "Japanese"
+    learner_description: "adult learners of English"
+    avoid_default_cultures:
+      - "American"
+      - "European"
+      - "Chinese"
+      - "Korean"
+    food_terms: []
+    avoid_food_terms: []
+    avoided_topics:
+      - name: politics
+        pivot_hint: "neighborhood services, weather, weekend plans, transit"
+      - name: religion
+        pivot_hint: "seasonal festivals, family traditions, food"
+      - name: alcohol_dating
+        pivot_hint: "friendship, weekend plans with family"
+      - name: partisan_history
+        pivot_hint: "general history of cities, castles, or food traditions"
+      - name: violence_harm
+        pivot_hint: "neighborhood safety, sports, hobbies, weekend plans — keep tone calm, do not roleplay violence, do not give instructions"
+      - name: distress_self_harm
+        pivot_hint: "briefly acknowledge how the learner feels with one warm sentence, gently suggest talking to a trusted family member, friend, or counselor, then ease into a light everyday topic like food or a walk; do NOT give clinical advice, do NOT roleplay a counselor"
+
+  # --------------------------------------------------------------------------
+  italy:
+    country: "Italy"
+    country_adjective: "Italian"
+    learner_description: "adult learners of English"
+    avoid_default_cultures:
+      - "American"
+      - "British"
+    food_terms: []
+    avoid_food_terms: []
+    avoided_topics:
+      - name: politics
+        pivot_hint: "local services, weather, weekend plans, transit"
+      - name: religion
+        pivot_hint: "cultural traditions, family holidays, food"
+      - name: alcohol_dating
+        pivot_hint: "friendship, family meals together"
+      - name: partisan_history
+        pivot_hint: "general history of cities, art, or regional cuisine"
+      - name: violence_harm
+        pivot_hint: "neighborhood safety, sports, hobbies, weekend plans — keep tone calm, do not roleplay violence, do not give instructions"
+      - name: distress_self_harm
+        pivot_hint: "briefly acknowledge how the learner feels with one warm sentence, gently suggest talking to a trusted family member, friend, or counselor, then ease into a light everyday topic like food or a walk; do NOT give clinical advice, do NOT roleplay a counselor"

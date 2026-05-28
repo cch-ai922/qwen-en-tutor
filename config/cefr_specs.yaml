@@ -1,0 +1,284 @@
+# cefr_specs.yaml
+#
+# CEFR A1-C2 target-register specifications for the English tutor.
+#
+# 각 레벨에 정의되는 필드:
+#   - vocabulary / grammar / naturalness_requirements / things_to_avoid:
+#     해당 CEFR 레벨에서 teacher 가 지켜야 할 가이드. country-agnostic.
+#   - few_shot_examples: 레벨별 2-3개의 짧은 예시 대화. (참고: 현재 예시는
+#     Iranian 컨텍스트로 작성되어 있습니다. config/locale.yaml 의 country 를
+#     다른 나라로 바꿔도 teacher 는 register 만 학습하고 cultural detail 은
+#     locale.yaml 에서 받습니다. 다른 country 로 갈 때 더 깔끔하려면 이
+#     few-shot 들을 country-neutral 로 다시 써도 좋습니다.)
+#
+# locale-instruction 블록은 prompts.py 가 config/locale.yaml 에서 빌드해
+# render_level_spec 의 맨 위에 자동으로 붙여 줍니다 - 여기 적어 둘 필요 없음.
+
+levels:
+
+  A1:
+    vocabulary: |
+      Top ~1000 most-frequent English words. Concrete, everyday vocabulary:
+      family, food, weather, numbers, days of the week, colors, simple verbs
+      (go, eat, drink, see, like, want, have, work, live). Iranian concrete
+      nouns the learner already knows in Persian (taxi, bazaar, taarof) are
+      fine as loanwords when context makes them clear.
+    grammar: |
+      Present simple and present continuous. Simple past with regular verbs
+      and a small set of high-frequency irregulars (was/were, went, had,
+      did, ate, saw). Yes/no and wh-questions with do/does. Coordination
+      with "and", "but", "or". One clause per sentence.
+    naturalness_requirements: |
+      Short sentences (5-10 words). Clear turn-taking. Acknowledge what the
+      learner just said before continuing. Use contractions sparingly
+      (it's, I'm, don't). Speak numbers in full.
+    things_to_avoid: |
+      Conditionals, perfect tenses, passive voice, subordinate clauses,
+      idioms, phrasal verbs beyond the most basic (get up, sit down),
+      academic or abstract vocabulary, slang.
+    few_shot_examples:
+      - title: "Asking for directions in Shiraz"
+        dialogue: |
+          User: Excuse me. Where is Vakil Bazaar?
+          Tutor: It is in the center of Shiraz. You can take a taxi.
+          User: Is it near Karim Khan Castle?
+          Tutor: Yes, it is very near. You can walk from the castle.
+          User: Thank you very much.
+          Tutor: You are welcome. Have a nice day.
+      - title: "Buying fruit at the bazaar"
+        dialogue: |
+          User: Hello. How much is one kilo of pomegranates?
+          Tutor: One kilo is one hundred thousand tomans.
+          User: That is a lot. I want two kilos, please.
+          Tutor: Of course. Here you are. Two kilos.
+          User: Thank you. Goodbye.
+          Tutor: Goodbye. Have a good day.
+      - title: "Meeting a neighbor in Yazd"
+        dialogue: |
+          User: Hello, Mrs. Rezaei. How are you today?
+          Tutor: Hello, Maryam. I am very well, thank you. And you?
+          User: I am good. The weather is hot today.
+          Tutor: Yes, Yazd is very hot in summer. I drink a lot of water.
+
+  A2:
+    vocabulary: |
+      Top ~2000 words. Adds hobbies, school subjects, work, transportation,
+      simple feelings (happy, tired, worried), shopping, and short-trip
+      vocabulary.
+    grammar: |
+      All simple tenses (past, present, future with "will" and "going to"),
+      common irregular pasts, comparatives and superlatives, basic modals
+      (can, should, must, have to), simple time clauses with "when",
+      "before", "after".
+    naturalness_requirements: |
+      Sentences 8-15 words. Follow up on the learner's previous turn with a
+      brief personal comment or a related question. Light discourse markers
+      ("Oh, really?", "I see", "By the way").
+    things_to_avoid: |
+      Complex conditionals (third conditional), perfect continuous tenses,
+      heavy phrasal verbs, idiomatic expressions, low-frequency academic
+      vocabulary.
+    few_shot_examples:
+      - title: "Weekend trip to Isfahan"
+        dialogue: |
+          User: How was your weekend, Sara?
+          Tutor: It was very nice. I went to Isfahan with my family.
+          User: That is great. What did you do there?
+          Tutor: We visited Naqsh-e Jahan Square and ate beryani for lunch.
+          User: I love beryani. Did you take any photos?
+          Tutor: Yes, we took many photos at Si-o-se-pol in the evening.
+      - title: "At a clinic in Mashhad"
+        dialogue: |
+          User: Hello, doctor. I have a sore throat and a small fever.
+          Tutor: When did the symptoms start, Hossein?
+          User: Yesterday afternoon. I also feel a little tired.
+          Tutor: I see. I will give you a prescription for some syrup.
+          User: Should I take it before or after meals?
+          Tutor: After meals, three times a day, for five days.
+      - title: "Planning a picnic in Tabriz"
+        dialogue: |
+          User: Are you free on Friday? We are going to El Goli park.
+          Tutor: That sounds fun. What time will you go?
+          User: Around ten in the morning. We will take ash reshteh.
+          Tutor: Great. I can bring some doogh and fruit.
+          User: Perfect. See you at the park gate at ten.
+
+  B1:
+    vocabulary: |
+      Top ~3500 words. Adds vocabulary for expressing opinions, planning,
+      describing experiences, and light abstract concepts (importance,
+      reason, decision). Connectors like "because", "although", "in
+      addition", "for example".
+    grammar: |
+      Present perfect with "since" / "for", past continuous, first and
+      second conditionals, reported speech in present, common phrasal
+      verbs, relative clauses with who/which/that.
+    naturalness_requirements: |
+      Sustain a topic for several turns. Ask follow-up questions and offer
+      mild personal opinions. Use natural discourse markers ("Actually,",
+      "To be honest,", "I guess"). Aim for fluent, connected sentences
+      rather than choppy ones.
+    things_to_avoid: |
+      Highly technical jargon, archaic vocabulary, dense literary
+      structures, third conditional, complex inversion.
+    few_shot_examples:
+      - title: "Train trip from Tehran to Mashhad"
+        dialogue: |
+          User: I'm thinking of taking the train from Tehran to Mashhad
+            next month. Have you done it before?
+          Tutor: Yes, a few times. The overnight train is comfortable if
+            you book a four-bed compartment in advance.
+          User: Is it expensive compared to flying?
+          Tutor: Generally it's more affordable, especially for families.
+            You can also stop in Neyshabur on the way to see Omar Khayyam's
+            tomb if you have a free afternoon.
+      - title: "Tehran metro at rush hour"
+        dialogue: |
+          User: Do you think the Tehran metro is reliable these days?
+          Tutor: Most of the time, yes. It can be very crowded between
+            Tajrish and Mirdamad in the morning, but it's still faster
+            than taking a taxi across town.
+          User: How does it compare to the metro in Isfahan?
+          Tutor: Isfahan only has one line so far, so Tehran's network is
+            much more useful if you need to cross the city.
+      - title: "Apartment hunting in Rasht"
+        dialogue: |
+          User: I've been looking at apartments in Rasht, but the prices
+            keep going up.
+          Tutor: That's true. Rents in Manzariyeh and Golsar have risen
+            quite a bit since last year.
+          User: Do you think it's worth living further from the center?
+          Tutor: It depends. If you have a car, neighborhoods on the way
+            to Lakan can be a good compromise — quieter and a bit cheaper.
+
+  B2:
+    vocabulary: |
+      Top ~5000 words. Includes abstract nouns (significance, perspective,
+      tendency), nuanced adjectives, light idiomatic expressions, and
+      vocabulary for discussing trends, choices, and trade-offs.
+    grammar: |
+      All conditionals, mixed conditionals, past perfect, passive voice,
+      reported speech across all tenses, advanced relative clauses,
+      participle clauses, common hedging structures.
+    naturalness_requirements: |
+      Develop ideas across multiple sentences. Use natural hedging ("I'd
+      say", "It tends to be", "in some sense"). Acknowledge nuance and
+      shift register slightly when the topic becomes more serious.
+    things_to_avoid: |
+      Over-literary or poetic phrasing, specialized jargon without
+      context, archaic constructions.
+    few_shot_examples:
+      - title: "Choosing between Tabriz University and Sharif"
+        dialogue: |
+          User: My cousin is choosing between Tabriz University and Sharif
+            for mechanical engineering. What would you suggest?
+          Tutor: Sharif has a stronger national reputation for engineering,
+            but Tabriz offers a more affordable cost of living and a
+            tighter-knit student community. If he's aiming for graduate
+            studies abroad later, Sharif's research output might give him
+            a slight edge.
+          User: He's also worried about the entrance exam pressure.
+          Tutor: That's understandable. Konkour is brutal, but consistent
+            preparation over the year usually matters more than
+            last-minute cramming.
+      - title: "Rooftop gardens in Rasht"
+        dialogue: |
+          User: I read an article about rooftop gardens in Rasht. Do you
+            think they could really change how people use space in cities
+            like ours?
+          Tutor: They could, especially in a humid climate like Rasht's,
+            where plants flourish almost year-round. The main challenge
+            is structural — older buildings weren't designed to hold the
+            weight of wet soil. Where it's feasible, though, rooftop
+            gardens noticeably cool the interiors below and create small
+            community spaces.
+      - title: "Carpet weaving in Kerman"
+        dialogue: |
+          User: I've been reading about how younger weavers in Kerman are
+            slowly leaving the craft. Do you see that as inevitable?
+          Tutor: Not entirely, but it's a steep climb. The workshops that
+            survive tend to be the ones that have managed to reach
+            collectors abroad and that pay weavers a wage closer to what
+            other skilled work pays. If a young weaver can earn a fair
+            income, the tradition stops feeling like a sacrifice.
+
+  C1:
+    vocabulary: |
+      Top ~7500 words. Includes precise abstract vocabulary, varied
+      collocations, idiomatic phrases, formal/informal register markers,
+      and vocabulary for discussing economics, society, and culture in
+      depth.
+    grammar: |
+      Full grammatical range including cleft sentences, inversion for
+      emphasis, advanced participle and gerund constructions, subjunctive,
+      sophisticated hedging and discourse-organizing structures.
+    naturalness_requirements: |
+      Smooth register-shifting between casual and considered. Pick up on
+      implicature, use understatement, and weave in personal anecdote
+      naturally. Self-correct or refine a claim mid-turn the way fluent
+      speakers do.
+    things_to_avoid: |
+      Patronizing simplifications, overly basic vocabulary, mechanical
+      sentence-by-sentence answers without flow.
+    few_shot_examples:
+      - title: "Inflation pressure on small businesses in Yazd"
+        dialogue: |
+          User: How has the recent fluctuation in the rial affected small
+            businesses in your area?
+          Tutor: It's had a sobering effect, particularly on importers of
+            raw materials. A friend who runs a small workshop in Yazd
+            making traditional ceramics told me he's had to reprice his
+            glazes three times this year. Cash-flow planning has become
+            almost guesswork, and many family-run businesses are
+            reluctantly raising prices, knowing their customers'
+            purchasing power keeps shrinking.
+      - title: "Diaspora attachment to ancestral cities"
+        dialogue: |
+          User: Do you think second-generation Iranians abroad feel a
+            meaningful connection to places like Kerman or Hamedan?
+          Tutor: It varies enormously. Some maintain a vivid imagined
+            geography through family stories — they could describe an
+            alley in their grandmother's neighborhood in Hamedan they've
+            never actually walked. Others develop a more abstract
+            attachment, anchored in cuisine or Nowruz rituals rather than
+            in any particular city.
+
+  C2:
+    vocabulary: |
+      Effectively unrestricted. Comfortable with low-frequency, idiomatic,
+      and figurative vocabulary; precise stylistic and rhetorical choices.
+    grammar: |
+      Full grammatical range deployed for stylistic effect. Comfortable
+      with marked structures used purposefully.
+    naturalness_requirements: |
+      Indistinguishable from an educated near-native speaker. Sustain
+      argument across long turns, use irony and understatement, push back
+      on the learner's framing when warranted, and choose words for tone
+      and connotation as well as denotation.
+    things_to_avoid: |
+      Showiness for its own sake; unnecessary obscurity that would feel
+      like performance rather than communication.
+    few_shot_examples:
+      - title: "Iranian cinema and the international gaze"
+        dialogue: |
+          User: I sometimes feel the prevailing discourse around Iranian
+            cinema overseas reduces it to a handful of art-house cliches.
+            Would you agree?
+          Tutor: Largely, yes — though I'd put it more bluntly. The canon
+            that gets exported is curated for festivals, not for Iranian
+            audiences. Films that earn standing ovations at Cannes often
+            barely register in domestic conversations, while the comedies
+            and televised serials that genuinely shape everyday talk in
+            Iran rarely make it across borders. So the "international
+            gaze," if you'll pardon the cliche, often mistakes the
+            periphery for the center.
+      - title: "Translating Hafez"
+        dialogue: |
+          User: Why does Hafez resist translation so stubbornly?
+          Tutor: Because so much of what Hafez does isn't in the words
+            themselves but in the way they lean against the formal
+            constraints of the ghazal — the rhyme scheme, the refrain,
+            the way ambiguity is deliberately engineered between the
+            literal and the mystical. Translators can render the imagery,
+            but the music and the calculated slipperiness almost always
+            have to be sacrificed for one or the other.

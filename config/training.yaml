@@ -1,0 +1,236 @@
+# =============================================================================
+# training.yaml  -  2단계: 학습 + 평가 설정
+# =============================================================================
+#
+# scripts/run_training.py 가 이 파일을 읽어 다음 순서로 실행합니다:
+#
+#   train_sft          → SFT(LoRA) 학습
+#   eval_intermediate  → 중간(=SFT 후) 모델로 holdout 평가
+#   on_policy_gen      → 학습된 SFT 어댑터로 DPO 페어를 추가 수집
+#   filter_dpo         → 추가 DPO 페어 + register 페어를 필터링
+#   train_dpo          → SFT 위에 DPO 추가 학습
+#   eval_final         → 최종(=DPO 후) 모델로 holdout 평가
+#   compare            → 중간 vs 최종 메트릭 비교 리포트 작성
+#
+# 학습은 메모리를 많이 먹습니다. RTX 3060(12GB) 에서는 동작하지 않으며,
+# RTX 5090(32GB) 이상에서 돌리는 것을 가정합니다.
+# -----------------------------------------------------------------------------
+
+
+# -----------------------------------------------------------------------------
+# 기본 모델 + 양자화 설정
+# -----------------------------------------------------------------------------
+# 학생 모델 한 개가 두 가지 모드를 동시에 학습합니다:
+#   - /no_think  : 일반 대화 응답 (SFT 데이터)
+#   - /think     : CEFR 평가 (Evaluation 데이터)
+# 4bit NF4 양자화 + LoRA 어댑터로 24GB 이하에 들어가도록 맞췄습니다.
+#
+# model_id 는 HF 허브 ID 또는 로컬 경로(폴더) 둘 다 됩니다. 오프라인
+# 환경에서는 ``vendor/models/<name>`` 아래에 미리 다운로드된 폴더를
+# 가리킵니다. multimodal 체크포인트(예: Qwen3-VL 4B = "Qwen3.5 4B") 의
+# 경우 ``src/qwen_tutor/training/model_loader.py`` 가 config.json 의
+# architectures 필드를 읽고 알맞은 auto-class 를 자동 선택합니다 —
+# 학습 데이터는 text-only 라 vision tower 는 사용되지 않고 LoRA 도
+# language tower 의 linear layer 에만 붙습니다.
+#
+# 다른 모델로 갈아끼우려면 model_id + tokenizer_id 만 바꾸세요.
+#   예) Qwen3-8B  →  vendor/models/Qwen3-8B  (text-only, trust_remote_code: false)
+#       Qwen3-VL 4B →  vendor/models/Qwen_3.5_4B  (multimodal, trust_remote_code: true)
+base_model:
+  model_id: "./vendor/models/Qwen_3.5_4B"
+  tokenizer_id: "./vendor/models/Qwen_3.5_4B"
+  # Qwen3-VL 같은 최신 multimodal arch 는 transformers 가 내부 코드를
+  # 동적으로 로드해야 할 수 있어 true 가 안전합니다. 순수 Qwen3-8B 라면
+  # false 로 두어도 됩니다.
+  trust_remote_code: true
+  # Qwen3-VL 의 layer_types 는 linear_attention + full_attention 이 섞여
+  # 있어 flash_attention_2 가 동작하지 않습니다. "sdpa" 를 기본으로 두고,
+  # 순수 Qwen3-8B 로 갈아끼울 때 "flash_attention_2" 로 올리세요.
+  attn_implementation: "sdpa"
+  torch_dtype: "bfloat16"
+  quantization:
+    enabled: true
+    load_in_4bit: true
+    bnb_4bit_quant_type: "nf4"
+    bnb_4bit_compute_dtype: "bfloat16"
+    bnb_4bit_use_double_quant: true
+  gradient_checkpointing: true
+
+# -----------------------------------------------------------------------------
+# LoRA 어댑터 설정
+# -----------------------------------------------------------------------------
+# r=32, alpha=64 는 Qwen3-8B 정도 모델에서 표현력과 메모리의 균형이 좋습니다.
+# target_modules 는 attention(q/k/v/o) + MLP(gate/up/down) 의 모든 linear 입니다.
+lora:
+  r: 32
+  lora_alpha: 64
+  lora_dropout: 0.05
+  bias: "none"
+  task_type: "CAUSAL_LM"
+  target_modules:
+    - q_proj
+    - k_proj
+    - v_proj
+    - o_proj
+    - gate_proj
+    - up_proj
+    - down_proj
+
+# -----------------------------------------------------------------------------
+# SFT 학습 (대화 + 평가 두 모드 합쳐서 한 번에 학습)
+# -----------------------------------------------------------------------------
+sft:
+  output_dir: "outputs/sft"
+  num_train_epochs: 1
+  max_steps: 5                          # smoke-scale; set -1 for full
+  per_device_train_batch_size: 1
+  per_device_eval_batch_size: 1
+  gradient_accumulation_steps: 4
+  learning_rate: 2.0e-4
+  warmup_ratio: 0.05
+  lr_scheduler_type: "cosine"
+  weight_decay: 0.01
+  max_seq_length: 2048                  # smoke; 4096 for full
+  packing: false
+  bf16: true
+  fp16: false
+  optim: "paged_adamw_8bit"
+  logging_steps: 1
+  eval_strategy: "no"
+  save_strategy: "no"
+  save_total_limit: 1
+  load_best_model_at_end: false
+  report_to: "none"
+  seed: 42
+
+  # 학습 데이터 mix - SFT 80% + Evaluation 20% 비율로 섞어 단일 모델이
+  # 두 모드를 모두 익히게 합니다.
+  data:
+    sft_filtered_dir: "data/sft_filtered"
+    eval_filtered_dir: "data/eval_filtered"
+    holdout_dir: "data/holdout"
+    mix_ratio_sft: 0.80
+    mix_ratio_eval: 0.20
+    validation_split: 0.05               # 5% stratified validation
+    shuffle_seed: 42
+
+# -----------------------------------------------------------------------------
+# DPO 학습 (register 선호도 + on-policy 페어로 추가 튜닝)
+# -----------------------------------------------------------------------------
+# DPO 는 SFT 어댑터 위에서 시작합니다. ref_model 을 null 로 두면 frozen base
+# 가 reference policy 가 됩니다.
+dpo:
+  output_dir: "outputs/dpo"
+  num_train_epochs: 1
+  max_steps: 5                          # smoke-scale; set -1 for full
+  per_device_train_batch_size: 1
+  per_device_eval_batch_size: 1
+  gradient_accumulation_steps: 4
+  learning_rate: 5.0e-6
+  warmup_ratio: 0.05
+  lr_scheduler_type: "cosine"
+  weight_decay: 0.0
+  beta: 0.1
+  loss_type: "sigmoid"
+  max_length: 2048                      # smoke; 4096 for full
+  max_prompt_length: 1024
+  bf16: true
+  fp16: false
+  optim: "paged_adamw_8bit"
+  logging_steps: 1
+  eval_strategy: "no"
+  save_strategy: "no"
+  save_total_limit: 1
+  report_to: "none"
+  seed: 42
+  sft_adapter_path: "outputs/sft"
+  ref_model: null
+
+  data:
+    dpo_filtered_dir: "data/dpo_filtered"
+    validation_split: 0.05
+    shuffle_seed: 42
+    # DPO 데이터에는 두 가지 소스가 섞입니다:
+    #   register   - offline rewrite 로 생성된 register-unnatural 페어 (SFT 직후
+    #                바로 만들 수 있어 양이 풍부)
+    #   on_policy  - 학습된 SFT 모델 출력 vs teacher 출력 (judge margin 으로
+    #                필터되어 양이 적지만 현재 정책의 약점을 정확히 짚음)
+    # 두 풀이 양이 크게 다를 때 더 많은 쪽이 학습 batch 를 독점하지 않도록
+    # mix ratio 로 작은 쪽 기준으로 큰 쪽을 잘라 둡니다. on_policy 가 비어
+    # 있어도 register 단독 학습이 정상 동작합니다.
+    mix_ratio_register: 0.70
+    mix_ratio_on_policy: 0.30
+
+# -----------------------------------------------------------------------------
+# wandb 로깅
+# -----------------------------------------------------------------------------
+logging:
+  wandb_project: "qwen-en-tutor"
+  wandb_entity: null                     # WANDB_ENTITY 환경 변수로도 가능
+  wandb_run_name_prefix: "qwen-en-tutor"
+
+# -----------------------------------------------------------------------------
+# 학습 중 콜백 평가 (TutorEvalCallback)
+# -----------------------------------------------------------------------------
+# eval_steps 마다 모델에서 직접 샘플을 뽑아 banned_terms / mode_consistency /
+# cefr_vocab / naturalness 필터 통과율을 측정하고 wandb 에 기록합니다.
+eval_callback:
+  enabled: false                        # smoke: disabled to keep VRAM/time low
+  n_conversation_samples: 10
+  n_evaluation_samples: 10
+  max_new_tokens: 512
+  temperature: 0.7
+  top_p: 0.95
+  log_samples_table: true
+  conversation_filters:
+    - banned_terms
+    - mode_consistency
+    - cefr_vocab
+    - naturalness
+  held_out_prompts_path: "data/holdout/eval_callback_prompts.jsonl"
+
+# -----------------------------------------------------------------------------
+# 학습 후 holdout 평가 (intermediate / final)
+# -----------------------------------------------------------------------------
+evaluation:
+  holdout_dir: data/holdout
+  n_per_level: 5
+  concurrency: 4
+  intermediate_adapter_path: outputs/sft     # SFT 직후 모델
+  final_adapter_path: outputs/dpo            # DPO 직후 모델
+
+# -----------------------------------------------------------------------------
+# 비교 단계 (intermediate vs final)
+# -----------------------------------------------------------------------------
+# threshold 보다 큰 점수 하락이 보이면 회귀로 간주. fail_on_regression=true
+# 로 두면 회귀 시 종료 코드를 0이 아닌 값으로 반환합니다.
+comparison:
+  threshold: 0.05
+  fail_on_regression: false
+
+# -----------------------------------------------------------------------------
+# On-policy DPO 페어 생성
+# -----------------------------------------------------------------------------
+# 학습된 SFT 모델로 한 턴을 재생성하고 teacher 와 비교해 teacher 가
+# 더 자연스러우면 (policy_out, teacher_out) 을 (rejected, chosen) 쌍으로
+# 저장합니다. min_margin 이 클수록 더 명확한 우열만 채택합니다.
+on_policy:
+  enabled: true
+  adapter_path: outputs/sft
+  max_per_level: null                    # null = 전부
+  min_margin: 2                          # 1=slight, 2=clear, 3=large
+  concurrency: 4
+  target_max_tokens: 320
+  target_temperature: 0.7
+
+# -----------------------------------------------------------------------------
+# 배포 시점 / 평가 시점 system 프롬프트
+# -----------------------------------------------------------------------------
+# Single source of truth: 두 프롬프트 모두
+# ``src/qwen_tutor/generation/prompts.py`` 의 ``DEPLOYMENT_SYSTEM_PROMPT_TEMPLATE``
+# 과 ``EVALUATION_SYSTEM_PROMPT`` 에서 옵니다. 이들은 ``config/locale.yaml`` 의
+# ``country`` / ``country_adjective`` / ``learner_description`` /
+# ``avoid_default_cultures`` / ``avoided_topics`` 을 자동으로 반영합니다.
+#
+# 프롬프트 문구를 바꾸려면 prompts.py 를, locale 관련 값을 바꾸려면
+# locale.yaml 을 편집하세요. 여기에는 더 이상 프롬프트가 없습니다.

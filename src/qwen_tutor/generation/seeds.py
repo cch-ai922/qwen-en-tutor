@@ -1,0 +1,419 @@
+"""Scenario-seed generation.
+
+Calls TOPIC_SEED_PROMPT in parallel batches to produce ScenarioSeed
+objects per CEFR level, deduplicates by topic, runs a within-batch
+diversity check on cities (>30%) and first names (>15%), and regenerates
+overrepresented entries with an explicit AVOID-list addendum to the
+prompt. Resumes from existing JSONL output.
+
+NOTE: this module does not load a locale pool file. Locale grounding
+comes entirely from prompts.py (which embeds the locale-instruction
+block derived from ``config/locale.yaml``) and from the teacher's own
+knowledge of the target country named there.
+"""
+
+from __future__ import annotations
+
+import json
+import logging
+import re
+import uuid
+from collections import Counter
+from pathlib import Path
+from typing import Any
+
+from pydantic import ValidationError
+
+from qwen_tutor.generation._prompt_select import (
+    render_level_spec,
+    validate_prompt_has_locale_instruction,
+)
+from qwen_tutor.generation.teacher import TeacherClient, build_teacher_from_config
+from qwen_tutor.schemas import ScenarioSeed
+from qwen_tutor.utils.runner import (
+    append_failure,
+    append_jsonl,
+    extract_first_json,
+    gather_with_concurrency,
+    load_existing_ids,
+)
+
+logger = logging.getLogger(__name__)
+
+DEFAULT_OUTPUT_DIR = Path("data/seeds")
+DEFAULT_FAILURES_PATH = Path("data/seeds_failures.jsonl")
+DEFAULT_WARNINGS_PATH = Path("data/seeds_warnings.jsonl")
+
+CITY_OVERREP_THRESHOLD = 0.30
+NAME_OVERREP_THRESHOLD = 0.15
+
+
+# within-batch 도시 분포 점검은 country-specific 정적 리스트도, 외부 NER 도
+# 사용하지 않습니다. seed prompt 가 "setting" 의 첫머리에 도시명을 두도록
+# 강하게 지시하므로, 그냥 정규식으로 setting 문자열의 처음에 나오는 대문자
+# 단어 (또는 multi-word 대문자 phrase) 를 도시명으로 추출합니다.
+#
+# 한계: "Today the weather is..." 같은 sentence-initial common word 가
+# false positive 가 될 수 있어 짧은 stopword 셋을 거릅니다. 본격적 다양성
+# 체크는 ``diversity.py`` 가 한 번 더 (역시 정규식 기반) 수행하므로, 여기서
+# 놓치는 케이스는 그쪽이 잡아 줍니다.
+
+# "Shibuya crossing in Tokyo" → "Tokyo" / "Xuhui District, Shanghai" →
+# "Xuhui District" 식으로 첫 multi-word 대문자 phrase 를 찾습니다.
+_CITY_RE = re.compile(
+    r"\b([A-Z][a-zA-Z'\-]{2,}(?:[\s\-][A-Z][a-zA-Z'\-]+){0,3})\b"
+)
+
+# sentence-initial common-word false positive 제거용 stopword 셋. 추가는
+# 자유롭게.
+_CITY_STOPWORDS: frozenset[str] = frozenset(
+    s.lower()
+    for s in (
+        "Today", "Tomorrow", "Yesterday", "Morning", "Afternoon", "Evening",
+        "Night", "Spring", "Summer", "Autumn", "Winter", "Monday", "Tuesday",
+        "Wednesday", "Thursday", "Friday", "Saturday", "Sunday",
+        "The", "A", "An",
+    )
+)
+
+
+def _extract_city(setting: str) -> str | None:
+    """setting 문자열에서 도시명으로 보이는 첫 대문자 phrase 를 반환.
+
+    찾지 못하거나 stopword 만 잡히면 ``None`` (diversity 카운트에서 빠짐).
+    한계는 위 docstring 참고.
+    """
+    for m in _CITY_RE.finditer(setting):
+        candidate = m.group(1).strip()
+        first_word = candidate.split()[0].lower()
+        if first_word in _CITY_STOPWORDS:
+            continue
+        return candidate
+    return None
+
+
+def _parse_seed_batch(raw: str, level: str, locale: str) -> list[ScenarioSeed]:
+    data = extract_first_json(raw)
+    if isinstance(data, dict):
+        # Some models occasionally wrap the array in an outer object.
+        for key in ("scenarios", "items", "data"):
+            if key in data and isinstance(data[key], list):
+                data = data[key]
+                break
+    if not isinstance(data, list):
+        raise ValueError(f"expected JSON array, got {type(data).__name__}")
+    out: list[ScenarioSeed] = []
+    for item in data:
+        if not isinstance(item, dict):
+            continue
+        # Pin the CEFR level and locale to what we asked for — some models echo
+        # a different value back, and locale isn't visible to the teacher at
+        # all (it's metadata we stamp on the output).
+        item = {**item, "cefr_level": level, "locale": locale}
+        try:
+            out.append(ScenarioSeed.model_validate(item))
+        except ValidationError as exc:
+            logger.warning("seeds: dropping malformed scenario: %s", exc)
+    return out
+
+
+async def _call_teacher_for_batch(
+    teacher: TeacherClient,
+    level: str,
+    locale: str,
+    batch_size: int,
+    level_spec: str,
+    avoid_items: list[str] | None,
+    max_tokens: int,
+    temperature: float,
+) -> list[ScenarioSeed]:
+    from qwen_tutor.generation._prompt_select import render_prompt
+
+    # Per-locale topic-seed prompt, localized at call time.
+    topic_seed_prompt = render_prompt("topic_seed", locale_name=locale)
+    prompt = topic_seed_prompt.format(
+        N=batch_size,
+        level=level,
+        level_spec_with_locale_instruction=level_spec,
+    )
+    if avoid_items:
+        prompt = (
+            prompt
+            + "\n\nADDITIONAL CONSTRAINT — across this batch, AVOID using any "
+            "of the following overrepresented items entirely (do not include "
+            "them in any scenario): "
+            + ", ".join(sorted(set(avoid_items)))
+        )
+    validate_prompt_has_locale_instruction(prompt, locale_name=locale)
+    raw = await teacher.generate(
+        system=prompt,
+        messages=[],
+        cacheable_prefix=level_spec,
+        max_tokens=max_tokens,
+        temperature=temperature,
+    )
+    return _parse_seed_batch(raw, level, locale)
+
+
+def _read_existing_seeds(
+    output_path: Path, target_locale: str | None = None
+) -> tuple[set[str], set[str]]:
+    """Return (existing_ids, existing_topics) from a seeds output file.
+
+    Both sets are scoped to ``target_locale`` when provided: a topic from
+    a different country is NOT considered a duplicate, so e.g. "Weekend
+    Market Visit" can legitimately appear once for china AND once for
+    japan as different culturally-grounded scenarios. Only same-locale
+    topic collisions are filtered.
+
+    Seeds without a ``locale`` field (older single-locale data) are
+    treated as default-locale ("china", matching the schema default).
+    """
+    ids: set[str] = set()
+    topics: set[str] = set()
+    if not output_path.exists():
+        return ids, topics
+    with output_path.open("r", encoding="utf-8") as fh:
+        for raw in fh:
+            line = raw.strip()
+            if not line:
+                continue
+            try:
+                obj = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(obj, dict):
+                continue
+            row_locale = str(obj.get("locale", "china"))
+            if target_locale is not None and row_locale != target_locale:
+                continue
+            if "topic" in obj:
+                topics.add(str(obj["topic"]))
+            if "id" in obj:
+                ids.add(str(obj["id"]))
+    return ids, topics
+
+
+async def _generate_for_level(
+    teacher: TeacherClient,
+    level: str,
+    locale: str,
+    n_target: int,
+    per_call: int,
+    concurrency: int,
+    max_tokens: int,
+    temperature: float,
+    output_path: Path,
+    failures_path: Path,
+    warnings_path: Path,
+) -> int:
+    existing_ids, existing_topics = _read_existing_seeds(
+        output_path, target_locale=locale
+    )
+    remaining = max(0, n_target - len(existing_ids))
+    if remaining == 0:
+        logger.info(
+            "[seeds:%s/%s] already at %d/%d, skipping",
+            level, locale, len(existing_ids), n_target,
+        )
+        return 0
+
+    level_spec = render_level_spec(level, locale_name=locale)
+    n_batches = (remaining + per_call - 1) // per_call
+
+    async def _one_batch(idx: int) -> list[ScenarioSeed]:
+        try:
+            return await _call_teacher_for_batch(
+                teacher, level, locale, per_call, level_spec,
+                avoid_items=None,
+                max_tokens=max_tokens, temperature=temperature,
+            )
+        except Exception as exc:  # noqa: BLE001
+            append_failure(
+                failures_path,
+                f"seed_{locale}_{level}_batch{idx}",
+                f"{type(exc).__name__}: {exc}",
+                level=level, stage="seeds",
+            )
+            return []
+
+    batches = await gather_with_concurrency(
+        [_one_batch(i) for i in range(n_batches)],
+        concurrency=concurrency,
+        desc=f"seeds[{locale}/{level}]",
+    )
+
+    candidates: list[ScenarioSeed] = []
+    seen_topics = set(existing_topics)
+    for batch in batches:
+        for seed in batch:
+            if seed.topic in seen_topics:
+                continue
+            seen_topics.add(seed.topic)
+            candidates.append(seed)
+
+    # within-batch diversity check
+    city_counts: Counter[str] = Counter()
+    name_counts: Counter[str] = Counter()
+    for seed in candidates:
+        city = _extract_city(seed.setting)
+        if city:
+            city_counts[city] += 1
+        name_counts[seed.user_role.name] += 1
+
+    total = len(candidates)
+    overrep_cities: list[str] = []
+    overrep_names: list[str] = []
+    if total > 0:
+        overrep_cities = [c for c, n in city_counts.items() if n / total > CITY_OVERREP_THRESHOLD]
+        overrep_names = [n for n, c in name_counts.items() if c / total > NAME_OVERREP_THRESHOLD]
+
+    if overrep_cities or overrep_names:
+        append_jsonl(
+            warnings_path,
+            {
+                "level": level,
+                "locale": locale,
+                "total_candidates": total,
+                "overrep_cities": overrep_cities,
+                "overrep_names": overrep_names,
+                "city_distribution": city_counts.most_common(),
+                "name_distribution": name_counts.most_common(),
+            },
+        )
+        affected = [
+            s for s in candidates
+            if (_extract_city(s.setting) in overrep_cities)
+            or (s.user_role.name in overrep_names)
+        ]
+        if affected:
+            logger.info(
+                "[seeds:%s/%s] low-diversity: dropping %d affected scenarios, regenerating",
+                level, locale, len(affected),
+            )
+            candidates = [s for s in candidates if s not in affected]
+            regen_batches = (len(affected) + per_call - 1) // per_call
+            avoid = overrep_cities + overrep_names
+
+            async def _regen(idx: int) -> list[ScenarioSeed]:
+                try:
+                    return await _call_teacher_for_batch(
+                        teacher, level, locale, per_call, level_spec,
+                        avoid_items=avoid,
+                        max_tokens=max_tokens, temperature=temperature,
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    append_failure(
+                        failures_path,
+                        f"seed_{locale}_{level}_regen{idx}",
+                        f"{type(exc).__name__}: {exc}",
+                        level=level, stage="seeds_regen",
+                    )
+                    return []
+
+            regen_results = await gather_with_concurrency(
+                [_regen(i) for i in range(regen_batches)],
+                concurrency=concurrency,
+                desc=f"seeds[{locale}/{level}]/regen",
+            )
+            for batch in regen_results:
+                for seed in batch:
+                    if seed.topic in seen_topics:
+                        continue
+                    if _extract_city(seed.setting) in overrep_cities:
+                        continue
+                    if seed.user_role.name in overrep_names:
+                        continue
+                    seen_topics.add(seed.topic)
+                    candidates.append(seed)
+
+    written = 0
+    quota = n_target - len(existing_ids)
+    for seed in candidates[:quota]:
+        seed_id = uuid.uuid4().hex[:12]
+        # ScenarioSeed.model_dump() includes ``locale`` (set by _parse_seed_batch)
+        # so the on-disk record carries it.
+        record = {"id": seed_id, **seed.model_dump()}
+        append_jsonl(output_path, record)
+        written += 1
+    return written
+
+
+async def generate_batch(
+    n_per_level: int,
+    cefr_levels: list[str],
+    config_path: str | Path = "config/generation.yaml",
+    concurrency: int = 20,
+    per_call_size: int = 10,
+    max_tokens: int = 4096,
+    temperature: float = 0.9,
+    output_dir: str | Path = DEFAULT_OUTPUT_DIR,
+    failures_path: str | Path = DEFAULT_FAILURES_PATH,
+    warnings_path: str | Path = DEFAULT_WARNINGS_PATH,
+    teacher: TeacherClient | None = None,
+    locales: list[str] | None = None,
+) -> dict[str, int]:
+    """Generate scenario seeds for each (CEFR level, locale) pair.
+
+    ``locales`` 가 ``None`` 이거나 빈 리스트면 ``config/locale.yaml`` 의
+    ``default_locale`` 하나로 동작 (single-locale 호환). 여러 locale 을 적으면
+    각 (level, locale) 조합에 대해 ``n_per_level`` 개의 시드를 만듭니다.
+
+    Returns ``{f"{level}/{locale}": n_written_this_run}``. Existing seeds in
+    each per-level file are preserved and contribute to the per-(level,locale)
+    quota.
+    """
+    if teacher is None:
+        teacher = build_teacher_from_config(config_path, role="teacher")
+    if not locales:
+        from qwen_tutor.locale import DEFAULT_LOCALE_NAME
+
+        locales = [DEFAULT_LOCALE_NAME]
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    results: dict[str, int] = {}
+    for level in cefr_levels:
+        out_path = output_dir / f"{level}.jsonl"
+        for locale in locales:
+            written = await _generate_for_level(
+                teacher=teacher,
+                level=level,
+                locale=locale,
+                n_target=n_per_level,
+                per_call=per_call_size,
+                concurrency=concurrency,
+                max_tokens=max_tokens,
+                temperature=temperature,
+                output_path=out_path,
+                failures_path=Path(failures_path),
+                warnings_path=Path(warnings_path),
+            )
+            results[f"{level}/{locale}"] = written
+    return results
+
+
+def iter_seeds(
+    seeds_dir: str | Path = DEFAULT_OUTPUT_DIR,
+    cefr_levels: list[str] | None = None,
+):
+    """Iterate ``(id, ScenarioSeed)`` pairs from the per-level seed files.
+
+    Used by downstream stages (SFT, redirect, register pairs, evaluation)
+    to walk the seed corpus without re-loading the whole batch into
+    memory.
+    """
+    seeds_dir = Path(seeds_dir)
+    levels = cefr_levels or ["A1", "A2", "B1", "B2", "C1", "C2"]
+    for level in levels:
+        path = seeds_dir / f"{level}.jsonl"
+        if not path.exists():
+            continue
+        with path.open("r", encoding="utf-8") as fh:
+            for raw in fh:
+                line = raw.strip()
+                if not line:
+                    continue
+                obj = json.loads(line)
+                seed_id = str(obj.pop("id"))
+                seed = ScenarioSeed.model_validate(obj)
+                yield seed_id, seed
