@@ -2,9 +2,10 @@
 
 Runs filters in the canonical order
 
+    speaks_l1_sanity
+    non_latin_script
     banned_terms
     mode_consistency
-    cefr_vocab
     naturalness
     locale_judge
     naturalness_judge (optional)
@@ -35,9 +36,13 @@ from qwen_tutor.utils.runner import append_jsonl, gather_with_concurrency
 logger = logging.getLogger(__name__)
 
 CANONICAL_ORDER = (
+    # 1) speaks_l1 sanity 와 non-Latin script 점검은 가장 cheap (단순 regex)
+    #    이면서 가장 specific 한 reject 기준이므로 mechanical 필터들보다
+    #    앞에 둡니다 - 비정상 record 가 token 카운팅에 영향을 주지 않게.
+    "speaks_l1_sanity",
+    "non_latin_script",
     "banned_terms",
     "mode_consistency",
-    "cefr_vocab",
     "naturalness",
     "locale_judge",
     "naturalness_judge",

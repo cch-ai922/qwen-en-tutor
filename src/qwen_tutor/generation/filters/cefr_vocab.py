@@ -7,6 +7,19 @@ strictly above X, ignoring stopwords and words not in any band
 (charitable default for partial vocab files).
 
 Fails if that fraction exceeds 5%.
+
+Small-denominator guard
+-----------------------
+The shipped ``cefr_vocab_bands.json`` is a starter list (~90 words per
+band, ~480 total). On real dialogues 30-80% of content words are not in
+the vocab at all and get silently dropped, leaving a tiny ``known``
+denominator (often 7-12 words). A single above-band hit then yields
+ratios like 1/7 = 14% or 1/10 = 10%, blowing past the 5% threshold for
+reasons that are pure statistical noise — not a real CEFR-register
+problem. To avoid this we require a minimum number of in-vocab content
+words (``min_known_words``) before the filter is willing to judge; below
+that, the example passes with an informational note. Raise the count or
+expand the vocab file to tighten the filter.
 """
 
 from __future__ import annotations
@@ -23,6 +36,11 @@ BAND_RANK = {b: i for i, b in enumerate(BAND_ORDER)}
 
 DEFAULT_VOCAB_PATH = Path("config/cefr_vocab_bands.json")
 DEFAULT_THRESHOLD = 0.05
+# Minimum number of in-vocab content words required before the filter
+# is willing to judge above-band ratio. Below this, the example passes
+# (the denominator is too small for the ratio to be meaningful with the
+# current starter vocab list). See module docstring.
+DEFAULT_MIN_KNOWN_WORDS = 30
 
 _TOKEN_RE = re.compile(r"[A-Za-z][A-Za-z'\-]*")
 
@@ -34,8 +52,10 @@ class CEFRVocabFilter(Filter):
         self,
         vocab_path: str | Path = DEFAULT_VOCAB_PATH,
         threshold: float = DEFAULT_THRESHOLD,
+        min_known_words: int = DEFAULT_MIN_KNOWN_WORDS,
     ) -> None:
         self.threshold = threshold
+        self.min_known_words = min_known_words
         with Path(vocab_path).open("r", encoding="utf-8") as fh:
             doc = json.load(fh)
         self.word_to_band: dict[str, str] = {}
@@ -88,6 +108,22 @@ class CEFRVocabFilter(Filter):
                 score=0.0,
                 reason="no in-vocab content words",
                 metadata={"total_tokens": len(tokens), "content_words": len(content_words)},
+            )
+        if len(known) < self.min_known_words:
+            return FilterResult(
+                passed=True,
+                score=0.0,
+                reason=(
+                    f"only {len(known)} in-vocab content word(s) "
+                    f"(< min_known_words={self.min_known_words}); "
+                    "denominator too small to judge above-band ratio reliably"
+                ),
+                metadata={
+                    "target_level": cefr_level,
+                    "known_content_words": len(known),
+                    "content_words": len(content_words),
+                    "skipped_reason": "below_min_known_words",
+                },
             )
         above: list[str] = [
             w for w in known if BAND_RANK[self.word_to_band[w]] > target_rank

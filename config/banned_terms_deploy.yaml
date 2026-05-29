@@ -1,0 +1,137 @@
+# banned_terms_deploy.yaml
+#
+# Deploy-time safety net for ``BannedTermsFilter`` running inside
+# ``TutorRuntime``. This file is INDEPENDENT of training's
+# ``banned_terms.yaml`` so you can tune deploy strictness without
+# regenerating training data.
+#
+# Scope difference from training:
+#   - Training filter scans BOTH user and assistant turns (except in
+#     "redirect" scenarios where the user is supposed to bring up the
+#     trigger). It enforces what training data should look like.
+#   - Deploy filter scans ONLY the just-generated assistant turn. It
+#     enforces what the model is allowed to say. The user can mention
+#     any of these terms freely; only the tutor's reply is blocked.
+#
+# Editing guidance:
+#   - Terms that are RARELY a problem in tutor output but common in
+#     user input (church, bar, beer, drinking) can be relaxed here
+#     compared to training. The trained model is supposed to redirect
+#     these topics naturally; the filter is the rare-failure backstop.
+#   - Terms that should NEVER appear in tutor output even if the
+#     learner brings them up (named political figures, hard ideological
+#     labels, religious doctrine, slurs) should stay or be added.
+#   - Add a new top-level category any time. The loader picks it up
+#     automatically; the failed metadata will use that key.
+#
+# Matching is case-sensitive (Western proper nouns / capitalized
+# ideology labels only). Empty categories are fine.
+
+# ---------------------------------------------------------------------------
+# Politics - tutor must not engage with electoral / regime topics.
+# Kept the same as training because the tutor's role is unambiguous:
+# a language tutor never has reason to say "the regime" or "the election".
+# ---------------------------------------------------------------------------
+politics:
+  - government
+  - election
+  - elections
+  - parliament
+  - senator
+  - senators
+  - regime
+  - dictator
+  - dictatorship
+  - politician
+  - politicians
+  - sanctions
+  - sanction
+  - protests
+  - protest
+  - protesters
+  - protestors
+  - revolution
+  - coup
+  - opposition party
+  - ruling party
+  - vote
+  - voted
+  - voting
+  - voter
+  - voters
+  - ballot
+  - constitution
+
+# ---------------------------------------------------------------------------
+# Religion - softened slightly vs. training.
+#
+# Reasoning: the model was trained to redirect on these topics, so a
+# bare mention by the tutor is unusual. We keep the "doctrine and
+# devotional" vocabulary (god, allah, jesus, sermon, pray, sin, heaven,
+# hell) which would mean the tutor is engaging theologically. We drop
+# the "building" words (church, mosque, temple, synagogue) — a tutor
+# describing a city tour ("the temple is near the river") is fine and
+# not a safety concern.
+# ---------------------------------------------------------------------------
+religion:
+  - religious
+  - sect
+  - sectarian
+  - clergy
+  - clerics
+  - cleric
+  - bishop
+  - priest
+  - imam
+  - rabbi
+  - sermon
+  - prayer
+  - praying
+  - pray
+  - god
+  - allah
+  - jesus
+  - christ
+  - heaven
+  - hell
+  - sin
+  - sinful
+
+# ---------------------------------------------------------------------------
+# Alcohol / dating - softened vs. training.
+#
+# Reasoning: same as religion. We keep terms that signal the tutor is
+# engaging with the topic ("drunk", "hookup", "flirting"). We drop the
+# "venue / beverage" words (bar, pub, beer, wine, cocktail) — a tutor
+# mentioning a bar as a place name or wine as a food pairing in a B2+
+# context isn't a safety concern; the model decides whether to redirect.
+# ---------------------------------------------------------------------------
+alcohol_dating:
+  - alcoholic
+  - drunk
+  - hookup
+  - hookups
+  - flirt
+  - flirting
+
+# ---------------------------------------------------------------------------
+# Partisan history / ideology - kept strict.
+#
+# A language tutor never has reason to label something "communist" or
+# "fascist" or to discuss "regime change" or "colonialism" as topics.
+# Same set as training.
+# ---------------------------------------------------------------------------
+partisan_history:
+  - regime change
+  - civil war
+  - colonial
+  - colonialism
+  - imperialism
+  - communist
+  - communism
+  - socialist
+  - socialism
+  - fascist
+  - fascism
+  - Nazi
+  - dictatorship

@@ -154,7 +154,6 @@ async def _stage_filter_dpo(gen_cfg_path: Path) -> None:
     """
     print("\n=== filter_dpo (register + on_policy) ===")
     from qwen_tutor.generation.filters.banned_terms import BannedTermsFilter
-    from qwen_tutor.generation.filters.cefr_vocab import CEFRVocabFilter
     from qwen_tutor.generation.filters.mode_consistency import ModeConsistencyFilter
     from qwen_tutor.generation.filters.naturalness import NaturalnessFilter
     from qwen_tutor.generation.filters.pipeline import FilterPipeline
@@ -165,7 +164,6 @@ async def _stage_filter_dpo(gen_cfg_path: Path) -> None:
     filters_list: list = [
         BannedTermsFilter(),
         ModeConsistencyFilter(),
-        CEFRVocabFilter(),
         NaturalnessFilter(),
     ]
     if fcfg.get("enable_locale_judge"):

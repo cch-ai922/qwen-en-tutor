@@ -298,15 +298,25 @@ async def _stage_eval(cfg_path: Path, params: dict[str, Any], paths: dict[str, s
 def _build_filters(cfg: dict[str, Any], cfg_path: Path) -> list:
     """generation.yaml 의 filtering 블록을 보고 활성화할 필터 리스트를 만듭니다."""
     from qwen_tutor.generation.filters.banned_terms import BannedTermsFilter
-    from qwen_tutor.generation.filters.cefr_vocab import CEFRVocabFilter
     from qwen_tutor.generation.filters.mode_consistency import ModeConsistencyFilter
     from qwen_tutor.generation.filters.naturalness import NaturalnessFilter
+    from qwen_tutor.generation.filters.non_latin_script import NonLatinScriptFilter
+    from qwen_tutor.generation.filters.speaks_l1_sanity import SpeaksL1SanityFilter
 
     fcfg = cfg.get("filtering", {})
+    # 필터 순서:
+    #  1) SpeaksL1SanityFilter - speaks_l1 examples 중 L1 turn 이 빠진
+    #     degenerate 케이스를 가장 일찍 잡아 냅니다. speaks_l1 이 아닌
+    #     record 는 그대로 통과.
+    #  2) NonLatinScriptFilter - 그 외 record 의 비-Latin 글자 leak 차단.
+    #     speaks_l1 user turn 은 자체적으로 exempt 되어 있어 1과 충돌하지
+    #     않습니다.
+    #  3-5) 기존 mechanical 필터들.
     filters_list: list = [
+        SpeaksL1SanityFilter(),
+        NonLatinScriptFilter(),
         BannedTermsFilter(),
         ModeConsistencyFilter(),
-        CEFRVocabFilter(),
         NaturalnessFilter(),
     ]
     # locale judge 는 teacher 모델 호출이 비싸므로 옵션 처리.

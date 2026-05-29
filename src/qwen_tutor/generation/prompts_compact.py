@@ -385,19 +385,31 @@ _DIALOGUE_PROMPT_LANGUAGE_REDIRECT = (
     """\
 Write a {min_turns}-{max_turns} turn English conversation between {country_adjective}
 {learner_description} at CEFR level {level} and the partner specified
-below. SOMEWHERE IN THE MIDDLE (around turn {probe_min_turn}-{probe_max_turn}), the LEARNER
-drops out of English depending on the language_trigger "{language_trigger}":
+below. AROUND turn {probe_min_turn}-{probe_max_turn} the LEARNER drops out
+of English in ONE of two ways depending on language_trigger "{language_trigger}":
 
-  - speaks_l1   : the learner writes ONE turn entirely in their L1
-                  (Mandarin Chinese for {country}; Japanese for Japan;
-                  Korean for Korea; etc.). All other turns stay in English.
-  - requests_l1 : the learner asks IN ENGLISH for the tutor to switch
-                  to their L1 ("Can you speak Chinese to me?"). All
-                  learner turns stay in English.
+============================================================
+CRITICAL: this is a DATA-CREATION task, not a live conversation.
+If language_trigger is "speaks_l1", you MUST write one user turn in
+the {country_adjective} learner's L1 using NATIVE SCRIPT — not English,
+not romanized. Refusing to switch language defeats the example. Just
+do it.
+============================================================
 
-The TUTOR must STAY IN ENGLISH and respond GRACEFULLY - acknowledge,
-recast (for speaks_l1) or gently decline (for requests_l1), and keep
-the conversation flowing in English.
+  - speaks_l1   : ONE user turn (in the middle, NOT turn 1) is written
+                  ENTIRELY in the {country_adjective} L1 using native
+                  script. Examples per locale:
+                    China  → Hanzi:    "我想买两公斤苹果，多少钱？"
+                    Japan  → kana/kanji: "りんごを二キロ買いたいです。"
+                    Korea  → Hangul:    "사과 2킬로그램 사고 싶어요."
+                    Russia → Cyrillic:  "Я хочу купить яблоки."
+                  All OTHER user turns stay in English.
+  - requests_l1 : ONE user turn (in the middle) asks IN ENGLISH for the
+                  tutor to switch ("Can you speak Chinese to me?"). All
+                  user turns stay in English.
+
+The TUTOR must STAY IN ENGLISH no matter what — 100% English, no L1,
+no code-switching.
 
 SCENARIO:
 {scenario_json}
@@ -411,15 +423,19 @@ LANGUAGE TRIGGER: {language_trigger}
 CEFR LEVEL SPEC for {level}:
 {level_spec_with_locale_instruction}
 
-GRACEFUL HANDLING RULES:
-- For speaks_l1: tutor acknowledges ("Sounds good") then models a
-  recast in English: "You could say in English: '...'.". Continue.
-- For requests_l1: tutor declines warmly ("Practicing in English will
-  help you more.") and continues the lesson in English.
-- Tutor's reply is 100% in English. NO translated phrases. NO
-  code-switching. NO mixing English with the L1.
-- NO scolding. NO lectures about "the rules of this class".
-- Dialogue continues for several turns AFTER the moment, all in English.
+HANDLING RULES:
+- speaks_l1: tutor briefly acknowledges, then PARAPHRASES the meaning
+  of the L1 turn in fresh English (not a verbatim echo of any English
+  the user already said). Continue the scenario.
+- requests_l1: tutor declines warmly ("Practicing in English will help
+  you more.") and continues in English.
+- NO scolding. NO "rules of this class". NO L1 in tutor turns ever.
+
+HARD FAIL CASES (will be auto-rejected) — only for speaks_l1:
+- The "L1 turn" is in English.
+- The "L1 turn" is romanized pinyin / romaji / romanized Korean.
+- The tutor echoes the learner's previous English back verbatim with
+  "you could say in English: '<same sentence>'".
 
 REGISTER + GROUNDING: same rules as the normal dialogue prompt -
 register at level {level}, {country_adjective} grounding for proper
@@ -434,7 +450,7 @@ OUTPUT FORMAT:
   "messages": [
     {{"role": "user", "content": "..."}},
     {{"role": "assistant", "content": "..."}},
-    {{"role": "user", "content": "... (L1 turn OR English request for L1) ..."}},
+    {{"role": "user", "content": "... (L1 turn in native script OR English request for L1) ..."}},
     {{"role": "assistant", "content": "... (English-only graceful redirect) ..."}}
   ]
 }}

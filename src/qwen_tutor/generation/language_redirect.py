@@ -57,7 +57,14 @@ DEFAULT_SEEDS_DIR = Path("data/seeds")
 DEFAULT_OUTPUT_DIR = Path("data/sft_raw")
 DEFAULT_FAILURES_PATH = Path("data/language_redirect_failures.jsonl")
 
-# 두 가지 user-side language violation 패턴. cycle 로 시드 간 변화.
+# Two user-side language violation patterns. Both are needed at inference
+# time: real learners both ASK for L1 in English ("can you speak Chinese
+# to me?") AND silently drop into L1 mid-conversation.
+#
+# ``speaks_l1`` historically produced degenerate dialogues because small
+# teachers refuse to output non-English. The prompt has been rewritten to
+# force compliance, and ``SpeaksL1SanityFilter`` rejects any sample that
+# still slips through with an English-only user turn.
 LANGUAGE_TRIGGER_KINDS: tuple[str, ...] = ("speaks_l1", "requests_l1")
 
 

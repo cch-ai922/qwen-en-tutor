@@ -173,7 +173,7 @@ logging:
 # 학습 중 콜백 평가 (TutorEvalCallback)
 # -----------------------------------------------------------------------------
 # eval_steps 마다 모델에서 직접 샘플을 뽑아 banned_terms / mode_consistency /
-# cefr_vocab / naturalness 필터 통과율을 측정하고 wandb 에 기록합니다.
+# naturalness 필터 통과율을 측정하고 wandb 에 기록합니다.
 eval_callback:
   enabled: false                        # smoke: disabled to keep VRAM/time low
   n_conversation_samples: 10
@@ -185,7 +185,6 @@ eval_callback:
   conversation_filters:
     - banned_terms
     - mode_consistency
-    - cefr_vocab
     - naturalness
   held_out_prompts_path: "data/holdout/eval_callback_prompts.jsonl"
 
@@ -234,3 +233,34 @@ on_policy:
 #
 # 프롬프트 문구를 바꾸려면 prompts.py 를, locale 관련 값을 바꾸려면
 # locale.yaml 을 편집하세요. 여기에는 더 이상 프롬프트가 없습니다.
+
+# -----------------------------------------------------------------------------
+# GGUF export (offline llama-server 배포)
+# -----------------------------------------------------------------------------
+# scripts/run_gguf_export.py 가 이 블록을 읽어
+#   1) merge_lora() 로 SFT/DPO 어댑터를 base 에 병합 (full-precision safetensors)
+#   2) llama.cpp 의 convert_hf_to_gguf.py 로 GGUF 변환 (text tower; Qwen3-VL 인
+#      경우 mmproj-*.gguf 도 함께 생성)
+#   3) (선택) llama-quantize 로 양자화 (Q4_K_M 등)
+# 결과 GGUF 는 output_dir 아래에 떨어지고, scripts/start_llama_cpp.ps1 로
+# 바로 서빙할 수 있습니다 (`-ModelDir outputs/gguf -ModelGlob "*Q4_K_M*.gguf"`).
+gguf_export:
+  # 입력: 병합할 LoRA 어댑터 (SFT 또는 DPO 결과물)
+  adapter_path: "outputs/dpo"
+  # 중간 산출물 (merged safetensors). 변환 후 keep_merged: false 면 삭제.
+  merged_dir: "outputs/merged"
+  keep_merged: false
+  # GGUF 출력 디렉터리.
+  output_dir: "outputs/gguf"
+  # 모델 이름 prefix (파일명에 사용).
+  model_name: "qwen-en-tutor"
+  # 변환 시 base dtype. "bf16" 권장; "f16" 도 가능.
+  outtype: "bf16"
+  # 양자화. "none" 이면 변환만 하고 종료.
+  # 권장: 4B 모델 → Q4_K_M (속도/품질 균형) 또는 Q5_K_M (품질 우선)
+  quantize: "Q4_K_M"
+  # llama.cpp 체크아웃 경로. convert_hf_to_gguf.py 가 여기 있어야 합니다.
+  llama_cpp_repo: "vendor/llama.cpp"
+  # llama-quantize 실행 파일 경로. quantize 가 "none" 이면 무시.
+  # null 이면 $env:LLAMA_CPP_BIN/llama-quantize(.exe) 를 자동 탐색.
+  llama_quantize_bin: null

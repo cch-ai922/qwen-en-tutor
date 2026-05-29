@@ -332,8 +332,10 @@ async def _generate_for_level(
     for seed in candidates[:quota]:
         seed_id = uuid.uuid4().hex[:12]
         # ScenarioSeed.model_dump() includes ``locale`` (set by _parse_seed_batch)
-        # so the on-disk record carries it.
-        record = {"id": seed_id, **seed.model_dump()}
+        # AND an Optional ``id`` field that defaults to None — we have to
+        # exclude it from the unpack so our freshly-generated ``seed_id``
+        # isn't shadowed by None.
+        record = {"id": seed_id, **seed.model_dump(exclude={"id"})}
         append_jsonl(output_path, record)
         written += 1
     return written

@@ -681,7 +681,6 @@ Same evaluation as `eval_intermediate`, against the post-DPO adapter.
 | [config/training.yaml](config/training.yaml) | base model + quantization, LoRA spec, SFT + DPO hyperparams, deployment system prompt template, eval callback, on-policy gen settings |
 | [config/cefr_specs.yaml](config/cefr_specs.yaml) | per-CEFR level register guidance + few-shot dialogues, locale instruction anchor |
 | [config/banned_terms.yaml](config/banned_terms.yaml) | case-sensitive proper-noun blacklist (Western names/places/brands, etc.) |
-| [config/cefr_vocab_bands.json](config/cefr_vocab_bands.json) | CEFR-J derived vocabulary bands consumed by the cefr_vocab filter |
 
 The two **dialogue-shape** knobs to tune first:
 
@@ -778,8 +777,9 @@ This pulls seeds out of `data/seeds/` and writes them to
   `persona_redirect`).
 - 4 generation prompts switchable between `prompts.py` (Opus-grade) and
   `prompts_compact.py` (small-model tuned) via `QWEN_TUTOR_PROMPTS`.
-- 5-filter quality pipeline (`banned_terms`, `mode_consistency`,
-  `cefr_vocab`, `naturalness`, optional `locale_judge`).
+- Quality pipeline: `speaks_l1_sanity`, `non_latin_script`,
+  `banned_terms`, `mode_consistency`, `naturalness`, optional
+  `locale_judge` / `naturalness_judge`.
 - Joint SFT + DPO training with a single LoRA adapter learning both
   `/no_think` and `/think` modes.
 - 8-metric end-to-end evaluation with intermediate vs final

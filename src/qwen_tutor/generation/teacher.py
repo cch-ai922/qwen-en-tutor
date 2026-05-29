@@ -536,6 +536,27 @@ class OpenAITeacher(TeacherClient):
     ) -> str:
         oai_msgs = self._build_messages(system, cacheable_prefix, messages)
 
+        # Decide whether to disable Qwen3-style "thinking" mode based on
+        # the system prompt's directive. Qwen3 family templates respect
+        # ``enable_thinking`` via chat_template_kwargs; the inline
+        # ``/no_think`` / ``/think`` directive in the prompt body is NOT
+        # honored by every model (Qwen3.5 ignores it and burns max_tokens
+        # in reasoning_content). Detect the directive in the system text
+        # and forward it as a chat-template kwarg so the model actually
+        # complies. Other providers ignore unknown extra_body fields.
+        enable_thinking: bool | None
+        if "/no_think" in system:
+            enable_thinking = False
+        elif "/think" in system:
+            enable_thinking = True
+        else:
+            enable_thinking = None
+        extra_body: dict[str, Any] = {}
+        if enable_thinking is not None:
+            extra_body["chat_template_kwargs"] = {
+                "enable_thinking": enable_thinking
+            }
+
         start = time.monotonic()
         response = None
         async for attempt in self._retryer():
@@ -545,6 +566,7 @@ class OpenAITeacher(TeacherClient):
                     messages=oai_msgs,
                     max_tokens=max_tokens,
                     temperature=temperature,
+                    extra_body=extra_body or None,
                 )
         latency_ms = (time.monotonic() - start) * 1000.0
         assert response is not None

@@ -8,8 +8,8 @@ step the callback:
   2. Generates 10 conversation samples (/no_think) and 10 evaluation
      samples (/think).
   3. On conversation samples, runs the mechanical filters
-     (banned_terms, mode_consistency, cefr_vocab, naturalness) and
-     reports per-filter pass rates to wandb.
+     (banned_terms, mode_consistency, naturalness) and reports
+     per-filter pass rates to wandb.
   4. On evaluation samples, parses the JSON output and reports the
      valid-JSON rate and mean per-dimension scores.
   5. Logs a small ``wandb.Table`` of sample generations for human
@@ -28,7 +28,6 @@ from typing import Any
 
 from qwen_tutor.generation.filters.banned_terms import BannedTermsFilter
 from qwen_tutor.generation.filters.base import Filter, FilterResult
-from qwen_tutor.generation.filters.cefr_vocab import CEFRVocabFilter
 from qwen_tutor.generation.filters.mode_consistency import ModeConsistencyFilter
 from qwen_tutor.generation.filters.naturalness import NaturalnessFilter
 from qwen_tutor.schemas import (
@@ -190,7 +189,7 @@ class TutorEvalCallback(TrainerCallback):  # type: ignore[misc]
         self.log_samples_table = log_samples_table
         self._conversation_filter_names = set(
             conversation_filters
-            or ["banned_terms", "mode_consistency", "cefr_vocab", "naturalness"]
+            or ["banned_terms", "mode_consistency", "naturalness"]
         )
         # Lazy-built filter instances — they take a moment to load
         # (banned_terms parses YAML, naturalness compiles regexes).
@@ -206,8 +205,6 @@ class TutorEvalCallback(TrainerCallback):  # type: ignore[misc]
             registry["banned_terms"] = BannedTermsFilter()
         if "mode_consistency" in self._conversation_filter_names:
             registry["mode_consistency"] = ModeConsistencyFilter()
-        if "cefr_vocab" in self._conversation_filter_names:
-            registry["cefr_vocab"] = CEFRVocabFilter()
         if "naturalness" in self._conversation_filter_names:
             registry["naturalness"] = NaturalnessFilter()
         self._filters = list(registry.values())

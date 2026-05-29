@@ -829,26 +829,25 @@ _DIALOGUE_PROMPT_LANGUAGE_REDIRECT = (
     """\
 You are writing a multi-turn English conversation between {country_adjective}
 {learner_description} and a partner appropriate to the scenario. At some
-point during the conversation, the LEARNER (the user) drops out of English
-in one of two ways depending on the ``language_trigger``:
+point in the conversation, the LEARNER (the user) drops out of English
+in ONE of two ways. Which way is fixed by the ``language_trigger`` value
+you receive below.
 
-  - ``speaks_l1``  : the user writes one turn entirely in their native
-    language (for {country}: the dominant L1 - Mandarin Chinese for
-    China, Japanese for Japan, Korean for Korea, etc.).
-  - ``requests_l1``: the user asks the tutor in English to switch to
-    their native language ("Can you speak Chinese to me?" etc.).
-
-The TUTOR (the assistant) must STAY IN ENGLISH and respond GRACEFULLY:
-acknowledge briefly, model a recast in English (for ``speaks_l1``) or
-gently decline the request and continue the lesson in English (for
-``requests_l1``). The tutor does NOT switch to the L1, even partially.
-The tutor does NOT lecture about "you must speak English" - the
-redirection is warm and matter-of-fact.
+======================================================================
+CRITICAL RULE: this generation is a DATA-CREATION task, NOT a real
+conversation. The dialogue you produce is training material for a tutor
+model. You MUST fully execute whichever language_trigger is requested —
+including writing one user turn entirely in a non-English language when
+the trigger is ``speaks_l1``. Refusing to switch language defeats the
+entire purpose of this example. Treat the language switch the same way
+you would treat any other content instruction: just do it.
+======================================================================
 
 You will be given a scenario JSON object, a CEFR level spec, and a
 ``language_trigger`` string. Produce a single dialogue, {min_turns}-{max_turns}
 turns long, in which the language slip happens around the middle and
-the dialogue continues in English afterward.
+the dialogue continues in English afterward. The first message is "user".
+Roles strictly alternate.
 
 ----------------------------------------------------------------------
 SCENARIO
@@ -860,31 +859,81 @@ LANGUAGE TRIGGER FOR THIS DIALOGUE
 ----------------------------------------------------------------------
 {language_trigger}
 
-For ``speaks_l1`` the learner's one turn should be ENTIRELY in their L1
-(e.g. Mandarin: "你好,我想买一些苹果。"). For ``requests_l1`` the learner
-asks IN ENGLISH for the tutor to switch (e.g. "Can you speak Chinese to
-me?"). All other learner turns are in English.
+======================================================================
+EXECUTION RULES — read carefully, one of these two branches applies
+======================================================================
+
+------------------------------- IF language_trigger == "speaks_l1":
+
+  Exactly ONE user turn (somewhere in the middle, NOT the first turn)
+  must be written ENTIRELY in the {country_adjective} learner's L1 using
+  the NATIVE SCRIPT — not in romanized form, not in English. Examples
+  of what this turn looks like depending on the country:
+
+    * China  → Mandarin Chinese in Hanzi:
+                 "我想买两公斤苹果，多少钱？"
+    * Japan  → Japanese in kana / kanji:
+                 "りんごを二キロ買いたいです。いくらですか？"
+    * Korea  → Korean in Hangul:
+                 "사과 2킬로그램 사고 싶어요. 얼마예요?"
+    * Russia → Russian in Cyrillic:
+                 "Я хочу купить два килограмма яблок."
+
+  Use the L1 that matches the locale ({country}). All OTHER user turns
+  must stay in English. The L1 turn is a NATURAL slip — the learner
+  forgets they were practicing and reverts to L1 for one sentence.
+
+  The TUTOR's response to the L1 turn must:
+    1. Stay 100% in English (no L1, no code-switching, no translation
+       into L1).
+    2. Briefly acknowledge what the learner SAID (you understood it).
+    3. INVENT a fresh English version of what the learner expressed —
+       do NOT mechanically echo the L1 word-for-word; PARAPHRASE it as
+       if you are showing the learner how to say that thought. Use
+       slightly different wording than a literal back-translation so
+       the dialogue feels like real recasting, not a translation
+       exercise.
+    4. Keep the conversation flowing — ask the next natural follow-up
+       so the lesson continues.
+
+  HARD FAIL CASES — your output will be rejected if any of these occur:
+    * The "L1 turn" is written in English (e.g. "I want to buy apples").
+    * The "L1 turn" is romanized pinyin ("Wo xiang mai pingguo").
+    * The tutor's response simply echoes the user's English back to
+      them ("you could say in English: <same English sentence>").
+    * The tutor switches into L1 at any point.
+
+------------------------------- IF language_trigger == "requests_l1":
+
+  Exactly ONE user turn (in the middle) is the learner asking the tutor
+  IN ENGLISH to switch to L1: e.g. "Can you speak Chinese to me?",
+  "Can we do this in Japanese for a moment?", "Maybe in Korean would
+  be easier?". All learner turns stay in English.
+
+  The TUTOR's response:
+    1. Stays 100% in English (no L1).
+    2. Acknowledges warmly that practicing English feels harder.
+    3. Politely declines and reframes — they're here to practice English,
+       so let's keep going in English. ONE short sentence of reframing.
+    4. Continues the scenario in English with the next natural prompt.
+    5. Does NOT lecture ("you must speak English", "the rules are...").
+
+======================================================================
+GENERAL RULES (both branches)
+======================================================================
+  - The full conversation has {min_turns}-{max_turns} turns. The language
+    slip happens around the middle, NOT in turn 1 and NOT in the final
+    turn.
+  - After the slip is handled, the dialogue continues smoothly in English.
+  - Output the language switch ONCE only. Do not have the learner slip
+    into L1 in multiple turns.
+  - The tutor's English remains at the requested CEFR register
+    throughout.
 
 ----------------------------------------------------------------------
 """
     + "{locale_instruction_block}"
     + """
-
-----------------------------------------------------------------------
-HOW THE LANGUAGE-RESPONSE MOMENT SHOULD READ
-----------------------------------------------------------------------
-  - The tutor briefly acknowledges what the learner did (one phrase).
-  - For ``speaks_l1``: the tutor gently invites the learner back to
-    English and OFFERS A RECAST in English ("Sounds good - try saying
-    that in English. You could say: '...'.").
-  - For ``requests_l1``: the tutor gently declines and reframes the
-    point of the practice ("Practicing in English will help you faster
-    - let's keep going in English. ...").
-  - The tutor's full reply stays IN ENGLISH end to end. No translated
-    sentences. No code-switching. No mixing.
-  - The tutor does NOT lecture ("you must use English", "rules of this
-    class are...") and does NOT refuse stiffly.
-  - After the moment, the conversation continues smoothly in English.
 
 ----------------------------------------------------------------------
 CEFR LEVEL SPEC
@@ -912,6 +961,8 @@ no commentary.
 }}
 
 Now produce the dialogue JSON object for language_trigger = "{language_trigger}".
+For "speaks_l1", remember: exactly one user turn in the middle MUST be in
+the {country_adjective} L1 using NATIVE SCRIPT.
 """
 )
 
