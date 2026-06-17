@@ -53,11 +53,32 @@ frozen base model (`ref_model: null`).
 **Mix.** SFT training data combines the 12-stream filtered SFT
 corpus with the `<think>`-mode evaluator examples; the loader takes
 all available filtered records (`use_all_data: true`). DPO training
-data combines three pools — register-DPO pairs (~65%), on-policy
-DPO pairs (~25%), and sentinel-DPO pairs (~10%) — with the
-identically-named `mix_ratio_*` knobs and `use_all_data: true` by
-default (see §3.8 for the sentinel pool's offline and on-policy
-construction modes).
+data combines three pools and uses `use_all_data: true`, so the
+realised mix is the natural ratio of the on-disk pools rather than
+any nominal target:
+
+- **register pool**: ~3 700 pairs (~76% of total). Offline
+  preference pairs from a single teacher call per filtered SFT
+  record.
+- **on-policy pool**: ~400 pairs (~8% of total). Pairs where the
+  rejected response is produced by the SFT-trained student under
+  the same prompt as the teacher's preferred response, gated by an
+  LLM-judge margin of $\geq 2$ on a 1--5 scale. We use
+  `max_per_level=100` (six CEFR levels) as the per-level attempt
+  cap, then filter to the kept set.
+- **sentinel pool**: ~760 pairs (~16% of total). The offline-mode
+  subset (~88%) is produced by deterministic strip of the
+  `[SESSION_END: <axis>]` marker from the teacher's third-strike
+  response; the on-policy-mode subset (~12%) is the SFT-trained
+  student's regeneration of the same turn. See §3.8.
+
+The `mix_ratio_register`, `mix_ratio_on_policy`, and
+`mix_ratio_sentinel` knobs in the training config are honoured only
+when `use_all_data: false`. Our on-policy share (8%) and sentinel
+share (16%) place the mix in the *hybrid* regime used by Tulu-3
+[@lambert2024tulu3] and Llama-3 [@touvron2024llama3]: a dominant
+offline pool plus targeted on-policy / specialised pools that
+account for ~10--30% of the gradient signal.
 
 ## 4.4 Training data composition
 

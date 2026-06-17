@@ -87,7 +87,7 @@ sft:
   max_steps: -1                         # full epoch; smoke was 5
   per_device_train_batch_size: 1
   per_device_eval_batch_size: 1
-  gradient_accumulation_steps: 4
+  gradient_accumulation_steps: 8
   learning_rate: 2.0e-4
   warmup_ratio: 0.05
   lr_scheduler_type: "cosine"
@@ -137,7 +137,7 @@ dpo:
   max_steps: -1                         # full epoch; smoke was 5
   per_device_train_batch_size: 1
   per_device_eval_batch_size: 1
-  gradient_accumulation_steps: 4
+  gradient_accumulation_steps: 8
   learning_rate: 5.0e-6
   warmup_ratio: 0.05
   lr_scheduler_type: "cosine"

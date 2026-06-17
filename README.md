@@ -47,6 +47,13 @@ generation code talks to over `127.0.0.1:8080`.
 19. [True offline operation (air-gapped checklist)](#19-true-offline-operation-air-gapped-checklist)
 20. [Known limitations and rough edges](#20-known-limitations-and-rough-edges)
 
+> **Reproducing the paper?** End-to-end run order
+> (generate → ablate → train → eval → score → build PDF) lives in
+> [`paper/README.md`](paper/README.md). The LaTeX build alone is in
+> [`paper/latex/README.md`](paper/latex/README.md), and offline
+> installers for Pandoc and MiKTeX are vendored under
+> [`vendor/installers/`](vendor/installers/README.md).
+
 ---
 
 ## 1. Hardware and constraints

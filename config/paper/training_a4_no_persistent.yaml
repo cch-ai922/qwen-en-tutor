@@ -49,7 +49,7 @@ sft:
   max_steps: -1
   per_device_train_batch_size: 1
   per_device_eval_batch_size: 1
-  gradient_accumulation_steps: 4
+  gradient_accumulation_steps: 8
   learning_rate: 2.0e-4
   warmup_ratio: 0.05
   lr_scheduler_type: "cosine"
@@ -82,7 +82,7 @@ dpo:
   max_steps: -1
   per_device_train_batch_size: 1
   per_device_eval_batch_size: 1
-  gradient_accumulation_steps: 4
+  gradient_accumulation_steps: 8
   learning_rate: 5.0e-6
   warmup_ratio: 0.05
   lr_scheduler_type: "cosine"
@@ -96,8 +96,9 @@ dpo:
   optim: "paged_adamw_8bit"
   logging_steps: 5
   eval_strategy: "no"
-  save_strategy: "no"
-  save_total_limit: 1
+  save_strategy: "steps"
+  save_steps: 100
+  save_total_limit: 3
   report_to: "none"
   seed: 42
   sft_adapter_path: "outputs/paper/a4/sft"
@@ -113,7 +114,7 @@ dpo:
 on_policy:
   enabled: true
   adapter_path: "outputs/paper/a4/sft"
-  max_per_level: 5
+  max_per_level: 100  # see a1 config for rationale
   min_margin: 2
   concurrency: 2
   target_max_tokens: 320
