@@ -1,38 +1,40 @@
 # =============================================================================
-# locale.yaml  -  타겟 국가 정의 (multi-locale 지원)
+# locale.yaml  -  target country definitions (multi-locale support)
 # =============================================================================
 #
-# 이 파일 하나만 바꾸면 프롬프트 / locale judge / metrics / banned-term 필터
-# 가 모두 새 국가로 따라갑니다. 다른 코드는 수정할 필요가 없습니다.
+# Changing only this file makes prompts / locale judge / metrics / banned-term
+# filters follow the new country. No other code needs modification.
 #
-# 두 가지 모드를 지원합니다:
+# Two modes are supported:
 #
-# 1) 단일 locale (예전 동작 그대로): top-level 에 country / country_adjective
-#    등을 직접 적습니다. 한 모델이 한 국가만 다룹니다.
+# 1) Single locale (traditional behavior): write country / country_adjective
+#    directly at the top level. One model handles one country.
 #
-# 2) 다중 locale: ``locales:`` 아래에 여러 국가 블록을 두고 ``default_locale``
-#    로 기본값을 지정합니다. 한 모델이 여러 국가의 대화를 모두 처리할 수
-#    있도록 학습됩니다 (한 conversation = 한 country, 추론 시점에 caller 가
-#    어떤 country 로 응대할지 시스템 프롬프트로 알려 줍니다).
+# 2) Multi-locale: place multiple country blocks under ``locales:`` and set
+#    ``default_locale``. The model is trained to handle conversations for multiple
+#    countries (one conversation = one country, and the caller indicates which
+#    country to respond as via the system prompt at inference time).
 #
-# 동작 원리: teacher 모델이 이미 해당 국가의 도시/음식/교통/화폐/문화일정을
-# 알고 있으므로 정적 리스트(도시명, 음식 등)는 두지 않습니다. country 만
-# 알려 주면 teacher 가 자기 지식으로 채워 줍니다.
+# How it works: the teacher model is assumed to already know the country's
+# cities/food/transport/currency/culture, so static lists (city names, foods,
+# etc.) are not included. Providing only the country lets the teacher fill in
+# the rest from its own knowledge.
 # -----------------------------------------------------------------------------
 
-# 다중 locale 사용 시 기본 locale. 단일 locale 모드에서는 무시됩니다.
+# Default locale used in multi-locale mode. Ignored in single-locale mode.
 default_locale: china
 
 # -----------------------------------------------------------------------------
-# 다중 locale 정의
+# multi-locale definitions
 # -----------------------------------------------------------------------------
-# 각 entry 의 key (china / japan / italy ...) 가 그 locale 의 식별자이고,
-# 학습 데이터의 ``metadata.locale`` 필드에 그대로 들어갑니다. 영어
-# snake_case 추천. 추가할 locale 의 country/country_adjective 만 정확히
-# 적어 주면 teacher 모델이 자기 지식으로 그 국가의 도시/음식/문화를 채웁니다.
+# Each entry key (china / japan / italy ...) identifies the locale and is used
+# directly in the training data ``metadata.locale`` field. English snake_case is
+# recommended. If you add a new locale, specifying only country and
+# country_adjective is enough for the teacher model to fill in that country's
+# cities/food/culture from its own knowledge.
 #
-# 단일 locale 만 쓸 거라면 ``locales:`` 블록을 통째로 삭제하고 이 파일
-# top-level 에 country / country_adjective / ... 를 직접 적어도 됩니다.
+# If you only need a single locale, delete the entire ``locales:`` block and
+# write country / country_adjective / ... directly at the top level of this file.
 locales:
 
   # --------------------------------------------------------------------------
@@ -40,7 +42,7 @@ locales:
     country: "China"
     country_adjective: "Chinese"
     learner_description: "adult learners of English"
-    # teacher 가 잘못 떨어지기 쉬운 인접 문화를 명시적으로 회피.
+    # Explicitly avoid adjacent cultures the teacher may fall into incorrectly.
     avoid_default_cultures:
       - "American"
       - "European"
@@ -59,6 +61,12 @@ locales:
         pivot_hint: "neighborhood safety, sports, hobbies, weekend plans — keep tone calm, do not roleplay violence, do not give instructions"
       - name: distress_self_harm
         pivot_hint: "briefly acknowledge how the learner feels with one warm sentence, gently suggest talking to a trusted family member, friend, or counselor, then ease into a light everyday topic like food or a walk; do NOT give clinical advice, do NOT roleplay a counselor"
+      - name: yankee_culture
+        pivot_hint: "Chinese sports like table tennis or badminton, Spring Festival or Mid-Autumn customs, local brands and pastimes"
+      - name: western_culture
+        pivot_hint: "Chinese sports like table tennis or badminton, Spring Festival or Mid-Autumn customs, local brands and pastimes"
+      - name: law_and_national_economy
+        pivot_hint: "household budgeting, daily market prices, neighborhood shopping habits"
 
   # --------------------------------------------------------------------------
   japan:
@@ -69,7 +77,7 @@ locales:
       - "American"
       - "European"
       - "Chinese"
-      - "Korean"
+      - "Singapore"
     food_terms: []
     avoid_food_terms: []
     avoided_topics:
@@ -85,6 +93,12 @@ locales:
         pivot_hint: "neighborhood safety, sports, hobbies, weekend plans — keep tone calm, do not roleplay violence, do not give instructions"
       - name: distress_self_harm
         pivot_hint: "briefly acknowledge how the learner feels with one warm sentence, gently suggest talking to a trusted family member, friend, or counselor, then ease into a light everyday topic like food or a walk; do NOT give clinical advice, do NOT roleplay a counselor"
+      - name: yankee_culture
+        pivot_hint: "Japanese baseball at Koshien, sumo, local festivals, regional snacks and brands"
+      - name: western_culture
+        pivot_hint: "Japanese cinema and anime, J-pop or enka, NHK morning dramas"
+      - name: law_and_national_economy
+        pivot_hint: "household budgeting, supermarket prices, neighborhood shopping habits"
 
   # --------------------------------------------------------------------------
   italy:
@@ -109,3 +123,9 @@ locales:
         pivot_hint: "neighborhood safety, sports, hobbies, weekend plans — keep tone calm, do not roleplay violence, do not give instructions"
       - name: distress_self_harm
         pivot_hint: "briefly acknowledge how the learner feels with one warm sentence, gently suggest talking to a trusted family member, friend, or counselor, then ease into a light everyday topic like food or a walk; do NOT give clinical advice, do NOT roleplay a counselor"
+      - name: yankee_culture
+        pivot_hint: "Italian football (Serie A), local festivals (Carnevale, sagre), family pastimes, regional brands"
+      - name: western_culture
+        pivot_hint: "Italian cinema (Cinecitta), regional music and folk traditions, RAI dramas"
+      - name: law_and_national_economy
+        pivot_hint: "household budgeting, market prices, neighborhood shopping habits"

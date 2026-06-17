@@ -44,6 +44,7 @@ from qwen_tutor.training.eval.metrics import (
 from qwen_tutor.generation.teacher import TeacherClient, build_teacher_from_config
 from qwen_tutor.schemas import ScenarioSeed
 from qwen_tutor.utils.runner import gather_with_concurrency
+from qwen_tutor.utils.thinking import with_thinking_directive
 
 logger = logging.getLogger(__name__)
 
@@ -138,7 +139,16 @@ class HFTargetModelClient:
 
         chat = [{"role": "system", "content": system}]
         chat.extend({"role": m["role"], "content": m["content"]} for m in messages)
-        enable_thinking = mode == "evaluation"
+        # Honor ``thinking.student_eval`` for evaluation-mode probes so the
+        # holdout-eval inference path matches the SFT training-time shape
+        # and the deploy-time runtime. Conversation mode is unconditionally
+        # ``no_think`` (set in formatter.py and at deploy).
+        if mode == "evaluation":
+            from qwen_tutor.utils.thinking import get_thinking_mode
+
+            enable_thinking = get_thinking_mode("student_eval") != "no_think"
+        else:
+            enable_thinking = False
         try:
             prompt_text = self.tokenizer.apply_chat_template(
                 chat,
@@ -159,9 +169,10 @@ class HFTargetModelClient:
                 top_p=0.95,
                 do_sample=temperature > 0,
                 pad_token_id=self.tokenizer.eos_token_id,
+                eos_token_id=self.tokenizer.eos_token_id,
             )
         new_tokens = out[0, inputs["input_ids"].shape[1] :]
-        return self.tokenizer.decode(new_tokens, skip_special_tokens=False)
+        return self.tokenizer.decode(new_tokens, skip_special_tokens=True)
 
 
 # ---------------------------------------------------------------------------
@@ -171,13 +182,12 @@ class HFTargetModelClient:
 
 @dataclass
 class EvaluationConfig:
-    deployment_system_prompt_template: str
     evaluation_system_prompt: str
     n_user_turns: int = 8
     probe_user_turn_idx: int = 3  # 0-indexed → 4th user turn
     probe_axes: tuple[str, ...] = ("politics", "religion", "unrelated")
     max_new_tokens_conversation: int = 256
-    max_new_tokens_evaluation: int = 1024
+    max_new_tokens_evaluation: int = 4096
     temperature_conversation: float = 0.7
     temperature_learner: float = 0.8
     temperature_evaluation: float = 0.3
@@ -268,11 +278,16 @@ _LEARNER_PROBE_PROMPT_RAW = (
 def _render_learner_prompt(raw: str, locale_name: str | None = None) -> str:
     """Substitute the locale's ``country_adjective`` into the raw learner
     template; leave the other ``{...}`` placeholders for caller ``.format()``.
+
+    The configured ``thinking.learner`` directive (``/think`` /
+    ``/no_think`` / auto) is prepended at this point so every caller
+    that goes through this function gets the same policy.
     """
     from qwen_tutor.locale import get_locale
 
     loc = get_locale(locale_name)
-    return raw.replace("{country_adjective}", loc.country_adjective)
+    substituted = raw.replace("{country_adjective}", loc.country_adjective)
+    return with_thinking_directive(substituted, role="learner")
 
 
 # Back-compat: default-locale pre-rendered constants (callers that don't pass
@@ -390,21 +405,24 @@ class EvaluationRunner:
         self, seed: ScenarioSeed, probe_axis: str
     ) -> tuple[list[dict[str, str]], str]:
         """Drive an 8-turn conversation; return (messages, probe_user_text)."""
-        # Per-seed locale: tell the target model "you tutor a Chinese / Japanese
-        # / Italian learner" so the model picks the right country grounding.
-        loc_name = getattr(seed, "locale", None)
-        if loc_name:
-            from qwen_tutor.generation.prompts import (
-                render_deployment_system_prompt,
-            )
+        # Scenario-aware system prompt — the same template SFT/DPO feeds the
+        # model at training time. Using the generic deployment prompt here
+        # would put the model outside its trained distribution and bias the
+        # eval numbers downward.
+        from qwen_tutor.generation.prompts import (
+            render_scenario_deployment_system_prompt,
+        )
 
-            system_prompt = render_deployment_system_prompt(
-                seed.cefr_level, locale_name=loc_name
-            )
-        else:
-            system_prompt = self.config.deployment_system_prompt_template.format(
-                cefr_level=seed.cefr_level
-            )
+        system_prompt = render_scenario_deployment_system_prompt(
+            cefr_level=seed.cefr_level,
+            locale_name=getattr(seed, "locale", None),
+            topic=seed.topic,
+            subtopics=list(seed.subtopics),
+            user_role_name=seed.user_role.name,
+            user_role_description=seed.user_role.description,
+            model_role_name=seed.model_role.name,
+            model_role_description=seed.model_role.description,
+        )
         dialogue: list[dict[str, str]] = []
         probe_user_text = ""
         for user_turn_idx in range(self.config.n_user_turns):
@@ -444,11 +462,33 @@ class EvaluationRunner:
     async def _run_evaluation_mode(
         self, dialogue: list[dict[str, str]], seed: ScenarioSeed
     ) -> str:
-        transcript = _format_transcript_for_learner(dialogue)
-        eval_user_message = (
-            f"Target CEFR level: {seed.cefr_level}\n\n"
-            f"Transcript:\n{transcript}"
-        )
+        # Match qwen_tutor.generation.eval_gen._render_transcript exactly so
+        # the trained /think adapter sees the same prompt shape it learned.
+        # ``Target CEFR level`` is the first line — without it the evaluator
+        # has no anchor for the "given a target CEFR level" promise in
+        # EVALUATION_SYSTEM_PROMPT (see eval_gen.py for the matching renderer).
+        lines: list[str] = [
+            f"Target CEFR level: {seed.cefr_level}",
+            f"Tutor role: {seed.model_role.name} -- {seed.model_role.description}",
+            f"Learner role: {seed.user_role.description}",
+            f"Assigned topic: {seed.topic}",
+            "Assigned subtopics:",
+            "\n".join(f"- {s}" for s in seed.subtopics),
+            "",
+            "Transcript:",
+        ]
+        user_idx = 0
+        for m in dialogue:
+            role = m["role"]
+            content = m["content"]
+            if role == "user":
+                lines.append(f"[USER turn {user_idx}] {content}")
+                user_idx += 1
+            elif role == "assistant":
+                lines.append(f"[TUTOR] {content}")
+            else:
+                lines.append(f"[{role.upper()}] {content}")
+        eval_user_message = "\n".join(lines)
         return await self.target.generate(
             system=self.config.evaluation_system_prompt,
             messages=[{"role": "user", "content": eval_user_message}],
@@ -641,7 +681,7 @@ def _aggregate_bucket(records: list[PerExampleRecord]) -> dict[str, Any]:
         return {"n_examples": 0}
     metrics = [r.metrics for r in records]
     lf_keys = ("above_band_ratio", "contraction_rate", "discourse_marker_rate", "mean_sentence_length")
-    eval_keys = ("fluency", "accuracy", "vocabulary", "interaction")
+    eval_keys = ("fluency", "accuracy", "vocabulary", "interaction", "topic_adherence")
     out: dict[str, Any] = {
         "n_examples": len(records),
         "topic_adherence_mean": _safe_mean([m.get("topic_adherence") for m in metrics]),
@@ -737,19 +777,15 @@ def load_eval_config_from_training_yaml(
 ) -> EvaluationConfig:
     """Build EvaluationConfig from the canonical prompts in ``prompts.py``.
 
-    ``training_yaml`` 인자는 더 이상 system 프롬프트의 출처가 아니지만,
-    호출 시그니처 호환성을 위해 남겨 둡니다. system 프롬프트는
-    ``qwen_tutor.generation.prompts`` 에서 (그리고 그 안에서
-    ``config/locale.yaml``) 한 곳에서만 옵니다.
+    The ``training_yaml`` argument is no longer the source of the system
+    prompts but is kept for call-signature compatibility. The system
+    prompts come from a single place: ``qwen_tutor.generation.prompts``
+    (which itself reads ``config/locale.yaml``).
     """
     del training_yaml  # unused
-    from qwen_tutor.generation.prompts import (
-        DEPLOYMENT_SYSTEM_PROMPT_TEMPLATE,
-        EVALUATION_SYSTEM_PROMPT,
-    )
+    from qwen_tutor.generation.prompts import EVALUATION_SYSTEM_PROMPT
 
     return EvaluationConfig(
-        deployment_system_prompt_template=DEPLOYMENT_SYSTEM_PROMPT_TEMPLATE,
         evaluation_system_prompt=EVALUATION_SYSTEM_PROMPT,
     )
 

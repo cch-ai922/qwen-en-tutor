@@ -1,0 +1,272 @@
+# =============================================================================
+# western_entities.yaml — Locale-Leakage gazetteer
+# =============================================================================
+#
+# Detection list for the Locale-Leakage metric (paper §4.9). The metric is
+# the rate at which a baseline produces a tutor turn that mentions any
+# entity below when the configured locale is `china`.
+#
+# Design rules:
+#   - INCLUDE entities that are unmistakably Western-default and out-of-
+#     locale for a China-deployed English tutor (e.g. Thanksgiving, Costco,
+#     New York Times, Super Bowl).
+#   - EXCLUDE entities that are universal in modern Chinese daily life even
+#     though they originated in the West (Apple, Coca-Cola, Starbucks,
+#     pizza, coffee, McDonald's, KFC — all heavily present in China).
+#   - EXCLUDE common English nouns that happen to be capitalised. The
+#     locale_judge allowlists already cover sentence-initial capitalisation.
+#
+# Matching is case-insensitive on whole-word boundaries. Multi-word
+# entries match the exact phrase. Hyphenated entries match either with or
+# without the hyphen.
+#
+# Add an entity below ONLY after confirming (i) it is unmistakably a
+# Western default; (ii) it is NOT in commercial / cultural use inside
+# China. When in doubt, omit — the metric should have high precision and
+# moderate recall, not the reverse.
+# -----------------------------------------------------------------------------
+
+us_uk_place_names:
+  # US cities and regions
+  - New York
+  - NYC
+  - Manhattan
+  - Brooklyn
+  - Times Square
+  - Central Park
+  - Los Angeles
+  - LA
+  - San Francisco
+  - Chicago
+  - Houston
+  - Boston
+  - Seattle
+  - Las Vegas
+  - Washington DC
+  - Florida
+  - California
+  - Texas
+  - Hawaii
+  - Niagara Falls
+  - Yellowstone
+  - Grand Canyon
+  # UK
+  - London
+  - Edinburgh
+  - Manchester
+  - Liverpool
+  - Big Ben
+  - Westminster
+  - Trafalgar Square
+  - Buckingham Palace
+  # Other Western
+  - Sydney
+  - Toronto
+  - Vancouver
+
+us_holidays_and_observances:
+  - Thanksgiving
+  - Halloween
+  - Black Friday
+  - Cyber Monday
+  - Independence Day
+  - Fourth of July
+  - 4th of July
+  - Memorial Day
+  - Labor Day
+  - Veterans Day
+  - Columbus Day
+  - Easter
+  - Easter Sunday
+  - Good Friday
+  - Mardi Gras
+  - Valentine's Day
+  - St. Patrick's Day
+  - Saint Patrick's Day
+  - Pentecost
+
+us_brands_and_chains_not_in_china:
+  # Avoided: Apple, Starbucks, KFC, McDonald's, Coca-Cola, Pepsi, Nike,
+  # Adidas — all heavily present in China.
+  - Costco
+  - Walmart
+  - Target
+  - Whole Foods
+  - Trader Joe's
+  - CVS
+  - Walgreens
+  - 7-Eleven
+  - Home Depot
+  - Lowe's
+  - Best Buy
+  - Macy's
+  - Nordstrom
+  - The Gap
+  - Old Navy
+  - Bed Bath and Beyond
+  - In-N-Out
+  - Chipotle
+  - Subway
+  - Domino's
+  - Papa John's
+  - Wendy's
+  - Taco Bell
+  - Five Guys
+  - Olive Garden
+  - Cheesecake Factory
+  - Cracker Barrel
+  - Dairy Queen
+
+us_media_and_news:
+  - New York Times
+  - Wall Street Journal
+  - Washington Post
+  - USA Today
+  - LA Times
+  - Hollywood
+  - Broadway
+  - Netflix
+  - Hulu
+  - Disney Plus
+  - Disney+
+  - HBO
+  - CNN
+  - BBC
+  - NBC
+  - ABC News
+  - CBS News
+  - Fox News
+  - NPR
+  - Sirius XM
+
+us_sports_leagues_and_events:
+  - NFL
+  - NBA
+  - MLB
+  - NHL
+  - MLS
+  - Super Bowl
+  - World Series
+  - Stanley Cup
+  - NCAA
+  - March Madness
+  - PGA Tour
+  - Wimbledon
+  - U.S. Open
+  - US Open
+  - Premier League
+  - Wembley
+
+us_uk_education:
+  - Harvard
+  - Yale
+  - Princeton
+  - Stanford
+  - MIT
+  - Caltech
+  - Columbia University
+  - Brown University
+  - Cornell
+  - Dartmouth
+  - UCLA
+  - UC Berkeley
+  - University of Chicago
+  - Oxford
+  - Cambridge
+  - Imperial College London
+  - LSE
+  - SAT
+  - ACT
+  - PSAT
+  - Advanced Placement
+  - AP exam
+  - GCSE
+
+us_western_food_and_drink_not_in_china:
+  # Avoided: pizza, hamburger, hot dog, coffee, donut, ice cream, milkshake
+  # — all common in China.
+  - bagel
+  - bagels
+  - cornbread
+  - grits
+  - pumpkin pie
+  - apple pie
+  - meatloaf
+  - turkey dinner
+  - cranberry sauce
+  - eggnog
+  - sweet tea
+  - root beer
+  - Dr Pepper
+  - Mountain Dew
+  - A&W root beer
+  - Gatorade
+  - Kool-Aid
+  - clam chowder
+  - lobster roll
+  - Philly cheesesteak
+  - po'boy
+  - jambalaya
+  - gumbo
+  - po-boy
+  - corn dog
+  - macaroni and cheese
+  - mac and cheese
+  - sloppy joe
+
+us_currency_and_political:
+  # Match contexts like "ten dollars" / "a dollar" / "$10".
+  - dollar
+  - dollars
+  - quarter
+  - cents
+  - penny
+  - pennies
+  - pound sterling
+  - euro
+  - euros
+  - White House
+  - Capitol Hill
+  - Senate
+  - Congress
+  - Pentagon
+  - Wall Street
+  - Silicon Valley
+  - Pearl Harbor
+
+us_uk_measurement_units:
+  # Used as everyday units in conversation. China uses metric.
+  - Fahrenheit
+  - mile
+  - miles
+  - gallon
+  - gallons
+  - ounce
+  - ounces
+  - pound
+  - pounds
+  - foot
+  - feet
+  - inch
+  - inches
+  - yard
+  - yards
+  - acre
+  - acres
+  - quart
+
+western_named_personas:
+  # Common Western first names a tutor would NOT naturally use as student
+  # personas in a China-locale setting. The locale system uses Chinese
+  # names (Wei, Mei, Chen, Jing, etc.); a Western name slipping into the
+  # response is a tell. Listed sparingly.
+  - John Smith
+  - Jane Doe
+  - Tom Cruise
+  - Taylor Swift
+  - Elon Musk
+  - Mickey Mouse
+  - Donald Trump
+  - Joe Biden
+  - Kim Kardashian
+  - Lady Gaga

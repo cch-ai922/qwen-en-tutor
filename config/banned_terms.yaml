@@ -1,31 +1,40 @@
 # banned_terms.yaml
 #
-# 기계적 regex 필터(``BannedTermsFilter``) 가 사용하는 카테고리/단어 목록.
+# Category/word lists used by the mechanical regex filter
+# (``BannedTermsFilter``).
 #
-# 두 종류의 카테고리가 있을 수 있습니다.
+# There can be two kinds of categories.
 #
-# (1) 회피 주제 (politics/religion/...) - LOCALE 과 무관하게 어떤 country
-#     에서도 동일하게 차단합니다. avoided_topics 가 ``config/locale.yaml`` 에
-#     정의되어 있고 그 name 과 같은 카테고리 키가 여기 있으면 mechanical
-#     필터가 cheap 한 1차 차단망 역할을 합니다.
+# (1) Avoidance topics (politics/religion/...) - blocked the same way in any
+#     country regardless of LOCALE. If avoided_topics is defined in
+#     ``config/locale.yaml`` and the category key here matches its name, the
+#     mechanical filter acts as a cheap first layer of blocking.
 #
-# (2) 국가별 회피 단어 - 특정 country 에서 자주 새는 Western 단어, 정치
-#     인물 이름 등은 country 마다 다르므로 ``config/locale.yaml`` 로 country
-#     를 바꿀 때 함께 직접 채워 두면 됩니다 (선택). 기본값은 비어 있습니다.
+# (2) Country-specific banned words - Western terms or political figures that
+#     frequently leak in a specific country differ by country, so optionally
+#     populate them directly when switching country via ``config/locale.yaml``.
+#     The default is empty.
 #
-# 매칭은 case-sensitive (Western proper noun 만 잡도록).
-# 카테고리는 비워 두어도 BannedTermsFilter 는 정상 동작합니다.
+# Matching is case-sensitive (to catch Western proper nouns only).
+# The filter works normally even if categories are empty.
 
 # ---------------------------------------------------------------------------
-# 회피 주제 - LOCALE 의 avoided_topics 와 매핑
+# avoidance topics - mapped to LOCALE's avoided_topics
 # ---------------------------------------------------------------------------
-# 카테고리 이름은 LocaleConfig.avoided_topics[].name 과 맞춰 두는 게
-# 좋습니다 (locale_judge / metrics 리포트가 같은 키로 묶입니다).
-# 단어 자체는 한 country 에 묶이지 않는 보편적인 정치/종교/알코올 용어만
-# 두었습니다.
+# It is best to align category names with LocaleConfig.avoided_topics[].name
+# (locale_judge / metrics reports group them by the same key).
+# The listed words are only general politics/religion/alcohol terms that are
+# not tied to any single country.
 
 politics:
-  - government
+  # NOTE: bare "government" was removed because it false-positives on
+  # benign civic discussion ("local government", "municipal government",
+  # "government office", "government website" — daily-life uses). Truly
+  # political content is caught by the other terms below (regime,
+  # ruling party, opposition party, etc.). If specific political
+  # phrases are needed, prefer multi-word entries here, e.g.
+  # "the current government" or "government policy" — but verify
+  # against real failures first.
   - election
   - elections
   - parliament
@@ -42,17 +51,24 @@ politics:
   - protest
   - protesters
   - protestors
-  - revolution
+  # NOTE: bare "revolution" was removed because it false-positives on
+  # benign uses ("industrial revolution", "digital revolution",
+  # "the revolution in AI"). Truly political revolutions are caught by
+  # adjacent terms (coup, regime, partisan_history.regime change, etc.).
   - coup
   - opposition party
   - ruling party
-  - vote
-  - voted
-  - voting
-  - voter
-  - voters
+  # NOTE: bare "vote/voting/voted/voter/voters" removed because they
+  # false-positive on benign uses ("let's vote on the restaurant",
+  # "voting day at the school", "voted to add a new event"). True
+  # political voting is caught by adjacent terms (election, elections,
+  # ballot, ruling party, opposition party). Same justification as
+  # "government" and "revolution" above.
   - ballot
-  - constitution
+  # NOTE: bare "constitution" removed because it false-positives on
+  # benign uses ("the school's constitution", "robust constitution",
+  # "the company's constitution"). Truly political constitutional
+  # references are caught by other terms (parliament, regime, etc.).
 
 religion:
   - religious
@@ -66,8 +82,6 @@ religion:
   - church
   - churches
   - synagogue
-  - temple
-  - temples
   - bishop
   - priest
   - imam
@@ -88,15 +102,11 @@ religion:
 alcohol_dating:
   - alcohol
   - alcoholic
-  - drunk
-  - drinking
   - beer
   - wine
   - whiskey
   - vodka
   - cocktail
-  - bar
-  - bars
   - pub
   - pubs
   - nightclub
@@ -125,3 +135,33 @@ partisan_history:
   - fascism
   - Nazi
   - dictatorship
+
+# ---------------------------------------------------------------------------
+# scaffolding_leakage - prompt-internal headers the teacher echoed verbatim
+# ---------------------------------------------------------------------------
+# When a small teacher (Qwen3.5 4B Q4) cannot follow the structured eval
+# prompt cleanly, it sometimes COPIES bracketed section headers from the
+# system prompt straight into the assistant turn. Only list phrases that
+# CANNOT legitimately appear in tutor output, otherwise we false-positive
+# on examples whose <think> reasoning happens to mention real
+# ``EvaluationOutput`` field names (e.g. "Topic Adherence", "Overall CEFR")
+# or natural turn-labeling phrases ("User Turn 0 = messages[0]").
+# All entries below are prompt-scaffolding markers that would never appear
+# in genuine model output. Case-sensitive matching.
+#
+# Current marker format (set in src/qwen_tutor/locale.py:locale_instruction_header):
+#   "[locale-rules:<country>]"   e.g. "[locale-rules:china]"
+# The "[locale-rules:" prefix alone is enough to catch any locale's leak.
+#
+# The "CHINA LOCALE INSTRUCTION" / "LOCALE INSTRUCTION" entries are retained
+# for back-compat: any old training data generated under the previous header
+# format that re-enters the filter pipeline will still get flagged.
+scaffolding_leakage:
+  # Drop the trailing colon and country slot so the filter's word-boundary
+  # lookahead doesn't reject the match against the next-letter (the country
+  # name is the first letter after the marker — "[locale-rules:china]" etc.).
+  # Matching just "[locale-rules" is enough; the next char ":" is non-letter
+  # so the lookahead passes.
+  - "[locale-rules"
+  - "CHINA LOCALE INSTRUCTION"
+  - "LOCALE INSTRUCTION"

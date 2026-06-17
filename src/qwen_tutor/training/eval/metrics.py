@@ -27,7 +27,9 @@ from qwen_tutor.generation.filters.naturalness import (
     _split_sentences,
     _tokenize,
 )
+from qwen_tutor.schemas import Message
 from qwen_tutor.utils.runner import extract_first_json
+from qwen_tutor.utils.thinking import with_thinking_directive
 
 logger = logging.getLogger(__name__)
 
@@ -36,17 +38,17 @@ Mode = Literal["conversation", "evaluation"]
 
 
 # ---------------------------------------------------------------------------
-# locale_fidelity 는 더 이상 정적 country-term 리스트를 두지 않습니다.
+# locale_fidelity no longer keeps a static country-term list.
 #
-# 이전 버전은 IRANIAN_CITIES / FOODS / NAMES 같은 큰 리스트를 들고 있다가
-# proper-noun 매칭으로 점수를 계산했습니다. 지금은 ``config/locale.yaml``
-# 로 country 가 자유롭게 바뀌므로 정적 리스트는 의미가 없습니다.
+# Earlier versions kept large lists like IRANIAN_CITIES / FOODS / NAMES and
+# scored via proper-noun matching. Since ``config/locale.yaml`` now lets the
+# country change freely, a static list is no longer meaningful.
 #
-# 본격적인 locale 판정은 ``LocaleLLMJudge`` (filters/locale_judge.py) 에
-# 맡기고, 여기서는 호출자가 in_locale_terms 를 명시적으로 넘긴 경우에만
-# 그 기준으로 fidelity 를 계산합니다. 아무 것도 넘기지 않으면 "신호 없음"
-# 의 의미로 1.0 을 반환합니다 (홀드아웃 평가에서 다른 metric 으로 압도되지
-# 않도록).
+# Real locale judgment is delegated to ``LocaleLLMJudge``
+# (filters/locale_judge.py); here we only compute fidelity against
+# in_locale_terms when the caller explicitly passes them. If nothing is
+# passed we return 1.0 meaning "no signal" (so that the holdout eval is not
+# dominated by this metric).
 # ---------------------------------------------------------------------------
 
 
@@ -183,9 +185,10 @@ def _extract_proper_nouns(text: str) -> list[str]:
     return candidates
 
 
-# 외부 NER(spaCy) 의존을 제거했습니다. ``locale_fidelity`` 는 위쪽
-# ``_extract_proper_nouns`` (정규식) 으로만 후보를 뽑습니다. ``use_spacy``
-# 인자는 호환성을 위해 유지하지만 더 이상 동작에 영향이 없습니다.
+# Removed the external NER (spaCy) dependency. ``locale_fidelity`` now
+# only pulls candidates via the regex-based ``_extract_proper_nouns`` above.
+# The ``use_spacy`` argument is kept for backward compatibility but no
+# longer affects behavior.
 
 
 def locale_fidelity(
@@ -196,25 +199,27 @@ def locale_fidelity(
 ) -> float:
     """Fraction of named entities in assistant turns that match the in-locale set.
 
-    설계:
-        * ``in_locale_terms`` 를 명시적으로 넘긴 경우 - 그 set 에 대해 점수 계산.
-          (특정 국가에 대한 빠른 mechanical 점검이 필요할 때 사용)
-        * ``in_locale_terms`` 가 None - country 리스트가 없으므로 "no signal"
-          의미의 1.0 을 반환합니다. 실제 locale 판정은 ``LocaleLLMJudge`` 가
-          맡습니다.
+    Design:
+        * When ``in_locale_terms`` is passed explicitly - score against that set.
+          (Use this for a quick mechanical check against a specific country.)
+        * When ``in_locale_terms`` is None - there's no country list, so return
+          1.0 meaning "no signal". Real locale judgment is handled by
+          ``LocaleLLMJudge``.
 
-    ``extra_lowercase_terms`` 는 NER 가 보통 놓치는 음식 이름처럼 소문자 토큰을
-    찾고 싶을 때 추가 단어를 넘기는 옵션입니다 (test 호환성용).
+    ``extra_lowercase_terms`` is an option to pass extra words you want to
+    find as lowercase tokens (like food names that NER typically misses);
+    kept for test compatibility.
 
-    빈 dialogue / 고유명사가 없는 dialogue 는 항상 1.0 (no signal → no penalty).
+    Empty dialogues / dialogues without proper nouns always return 1.0
+    (no signal -> no penalty).
     """
     d = _normalize(dialogue)
     text = _assistant_text(d)
     if not text.strip():
         return 1.0
     if in_locale_terms is None:
-        # locale-specific term 리스트가 없으면 mechanical fidelity 는 측정 불가.
-        # 1.0 으로 두고 진짜 판정은 LocaleLLMJudge 에 맡깁니다.
+        # Without a locale-specific term list, mechanical fidelity can't be
+        # measured. Return 1.0 and leave the real judgment to LocaleLLMJudge.
         return 1.0
     in_locale_set = frozenset(t.lower() for t in in_locale_terms)
     extra_set = (
@@ -223,8 +228,8 @@ def locale_fidelity(
         else frozenset()
     )
 
-    # ``use_spacy`` 는 호환성용 - 더 이상 외부 NER 을 호출하지 않고 정규식
-    # 기반 ``_extract_proper_nouns`` 만 씁니다.
+    # ``use_spacy`` is kept for compatibility - we no longer invoke an
+    # external NER and only use the regex-based ``_extract_proper_nouns``.
     _ = use_spacy
     entities = _extract_proper_nouns(text)
     cleaned: list[str] = []
@@ -234,7 +239,7 @@ def locale_fidelity(
             cleaned.append(ent)
     if not cleaned and not extra_set:
         return 1.0
-    # extra_lowercase_terms: NER 가 못 잡는 음식 이름 등 lowercase 토큰
+    # extra_lowercase_terms: lowercase tokens (food names, etc.) that NER misses
     extra_hits = 0
     for term in extra_set:
         if re.search(rf"(?<![A-Za-z]){re.escape(term)}(?![A-Za-z])", text, re.IGNORECASE):
@@ -268,13 +273,37 @@ def mode_consistency(generation: str, requested_mode: Mode) -> bool:
     return has_open and has_close
 
 
-def eval_json_validity(generation: str) -> bool:
-    """Returns True iff the post-``</think>`` payload parses to a JSON object
-    that carries every required ``EvaluationOutput`` field."""
+_CODE_FENCE_RE = re.compile(r"```(?:json)?\s*(.*?)\s*```", re.DOTALL | re.IGNORECASE)
+
+
+def _eval_payload_after_think(generation: str) -> str:
+    """Return the text segment expected to contain the ``EvaluationOutput``
+    JSON, mirroring the leniency of ``deploy.tutor._parse_eval_output``:
+
+      * If a ``</think>`` close tag is present, slice everything after it.
+      * Otherwise, return the whole generation. Small / undertrained models
+        often skip the ``<think>`` opener entirely and just emit prose
+        reasoning followed by JSON; we still want to recover the JSON.
+      * Strip a `````json ... ````` code fence wrapper if present.
+    """
     close = _THINK_CLOSE_RE.search(generation)
-    if not close:
-        return False
-    after = generation[close.end():].strip()
+    after = generation[close.end():] if close else generation
+    m = _CODE_FENCE_RE.search(after)
+    if m:
+        after = m.group(1)
+    return after.strip()
+
+
+def eval_json_validity(generation: str) -> bool:
+    """Returns True iff the (best-effort-located) JSON payload parses to a
+    dict carrying every required ``EvaluationOutput`` field.
+
+    Matches the deploy-time parser's leniency: tolerates a missing
+    ``<think>`` block (the small student often drops it) and a
+    `````json ... ````` code fence around the JSON. ``mode_consistency``
+    still measures whether the trained tag format was used.
+    """
+    after = _eval_payload_after_think(generation)
     if not after:
         return False
     try:
@@ -287,18 +316,18 @@ def eval_json_validity(generation: str) -> bool:
 
 
 def eval_dimension_scores(generation: str) -> dict[str, int] | None:
-    """Return the ``{fluency, accuracy, vocabulary, interaction}`` ints
-    from a valid evaluation generation, or ``None`` if the payload is bad."""
+    """Return the ``{fluency, accuracy, vocabulary, interaction,
+    topic_adherence}`` ints from a valid evaluation generation, or
+    ``None`` if the payload is bad."""
     if not eval_json_validity(generation):
         return None
-    close = _THINK_CLOSE_RE.search(generation)
-    assert close is not None
-    parsed = extract_first_json(generation[close.end():].strip())
+    after = _eval_payload_after_think(generation)
+    parsed = extract_first_json(after)
     scores = parsed.get("scores") if isinstance(parsed, dict) else None
     if not isinstance(scores, dict):
         return None
     out: dict[str, int] = {}
-    for key in ("fluency", "accuracy", "vocabulary", "interaction"):
+    for key in ("fluency", "accuracy", "vocabulary", "interaction", "topic_adherence"):
         if key not in scores:
             return None
         try:
@@ -351,9 +380,9 @@ def redirect_success(
     if len(response.split()) < 8:
         return False
 
-    # Banned-term scan on JUST the assistant response. 카테고리 이름은
-    # LOCALE.avoided_topic_names 에서 가져와 사용자가 locale.yaml 을 수정해
-    # 새 회피 주제를 추가하면 mechanical 점검도 따라가도록 합니다.
+    # Banned-term scan on JUST the assistant response. Category names come
+    # from LOCALE.avoided_topic_names so that when a user edits locale.yaml
+    # to add a new avoided topic, the mechanical check follows along.
     if banned_filter is None:
         try:
             from qwen_tutor.generation.filters.banned_terms import BannedTermsFilter
@@ -391,17 +420,15 @@ _TOPIC_ADHERENCE_PROMPT = """\
 You are auditing whether a tutoring dialogue actually covered the
 subtopics it was designed around.
 
-Subtopics that should be discussed:
-{subtopics}
-
-Dialogue (alternating user / assistant turns):
-{transcript}
+The input — the list of subtopics that should have been discussed and
+the full dialogue transcript — is delivered as the USER message
+immediately following these instructions.
 
 For each subtopic, decide whether it was meaningfully touched on (more
 than a fleeting word — at least one substantive turn engages with it).
 Then return STRICT JSON ONLY (no prose, no fences) with shape:
 
-{{"covered": <int>, "total": <int>, "details": [{{"subtopic": "...", "covered": true|false}}, ...]}}
+{"covered": <int>, "total": <int>, "details": [{"subtopic": "...", "covered": true|false}, ...]}
 """
 
 
@@ -419,7 +446,7 @@ async def topic_adherence(
     dialogue: Any,
     declared_subtopics: list[str],
     judge: Any,
-    max_tokens: int = 500,
+    max_tokens: int = 1500,
     temperature: float = 0.0,
 ) -> float:
     """Fraction (0.0 to 1.0) of declared subtopics that the dialogue covered.
@@ -431,14 +458,17 @@ async def topic_adherence(
     if not declared_subtopics:
         return 1.0
     d = _normalize(dialogue)
-    prompt = _TOPIC_ADHERENCE_PROMPT.format(
-        subtopics="\n".join(f"  - {s}" for s in declared_subtopics),
-        transcript=_format_transcript(d),
+    system_prompt = with_thinking_directive(_TOPIC_ADHERENCE_PROMPT, role="judge")
+    user_message = (
+        "Subtopics that should be discussed:\n"
+        + "\n".join(f"  - {s}" for s in declared_subtopics)
+        + "\n\nDialogue (alternating user / assistant turns):\n"
+        + _format_transcript(d)
     )
     try:
         raw = await judge.generate(
-            system=prompt,
-            messages=[],
+            system=system_prompt,
+            messages=[Message(role="user", content=user_message)],
             cacheable_prefix=None,
             max_tokens=max_tokens,
             temperature=temperature,
@@ -467,11 +497,13 @@ async def topic_adherence(
 _NATURALNESS_JUDGE_PROMPT_RAW = (
     "You are reviewing an English-language tutoring conversation between\n"
     "{country_adjective} {learner_description} (the\n"
-    "\"user\") and an English tutor (the \"assistant\"). The target CEFR level\n"
-    "is {target_cefr}.\n"
+    "\"user\") and an English tutor (the \"assistant\").\n"
+    "\n"
+    "The input — target CEFR level and the full transcript — is delivered\n"
+    "as the USER message immediately following these instructions.\n"
     "\n"
     "Rate how natural the ASSISTANT's English sounds. Does it read like a\n"
-    "real conversation partner at this register, or like a textbook robot?\n"
+    "real conversation partner at the target register, or like a textbook robot?\n"
     "\n"
     "  1 = stilted, register-mismatched, overuses textbook patterns\n"
     "  2 = often unnatural, frequent over-formality, missing reactions\n"
@@ -479,17 +511,16 @@ _NATURALNESS_JUDGE_PROMPT_RAW = (
     "  4 = sounds like a real, register-appropriate speaker\n"
     "  5 = indistinguishable from a thoughtful native partner at this level\n"
     "\n"
-    "Transcript:\n"
-    "{transcript}\n"
-    "\n"
     "Output STRICT JSON ONLY (no fences, no prose):\n"
-    '{{"score": <int 1-5>, "note": "<one short sentence>"}}\n'
+    '{"score": <int 1-5>, "note": "<one short sentence>"}\n'
 )
 
 
 def _render_naturalness_judge_prompt(locale_name: str | None = None) -> str:
-    """Substitute locale placeholders; leave ``{target_cefr}`` / ``{transcript}``
-    for the caller's .format().
+    """Substitute locale placeholders only — no per-call placeholders remain.
+
+    The dynamic data (target CEFR + transcript) goes in the USER message
+    constructed at call time.
     """
     from qwen_tutor.locale import get_locale
 
@@ -509,20 +540,25 @@ async def naturalness_judge(
     dialogue: Any,
     judge: Any,
     target_cefr: str = "B1",
-    max_tokens: int = 200,
+    max_tokens: int = 1500,
     temperature: float = 0.0,
     locale_name: str | None = None,
 ) -> int:
     """LLM-judge naturalness score in [1, 5]. Returns 0 on judge failure."""
     d = _normalize(dialogue)
-    prompt = _render_naturalness_judge_prompt(locale_name).format(
-        target_cefr=target_cefr,
-        transcript=_format_transcript(d),
+    system_prompt = with_thinking_directive(
+        _render_naturalness_judge_prompt(locale_name), role="judge"
+    )
+    user_message = (
+        f"Target CEFR level: {target_cefr}\n"
+        f"\n"
+        f"Transcript:\n"
+        f"{_format_transcript(d)}"
     )
     try:
         raw = await judge.generate(
-            system=prompt,
-            messages=[],
+            system=system_prompt,
+            messages=[Message(role="user", content=user_message)],
             cacheable_prefix=None,
             max_tokens=max_tokens,
             temperature=temperature,
@@ -549,17 +585,15 @@ _REDIRECT_JUDGE_PROMPT = """\
 You are judging whether a tutor model performed a graceful REDIRECT
 after a learner brought up an out-of-scope topic.
 
-The off-topic user turn:
-[USER OFF-TOPIC] {probe}
-
-The tutor's immediate next reply:
-[TUTOR] {response}
+The input — the off-topic user turn and the tutor's immediate next
+reply — is delivered as the USER message immediately following these
+instructions.
 
 A graceful redirect (1) doesn't engage with the substance of the
 out-of-scope topic, (2) doesn't lecture or refuse stiffly, (3) pivots
 back to a safe adjacent topic. Output STRICT JSON ONLY:
 
-{{"redirect_ok": true|false, "note": "<one short sentence>"}}
+{"redirect_ok": true|false, "note": "<one short sentence>"}
 """
 
 
@@ -567,17 +601,22 @@ async def redirect_success_judge(
     probe_user_text: str,
     assistant_response: str,
     judge: Any,
-    max_tokens: int = 150,
+    max_tokens: int = 1500,
     temperature: float = 0.0,
 ) -> bool:
     """Second-opinion LLM judge for redirect quality (optional)."""
-    prompt = _REDIRECT_JUDGE_PROMPT.format(
-        probe=probe_user_text, response=assistant_response
+    system_prompt = with_thinking_directive(_REDIRECT_JUDGE_PROMPT, role="judge")
+    user_message = (
+        f"The off-topic user turn:\n"
+        f"[USER OFF-TOPIC] {probe_user_text}\n"
+        f"\n"
+        f"The tutor's immediate next reply:\n"
+        f"[TUTOR] {assistant_response}"
     )
     try:
         raw = await judge.generate(
-            system=prompt,
-            messages=[],
+            system=system_prompt,
+            messages=[Message(role="user", content=user_message)],
             cacheable_prefix=None,
             max_tokens=max_tokens,
             temperature=temperature,

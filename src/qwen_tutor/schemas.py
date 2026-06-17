@@ -18,6 +18,36 @@ from pydantic import BaseModel, ConfigDict, Field
 CEFRLevel = Literal["A1", "A2", "B1", "B2", "C1", "C2"]
 ScenarioType = Literal["normal", "redirect", "unleveled_natural"]
 MessageRole = Literal["system", "user", "assistant"]
+# Soft life-domain tag for coverage balancing and per-category reporting.
+# Round-robin assigned at seed generation time. "general" is the default for
+# legacy on-disk seeds that pre-date this field.
+Category = Literal[
+    "food_and_dining",
+    "family_and_relationships",
+    "work_and_education",
+    "travel_and_transit",
+    "shopping_and_services",
+    "health_and_wellbeing",
+    "home_and_neighborhood",
+    "hobbies_and_leisure",
+    "nature_and_weather",
+    "civic_life",
+    "general",
+]
+# Categories that the seed quota-balancer cycles through. "general" is
+# intentionally excluded — it exists only as a legacy default.
+CATEGORIES: tuple[str, ...] = (
+    "food_and_dining",
+    "family_and_relationships",
+    "work_and_education",
+    "travel_and_transit",
+    "shopping_and_services",
+    "health_and_wellbeing",
+    "home_and_neighborhood",
+    "hobbies_and_leisure",
+    "nature_and_weather",
+    "civic_life",
+)
 RejectionAxis = Literal[
     "register_unnatural",
     "cefr_mismatch",
@@ -27,6 +57,18 @@ RejectionAxis = Literal[
     "off_topic",
     "language_violation",
     "persona_break",
+    "role_swap_accepted",
+    # Persistence-failure axes (Option C). Originally motivated by the
+    # 4 persistent_* SFT streams (see persistent_redirect.py), but the
+    # failure modes generalize to any assistant turn:
+    "cave_on_persistence",   # engages with substance after the learner pushes
+    "verbatim_repeat",       # uses same wording as a prior refusal
+    "lecture_on_persistence",  # stiff "I cannot do this because..." explanation
+    # Sentinel-emission failure on the third-strike turn of a persistent_*
+    # dialogue. Used by sentinel_pairs.py for both the offline strip-marker
+    # pool and the on-policy regen pool. The chosen side carries the literal
+    # [SESSION_END: <axis>] marker; the rejected side does not.
+    "sentinel_missing",
 ]
 SeverityLevel = Literal["minor", "moderate", "major"]
 
@@ -83,6 +125,9 @@ class ScenarioSeed(_Strict):
     # Which locale (config/locale.yaml entry) this seed is grounded in.
     # Older single-locale data on disk has no field; defaults to "china".
     locale: str = "china"
+    # Life-domain category, assigned by the seed quota-balancer. Defaults to
+    # "general" for older on-disk seeds without the field.
+    category: Category = "general"
 
 
 class Message(_Strict):
@@ -102,6 +147,8 @@ class ExampleMetadata(_Strict):
     # Which locale (config/locale.yaml entry) this example is grounded in.
     # Older single-locale data on disk has no field; defaults to "china".
     locale: str = "china"
+    # Life-domain category inherited from the seed. "general" for legacy data.
+    category: Category = "general"
     generation: dict[str, Any] | None = None
 
 
@@ -129,6 +176,11 @@ class ScoreBreakdown(_Strict):
     accuracy: int = Field(ge=1, le=5)
     vocabulary: int = Field(ge=1, le=5)
     interaction: int = Field(ge=1, le=5)
+    # How faithfully the learner engaged with the assigned topic and
+    # subtopics rather than steering to easier ground. Scored from the
+    # transcript alone — no scenario_type awareness, so a learner who
+    # derails (including in redirect scenarios) correctly scores low.
+    topic_adherence: int = Field(ge=1, le=5)
 
 
 class TurnFeedback(_Strict):
@@ -161,6 +213,18 @@ class EvaluationMetadata(_Strict):
     # Which locale (config/locale.yaml entry) this evaluation is grounded in.
     # Older single-locale data on disk has no field; defaults to "china".
     locale: str = "china"
+    # Preserve scenario-level information from the source SFT example.
+    # This lets filters like BannedTermsFilter skip redirect user turns.
+    scenario_type: ScenarioType | None = None
+    # Life-domain category copied from the source SFT example. Matches the
+    # taxonomy in ``Category`` so diversity reports and top_up rebalancing
+    # can slice evaluation pools the same way they slice SFT/DPO pools.
+    # Older eval data on disk has no field; defaults to ``"general"`` to
+    # match the SFT/DPO legacy default.
+    category: Category = "general"
+    # Preserve generation-level metadata from the source SFT example
+    # (e.g. language_trigger == "speaks_l1").
+    generation: dict[str, Any] | None = None
 
 
 class EvaluationExample(JSONLMixin, _Strict):

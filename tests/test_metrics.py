@@ -156,7 +156,10 @@ def evaluation_generation() -> str:
         + json.dumps(
             {
                 "overall_cefr_estimate": "A2",
-                "scores": {"fluency": 3, "accuracy": 2, "vocabulary": 3, "interaction": 3},
+                "scores": {
+                    "fluency": 3, "accuracy": 2, "vocabulary": 3,
+                    "interaction": 3, "topic_adherence": 4,
+                },
                 "specific_feedback": [],
                 "strengths": ["Clear word order"],
                 "suggested_practice": "Drill irregular past forms",
@@ -207,11 +210,11 @@ def test_level_fidelity_catches_overshoot():
 # locale_fidelity
 # ---------------------------------------------------------------------------
 #
-# locale_fidelity 는 더 이상 정적 IRANIAN_* 리스트를 내장하지 않습니다.
-# Country 가 ``config/locale.yaml`` 로 임의로 바뀔 수 있어, mechanical
-# fidelity 점수가 필요할 때는 호출자가 in_locale_terms 를 직접 넘깁니다.
-# 아래 set 은 fixture dialogue 가 사용하는 Iranian 어휘를 최소한으로 모아 둔
-# 테스트 전용 리스트입니다.
+# locale_fidelity no longer ships built-in static IRANIAN_* lists. The country
+# is configurable via ``config/locale.yaml``, so callers that want a
+# mechanical fidelity score must pass ``in_locale_terms`` themselves. The set
+# below is a minimal test-only list of the Iranian vocabulary the fixture
+# dialogues use.
 
 _TEST_IRANIAN_TERMS = (
     "Isfahan", "Naqsh-e Jahan", "Si-o-se-pol", "Jolfa", "Tajrish",
@@ -247,7 +250,8 @@ def test_locale_fidelity_no_entities_returns_one():
         {"role": "user", "content": "hi"},
         {"role": "assistant", "content": "hello, how are you today."},
     ]
-    # 고유명사 없음 → in_locale_terms 가 있어도 1.0 (no signal → no penalty).
+    # No proper nouns -> 1.0 even when in_locale_terms is provided
+    # (no signal -> no penalty).
     assert (
         locale_fidelity(no_proper, in_locale_terms=_TEST_IRANIAN_TERMS, use_spacy=False)
         == 1.0
@@ -255,7 +259,7 @@ def test_locale_fidelity_no_entities_returns_one():
 
 
 def test_locale_fidelity_without_terms_returns_one(natural_iranian_dialogue):
-    """in_locale_terms 를 안 넘기면 mechanical 판정을 포기하고 1.0 반환."""
+    """Returns 1.0 when in_locale_terms is omitted (mechanical scoring is skipped)."""
     assert locale_fidelity(natural_iranian_dialogue, use_spacy=False) == 1.0
 
 
@@ -303,7 +307,10 @@ def test_eval_json_validity_missing_fields_fails():
 
 def test_eval_dimension_scores_returns_ints(evaluation_generation):
     scores = eval_dimension_scores(evaluation_generation)
-    assert scores == {"fluency": 3, "accuracy": 2, "vocabulary": 3, "interaction": 3}
+    assert scores == {
+        "fluency": 3, "accuracy": 2, "vocabulary": 3,
+        "interaction": 3, "topic_adherence": 4,
+    }
 
 
 def test_eval_dimension_scores_invalid_returns_none():
@@ -314,7 +321,10 @@ def test_eval_dimension_scores_out_of_range_returns_none():
     bad = "<think>x</think>\n" + json.dumps(
         {
             "overall_cefr_estimate": "A2",
-            "scores": {"fluency": 7, "accuracy": 3, "vocabulary": 3, "interaction": 3},
+            "scores": {
+                "fluency": 7, "accuracy": 3, "vocabulary": 3,
+                "interaction": 3, "topic_adherence": 3,
+            },
             "specific_feedback": [],
             "strengths": [],
             "suggested_practice": "x",

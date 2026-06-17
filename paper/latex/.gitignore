@@ -1,0 +1,19 @@
+# Build artifacts produced by scripts/build_paper_latex.ps1.
+generated/
+
+# ACL style files are not tracked; users download from
+# https://github.com/acl-org/acl-style-files at setup time.
+acl.sty
+acl_natbib.bst
+
+# Stray LaTeX output if someone runs pdflatex from this directory
+# directly instead of from generated/.
+*.aux
+*.bbl
+*.blg
+*.log
+*.out
+*.toc
+*.synctex.gz
+*.fdb_latexmk
+*.fls

@@ -1,0 +1,244 @@
+# =============================================================================
+# paper/training_a1_full.yaml  -  Condition A1: full system (paper baseline)
+# =============================================================================
+#
+# Condition definition:
+#   * Base model: Qwen3.5-0.8B-Base (text-only branch of multimodal arch)
+#   * Training data: ALL 12 SFT streams + EvaluationExamples + register DPO
+#   * Method: QLoRA SFT + on-policy DPO
+#
+# Hardware target: RTX 3060 12GB. Sized so peak training VRAM stays under
+# ~11GB at max_seq_length=1024.
+#
+# Run with:
+#   python scripts/run_training.py --config config/paper/training_a1_full.yaml
+#
+# Other paper conditions:
+#   A2 - SFT only, no DPO            (training_a2_sft_only.yaml)
+#   A3 - no specialized redirects    (training_a3_no_specialized.yaml)
+#   A4 - no persistent streams       (training_a4_no_persistent.yaml)
+# -----------------------------------------------------------------------------
+
+
+# -----------------------------------------------------------------------------
+# Base model + quantization
+# -----------------------------------------------------------------------------
+# Qwen3.5-0.8B-Base is the multimodal base checkpoint (architectures =
+# Qwen3_5ForConditionalGeneration). src/qwen_tutor/training/model_loader.py
+# detects the multimodal arch and loads via AutoModelForImageTextToText,
+# wrapping the language tower under model.language_model.*. LoRA is attached
+# only to the language tower's linear layers (target_modules below) so the
+# vision tower stays frozen and never sees the text-only training data.
+base_model:
+  model_id: "./vendor/models/Qwen_3.5_0.8B-Base"
+  tokenizer_id: "./vendor/models/Qwen_3.5_0.8B-Base"
+  # Qwen3.5 arch is registered under model_type=qwen3_5 with native
+  # transformers support, but the multimodal wrapper still loads some
+  # supporting modules dynamically; keep this true.
+  trust_remote_code: true
+  # Qwen3.5 layer_types interleave linear_attention and full_attention.
+  # flash_attention_2 does not handle that interleave; sdpa is the safe
+  # default. Don't change unless you've verified the model trains stably.
+  attn_implementation: "sdpa"
+  torch_dtype: "bfloat16"
+  quantization:
+    enabled: true                        # 4-bit needed on 12GB
+    load_in_4bit: true
+    bnb_4bit_quant_type: "nf4"
+    bnb_4bit_compute_dtype: "bfloat16"
+    bnb_4bit_use_double_quant: true
+  gradient_checkpointing: true
+
+
+# -----------------------------------------------------------------------------
+# LoRA adapter
+# -----------------------------------------------------------------------------
+# r=16 (down from r=32 in the default config) keeps the trainable parameter
+# count under ~12M for the 0.8B model, which gives headroom on the 3060.
+# Raise back to r=32 if VRAM allows.
+lora:
+  r: 16
+  lora_alpha: 32                          # alpha = 2 * r as standard ratio
+  lora_dropout: 0.05
+  bias: "none"
+  task_type: "CAUSAL_LM"
+  target_modules:
+    - q_proj
+    - k_proj
+    - v_proj
+    - o_proj
+    - gate_proj
+    - up_proj
+    - down_proj
+
+
+# -----------------------------------------------------------------------------
+# SFT
+# -----------------------------------------------------------------------------
+# Conservative for 3060: batch=1, grad_accum=8 → effective batch=8.
+# max_seq_length=1024 fits comfortably; raise to 2048 only if VRAM permits.
+sft:
+  output_dir: "outputs/paper/a1/sft"
+  num_train_epochs: 2
+  max_steps: -1
+  per_device_train_batch_size: 1
+  per_device_eval_batch_size: 1
+  gradient_accumulation_steps: 4
+  learning_rate: 2.0e-4
+  warmup_ratio: 0.05
+  lr_scheduler_type: "cosine"
+  weight_decay: 0.01
+  # System prompt is ~1100 tokens (CEFR/role/topic/subtopics/locale block).
+  # max_seq_length must exceed that or every example loses all assistant
+  # labels (verified loss=0 / silent training at 1024). 1792 leaves ~700
+  # tokens for dialogue after the system prompt (3-4 assistant turns),
+  # while keeping ~2 GB VRAM headroom on the 3060 12GB. (2048 worked but
+  # peaked at 12.0/12.3 GB — too close to OOM.)
+  max_seq_length: 1792
+  packing: false
+  bf16: true
+  fp16: false
+  optim: "paged_adamw_8bit"
+  logging_steps: 1
+  logging_first_step: true
+  log_level: "info"
+  eval_strategy: "no"
+  save_strategy: "no"
+  save_total_limit: 1
+  load_best_model_at_end: false
+  report_to: "none"
+  seed: 42
+
+  data:
+    # A1 uses everything filtered.
+    sft_filtered_dir: "data/sft_filtered"
+    eval_filtered_dir: "data/eval_filtered"
+    holdout_dir: "data/holdout"
+    mix_ratio_sft: 0.80
+    mix_ratio_eval: 0.20
+    use_all_data: true                    # ignore mix_ratio; keep all records
+    validation_split: 0.05
+    shuffle_seed: 42
+
+
+# -----------------------------------------------------------------------------
+# DPO
+# -----------------------------------------------------------------------------
+# Starts from SFT adapter. ref_model=null → frozen base is the reference.
+# max_length / max_prompt_length must exceed the ~1100-token system prompt
+# or DPO produces a constant 0.6931 = ln(2) loss with zero gradients (same
+# all-truncated-labels failure mode as SFT). 2400 / 1500 fit on 3060 12GB
+# with QLoRA + grad-ckpt + bs=1 + grad_accum=4.
+dpo:
+  output_dir: "outputs/paper/a1/dpo"
+  num_train_epochs: 1
+  max_steps: -1
+  per_device_train_batch_size: 1
+  per_device_eval_batch_size: 1
+  gradient_accumulation_steps: 4
+  learning_rate: 5.0e-6
+  warmup_ratio: 0.05
+  lr_scheduler_type: "cosine"
+  weight_decay: 0.0
+  beta: 0.1
+  loss_type: "sigmoid"
+  max_length: 2400
+  max_prompt_length: 1500
+  bf16: true
+  fp16: false
+  optim: "paged_adamw_8bit"
+  logging_steps: 5
+  eval_strategy: "no"
+  save_strategy: "no"
+  save_total_limit: 1
+  report_to: "none"
+  seed: 42
+  sft_adapter_path: "outputs/paper/a1/sft"
+  ref_model: null
+
+  data:
+    dpo_filtered_dir: "data/dpo_filtered"
+    validation_split: 0.05
+    shuffle_seed: 42
+    mix_ratio_register: 0.65
+    mix_ratio_on_policy: 0.25
+    mix_ratio_sentinel: 0.10                # sentinel pool (sentinel_pairs.py)
+    use_all_data: true
+
+
+# -----------------------------------------------------------------------------
+# On-policy DPO pair generation (uses trained SFT adapter + teacher)
+# -----------------------------------------------------------------------------
+on_policy:
+  enabled: true
+  adapter_path: "outputs/paper/a1/sft"
+  max_per_level: 5
+  min_margin: 2
+  concurrency: 2
+  target_max_tokens: 320
+  target_temperature: 0.7
+
+
+# -----------------------------------------------------------------------------
+# Logging
+# -----------------------------------------------------------------------------
+logging:
+  wandb_project: "qwen-en-tutor"
+  wandb_entity: null
+  wandb_run_name_prefix: "paper-a1-full"
+
+
+# -----------------------------------------------------------------------------
+# In-training callback eval (off for ablation runs to save VRAM/time)
+# -----------------------------------------------------------------------------
+eval_callback:
+  enabled: false
+  n_conversation_samples: 10
+  n_evaluation_samples: 10
+  max_new_tokens: 512
+  temperature: 0.7
+  top_p: 0.95
+  log_samples_table: true
+  conversation_filters:
+    - banned_terms
+    - mode_consistency
+    - naturalness
+  held_out_prompts_path: "data/holdout/eval_callback_prompts.jsonl"
+
+
+# -----------------------------------------------------------------------------
+# Post-training holdout eval (separate from paper test sets)
+# -----------------------------------------------------------------------------
+# This is the project's own intermediate/final eval, NOT the paper's
+# Tutor-Scenario / Redirect-Probe / Persistent-Probe / Locale-Leakage tests.
+# Paper test sets live under eval_sets/ and are driven by a separate
+# scripts/run_paper_eval.py (to be added in step 4).
+evaluation:
+  holdout_dir: data/holdout
+  n_per_level: 3
+  concurrency: 2
+  intermediate_adapter_path: outputs/paper/a1/sft
+  final_adapter_path: outputs/paper/a1/dpo
+
+
+# -----------------------------------------------------------------------------
+# Comparison stage
+# -----------------------------------------------------------------------------
+comparison:
+  threshold: 0.05
+  fail_on_regression: false
+
+
+# -----------------------------------------------------------------------------
+# GGUF export (optional - for deployment after training)
+# -----------------------------------------------------------------------------
+gguf_export:
+  adapter_path: "outputs/paper/a1/dpo"
+  merged_dir: "outputs/paper/a1/merged"
+  keep_merged: false
+  output_dir: "outputs/paper/a1/gguf"
+  model_name: "paper-a1"
+  outtype: "bf16"
+  quantize: "Q4_K_M"
+  llama_cpp_repo: "vendor/llama_cpp_src"
+  llama_quantize_bin: "vendor/llama_cpp/llama-quantize.exe"

@@ -1,55 +1,57 @@
 # =============================================================================
-# training.yaml  -  2단계: 학습 + 평가 설정
+# training.yaml  -  stage 2: training + evaluation settings
 # =============================================================================
 #
-# scripts/run_training.py 가 이 파일을 읽어 다음 순서로 실행합니다:
+# scripts/run_training.py reads this file and executes the following steps:
 #
-#   train_sft          → SFT(LoRA) 학습
-#   eval_intermediate  → 중간(=SFT 후) 모델로 holdout 평가
-#   on_policy_gen      → 학습된 SFT 어댑터로 DPO 페어를 추가 수집
-#   filter_dpo         → 추가 DPO 페어 + register 페어를 필터링
-#   train_dpo          → SFT 위에 DPO 추가 학습
-#   eval_final         → 최종(=DPO 후) 모델로 holdout 평가
-#   compare            → 중간 vs 최종 메트릭 비교 리포트 작성
+#   train_sft          → train SFT (LoRA)
+#   eval_intermediate  → evaluate holdout with intermediate (=post-SFT) model
+#   on_policy_gen      → collect additional DPO pairs with trained SFT adapter
+#   filter_dpo         → filter additional DPO pairs + register pairs
+#   train_dpo          → further train DPO on top of SFT
+#   eval_final         → evaluate holdout with final (=post-DPO) model
+#   compare            → write intermediate vs final metric comparison report
 #
-# 학습은 메모리를 많이 먹습니다. RTX 3060(12GB) 에서는 동작하지 않으며,
-# RTX 5090(32GB) 이상에서 돌리는 것을 가정합니다.
+# Training consumes a lot of memory. It does not run on RTX 3060 (12GB); assume
+# an RTX 5090 (32GB) or larger.
 # -----------------------------------------------------------------------------
 
 
 # -----------------------------------------------------------------------------
-# 기본 모델 + 양자화 설정
+# base model + quantization settings
 # -----------------------------------------------------------------------------
-# 학생 모델 한 개가 두 가지 모드를 동시에 학습합니다:
-#   - /no_think  : 일반 대화 응답 (SFT 데이터)
-#   - /think     : CEFR 평가 (Evaluation 데이터)
-# 4bit NF4 양자화 + LoRA 어댑터로 24GB 이하에 들어가도록 맞췄습니다.
+# A single student model is trained in two modes simultaneously:
+#   - /no_think  : normal conversation responses (SFT data)
+#   - /think     : CEFR evaluation (Evaluation data)
+# The configuration is tuned to fit under 24GB with 4-bit NF4 quantization + LoRA.
 #
-# model_id 는 HF 허브 ID 또는 로컬 경로(폴더) 둘 다 됩니다. 오프라인
-# 환경에서는 ``vendor/models/<name>`` 아래에 미리 다운로드된 폴더를
-# 가리킵니다. multimodal 체크포인트(예: Qwen3-VL 4B = "Qwen3.5 4B") 의
-# 경우 ``src/qwen_tutor/training/model_loader.py`` 가 config.json 의
-# architectures 필드를 읽고 알맞은 auto-class 를 자동 선택합니다 —
-# 학습 데이터는 text-only 라 vision tower 는 사용되지 않고 LoRA 도
-# language tower 의 linear layer 에만 붙습니다.
+# model_id can be either an HF Hub ID or a local path (folder). In offline
+# environments, point it at a predownloaded folder under ``vendor/models/<name>``.
+# For multimodal checkpoints (e.g. Qwen3-VL 4B = "Qwen3.5 4B"),
+# ``src/qwen_tutor/training/model_loader.py`` reads config.json's architectures
+# field and picks the correct auto-class automatically. Training data is text-only,
+# so the vision tower is not used and LoRA is attached only to the language tower
+# linear layers.
 #
-# 다른 모델로 갈아끼우려면 model_id + tokenizer_id 만 바꾸세요.
-#   예) Qwen3-8B  →  vendor/models/Qwen3-8B  (text-only, trust_remote_code: false)
-#       Qwen3-VL 4B →  vendor/models/Qwen_3.5_4B  (multimodal, trust_remote_code: true)
+# To swap to another model, change only model_id + tokenizer_id.
+#   Example: Qwen3-8B  →  vendor/models/Qwen3-8B  (text-only, trust_remote_code: false)
+#            Qwen3-VL 4B →  vendor/models/Qwen_3.5_4B  (multimodal, trust_remote_code: true)
 base_model:
-  model_id: "./vendor/models/Qwen_3.5_4B"
-  tokenizer_id: "./vendor/models/Qwen_3.5_4B"
-  # Qwen3-VL 같은 최신 multimodal arch 는 transformers 가 내부 코드를
-  # 동적으로 로드해야 할 수 있어 true 가 안전합니다. 순수 Qwen3-8B 라면
-  # false 로 두어도 됩니다.
+  # model_id: "./vendor/models/Qwen_3.5_4B"
+  # tokenizer_id: "./vendor/models/Qwen_3.5_4B"
+  model_id: "./vendor/models/Qwen_3.5_0.8B"
+  tokenizer_id: "./vendor/models/Qwen_3.5_0.8B"
+  # For newer multimodal architectures like Qwen3-VL, transformers may need to
+  # dynamically load internal code, so true is safer. If you use pure Qwen3-8B,
+  # false is also acceptable.
   trust_remote_code: true
-  # Qwen3-VL 의 layer_types 는 linear_attention + full_attention 이 섞여
-  # 있어 flash_attention_2 가 동작하지 않습니다. "sdpa" 를 기본으로 두고,
-  # 순수 Qwen3-8B 로 갈아끼울 때 "flash_attention_2" 로 올리세요.
+  # Qwen3-VL layer_types mix linear_attention and full_attention, so
+  # flash_attention_2 may not work. Keep "sdpa" as the default and switch to
+  # "flash_attention_2" only when using pure Qwen3-8B.
   attn_implementation: "sdpa"
   torch_dtype: "bfloat16"
   quantization:
-    enabled: true
+    enabled: true                       # 0.8B fits in bf16; no 4-bit needed
     load_in_4bit: true
     bnb_4bit_quant_type: "nf4"
     bnb_4bit_compute_dtype: "bfloat16"
@@ -57,10 +59,10 @@ base_model:
   gradient_checkpointing: true
 
 # -----------------------------------------------------------------------------
-# LoRA 어댑터 설정
+# LoRA adapter settings
 # -----------------------------------------------------------------------------
-# r=32, alpha=64 는 Qwen3-8B 정도 모델에서 표현력과 메모리의 균형이 좋습니다.
-# target_modules 는 attention(q/k/v/o) + MLP(gate/up/down) 의 모든 linear 입니다.
+# r=32, alpha=64 is a good balance of expressiveness and memory for a model like Qwen3-8B.
+# target_modules includes all linear layers in attention (q/k/v/o) and MLP (gate/up/down).
 lora:
   r: 32
   lora_alpha: 64
@@ -77,12 +79,12 @@ lora:
     - down_proj
 
 # -----------------------------------------------------------------------------
-# SFT 학습 (대화 + 평가 두 모드 합쳐서 한 번에 학습)
+# SFT training (train both conversation and evaluation modes together)
 # -----------------------------------------------------------------------------
 sft:
   output_dir: "outputs/sft"
-  num_train_epochs: 1
-  max_steps: 5                          # smoke-scale; set -1 for full
+  num_train_epochs: 2
+  max_steps: -1                         # full epoch; smoke was 5
   per_device_train_batch_size: 1
   per_device_eval_batch_size: 1
   gradient_accumulation_steps: 4
@@ -90,7 +92,7 @@ sft:
   warmup_ratio: 0.05
   lr_scheduler_type: "cosine"
   weight_decay: 0.01
-  max_seq_length: 2048                  # smoke; 4096 for full
+  max_seq_length: 1024                  # smoke; 4096 for full
   packing: false
   bf16: true
   fp16: false
@@ -103,26 +105,36 @@ sft:
   report_to: "none"
   seed: 42
 
-  # 학습 데이터 mix - SFT 80% + Evaluation 20% 비율로 섞어 단일 모델이
-  # 두 모드를 모두 익히게 합니다.
+  # Training data mix - combine SFT 80% + Evaluation 20% so the single model
+  # learns both modes.
   data:
     sft_filtered_dir: "data/sft_filtered"
     eval_filtered_dir: "data/eval_filtered"
     holdout_dir: "data/holdout"
     mix_ratio_sft: 0.80
     mix_ratio_eval: 0.20
+    # use_all_data: when true (default), skip the ratio-based trim and
+    # keep every loaded SFT and eval record (minus the per-bucket
+    # validation hold-out). The natural on-disk ratio wins.
+    # mix_ratio_sft / mix_ratio_eval are still required (sanity-checked,
+    # must sum > 0) but have no size effect in this mode.
+    # Set to false ONLY when both pools are healthy and you specifically
+    # want to enforce mix_ratio_sft : mix_ratio_eval -- otherwise the
+    # trimmer will throw away most of the larger pool to match a tiny
+    # smaller pool. See README.
+    use_all_data: true
     validation_split: 0.05               # 5% stratified validation
     shuffle_seed: 42
 
 # -----------------------------------------------------------------------------
-# DPO 학습 (register 선호도 + on-policy 페어로 추가 튜닝)
+# DPO training (additional tuning with register preference + on-policy pairs)
 # -----------------------------------------------------------------------------
-# DPO 는 SFT 어댑터 위에서 시작합니다. ref_model 을 null 로 두면 frozen base
-# 가 reference policy 가 됩니다.
+# DPO starts from the SFT adapter. If ref_model is null, the frozen base model
+# serves as the reference policy.
 dpo:
   output_dir: "outputs/dpo"
   num_train_epochs: 1
-  max_steps: 5                          # smoke-scale; set -1 for full
+  max_steps: -1                         # full epoch; smoke was 5
   per_device_train_batch_size: 1
   per_device_eval_batch_size: 1
   gradient_accumulation_steps: 4
@@ -132,8 +144,8 @@ dpo:
   weight_decay: 0.0
   beta: 0.1
   loss_type: "sigmoid"
-  max_length: 2048                      # smoke; 4096 for full
-  max_prompt_length: 1024
+  max_length: 1024                      # 3060 OOM at 2048; raise on bigger GPU
+  max_prompt_length: 512
   bf16: true
   fp16: false
   optim: "paged_adamw_8bit"
@@ -150,30 +162,56 @@ dpo:
     dpo_filtered_dir: "data/dpo_filtered"
     validation_split: 0.05
     shuffle_seed: 42
-    # DPO 데이터에는 두 가지 소스가 섞입니다:
-    #   register   - offline rewrite 로 생성된 register-unnatural 페어 (SFT 직후
-    #                바로 만들 수 있어 양이 풍부)
-    #   on_policy  - 학습된 SFT 모델 출력 vs teacher 출력 (judge margin 으로
-    #                필터되어 양이 적지만 현재 정책의 약점을 정확히 짚음)
-    # 두 풀이 양이 크게 다를 때 더 많은 쪽이 학습 batch 를 독점하지 않도록
-    # mix ratio 로 작은 쪽 기준으로 큰 쪽을 잘라 둡니다. on_policy 가 비어
-    # 있어도 register 단독 학습이 정상 동작합니다.
-    mix_ratio_register: 0.70
-    mix_ratio_on_policy: 0.30
+    # DPO data is mixed from three sources:
+    #   register   - register-unnatural / per-axis spoil pairs generated by
+    #                offline rewrite (plentiful because they can be created
+    #                immediately after SFT)
+    #   on_policy  - trained SFT model output vs teacher output (filtered by
+    #                judge margin, so smaller but precisely exposes current
+    #                policy weakness)
+    #   sentinel   - third-strike-turn pairs from the four persistent_*
+    #                streams. chosen carries [SESSION_END: <axis>]; rejected
+    #                does NOT. Source modes are interleaved in this pool:
+    #                  * offline (Option A): rejected = chosen with the
+    #                    marker stripped (zero teacher / policy calls).
+    #                  * on_policy (Option B): rejected = SFT-student
+    #                    regeneration of the sentinel-firing turn (no judge,
+    #                    because marker presence is mechanical ground truth).
+    #                Generated by src/qwen_tutor/generation/sentinel_pairs.py
+    #                and written to data/dpo_raw/sentinel_<level>.jsonl.
+    #                Solves the rare-token-cross-entropy gap that leaves SFT
+    #                students unable to reliably emit [SESSION_END: ...] even
+    #                when their refusal text is otherwise correct.
+    # When pool sizes differ greatly, mix ratio trims the larger pools to
+    # avoid them dominating the training batch. Training works normally
+    # with only register even if on_policy and sentinel are empty.
+    mix_ratio_register: 0.65
+    mix_ratio_on_policy: 0.25
+    mix_ratio_sentinel: 0.10
+    # use_all_data: when true (default), skip the ratio-based trim and
+    # keep every loaded register + on_policy + sentinel record.
+    # mix_ratio_* are still required (sanity-checked, must sum > 0) but
+    # have no size effect in this mode.
+    # Set to false ONLY when all pools are healthy and you specifically
+    # want to enforce the three-way ratio -- the sentinel pool is
+    # naturally small (capped by the count of filtered persistent_*
+    # records), so a low mix_ratio_sentinel keeps the trimmer from
+    # cratering register/on_policy to match it.
+    use_all_data: true
 
 # -----------------------------------------------------------------------------
-# wandb 로깅
+# wandb logging
 # -----------------------------------------------------------------------------
 logging:
   wandb_project: "qwen-en-tutor"
-  wandb_entity: null                     # WANDB_ENTITY 환경 변수로도 가능
+  wandb_entity: null                     # can also be set via the WANDB_ENTITY env var
   wandb_run_name_prefix: "qwen-en-tutor"
 
 # -----------------------------------------------------------------------------
-# 학습 중 콜백 평가 (TutorEvalCallback)
+# in-training callback evaluation (TutorEvalCallback)
 # -----------------------------------------------------------------------------
-# eval_steps 마다 모델에서 직접 샘플을 뽑아 banned_terms / mode_consistency /
-# naturalness 필터 통과율을 측정하고 wandb 에 기록합니다.
+# Every eval_steps, sample directly from the model and measure pass rates for
+# banned_terms / mode_consistency / naturalness filters, then log to wandb.
 eval_callback:
   enabled: false                        # smoke: disabled to keep VRAM/time low
   n_conversation_samples: 10
@@ -189,78 +227,85 @@ eval_callback:
   held_out_prompts_path: "data/holdout/eval_callback_prompts.jsonl"
 
 # -----------------------------------------------------------------------------
-# 학습 후 holdout 평가 (intermediate / final)
+# post-training holdout evaluation (intermediate / final)
 # -----------------------------------------------------------------------------
 evaluation:
   holdout_dir: data/holdout
-  n_per_level: 5
-  concurrency: 4
-  intermediate_adapter_path: outputs/sft     # SFT 직후 모델
-  final_adapter_path: outputs/dpo            # DPO 직후 모델
+  n_per_level: 3                             # full test: 3 per level x 6 levels = 18
+  concurrency: 2                             # 4B Q4 judge over LAN is bottleneck
+  intermediate_adapter_path: outputs/sft     # intermediate model after SFT
+  final_adapter_path: outputs/dpo            # final model after DPO
 
 # -----------------------------------------------------------------------------
-# 비교 단계 (intermediate vs final)
+# comparison stage (intermediate vs final)
 # -----------------------------------------------------------------------------
-# threshold 보다 큰 점수 하락이 보이면 회귀로 간주. fail_on_regression=true
-# 로 두면 회귀 시 종료 코드를 0이 아닌 값으로 반환합니다.
+# If score drop exceeds threshold, it is considered regression. Set
+# fail_on_regression=true to return a non-zero exit code on regression.
 comparison:
   threshold: 0.05
   fail_on_regression: false
 
 # -----------------------------------------------------------------------------
-# On-policy DPO 페어 생성
+# on-policy DPO pair generation
 # -----------------------------------------------------------------------------
-# 학습된 SFT 모델로 한 턴을 재생성하고 teacher 와 비교해 teacher 가
-# 더 자연스러우면 (policy_out, teacher_out) 을 (rejected, chosen) 쌍으로
-# 저장합니다. min_margin 이 클수록 더 명확한 우열만 채택합니다.
+# Regenerate one turn with the trained SFT model and compare it with teacher.
+# If teacher is more natural, save the pair (policy_out, teacher_out) as
+# (rejected, chosen). A larger min_margin selects only clearer quality differences.
 on_policy:
   enabled: true
   adapter_path: outputs/sft
-  max_per_level: null                    # null = 전부
+  max_per_level: 5                       # 8h test 2026-06-04: 5 to keep wall-clock (was 10)
   min_margin: 2                          # 1=slight, 2=clear, 3=large
-  concurrency: 4
+  concurrency: 2                         # 4B Q4 over LAN is the bottleneck
   target_max_tokens: 320
   target_temperature: 0.7
 
 # -----------------------------------------------------------------------------
-# 배포 시점 / 평가 시점 system 프롬프트
+# deployment-time / evaluation-time system prompts
 # -----------------------------------------------------------------------------
-# Single source of truth: 두 프롬프트 모두
-# ``src/qwen_tutor/generation/prompts.py`` 의 ``DEPLOYMENT_SYSTEM_PROMPT_TEMPLATE``
-# 과 ``EVALUATION_SYSTEM_PROMPT`` 에서 옵니다. 이들은 ``config/locale.yaml`` 의
+# Single source of truth: both prompts come from
+# ``src/qwen_tutor/generation/prompts.py``'s scenario-aware
+# ``render_scenario_deployment_system_prompt`` and ``EVALUATION_SYSTEM_PROMPT``.
+# They automatically reflect ``config/locale.yaml`` values for
 # ``country`` / ``country_adjective`` / ``learner_description`` /
-# ``avoid_default_cultures`` / ``avoided_topics`` 을 자동으로 반영합니다.
+# ``avoid_default_cultures`` / ``avoided_topics``.
 #
-# 프롬프트 문구를 바꾸려면 prompts.py 를, locale 관련 값을 바꾸려면
-# locale.yaml 을 편집하세요. 여기에는 더 이상 프롬프트가 없습니다.
+# To change prompt wording, edit prompts.py. To change locale-related values,
+# edit locale.yaml. There are no prompts here anymore.
 
 # -----------------------------------------------------------------------------
-# GGUF export (offline llama-server 배포)
+# GGUF export (offline llama-server deployment)
 # -----------------------------------------------------------------------------
-# scripts/run_gguf_export.py 가 이 블록을 읽어
-#   1) merge_lora() 로 SFT/DPO 어댑터를 base 에 병합 (full-precision safetensors)
-#   2) llama.cpp 의 convert_hf_to_gguf.py 로 GGUF 변환 (text tower; Qwen3-VL 인
-#      경우 mmproj-*.gguf 도 함께 생성)
-#   3) (선택) llama-quantize 로 양자화 (Q4_K_M 등)
-# 결과 GGUF 는 output_dir 아래에 떨어지고, scripts/start_llama_cpp.ps1 로
-# 바로 서빙할 수 있습니다 (`-ModelDir outputs/gguf -ModelGlob "*Q4_K_M*.gguf"`).
+# scripts/run_gguf_export.py reads this block and:
+#   1) merges the SFT/DPO adapter into the base with merge_lora()
+#      (full-precision safetensors)
+#   2) converts to GGUF with llama.cpp's convert_hf_to_gguf.py
+#      (text tower; for Qwen3-VL it also generates mmproj-*.gguf)
+#   3) optionally quantizes with llama-quantize (Q4_K_M, etc.)
+# The resulting GGUF is written under output_dir and can be served directly
+# with scripts/start_llama_cpp.ps1
+# (`-ModelDir outputs/gguf -ModelGlob "*Q4_K_M*.gguf"`).
 gguf_export:
-  # 입력: 병합할 LoRA 어댑터 (SFT 또는 DPO 결과물)
+  # Input: LoRA adapter to merge (SFT or DPO result)
   adapter_path: "outputs/dpo"
-  # 중간 산출물 (merged safetensors). 변환 후 keep_merged: false 면 삭제.
+  # Intermediate outputs (merged safetensors). Deleted if keep_merged is false.
   merged_dir: "outputs/merged"
   keep_merged: false
-  # GGUF 출력 디렉터리.
+  # GGUF output directory.
   output_dir: "outputs/gguf"
-  # 모델 이름 prefix (파일명에 사용).
+  # Model name prefix (used in filenames).
   model_name: "qwen-en-tutor"
-  # 변환 시 base dtype. "bf16" 권장; "f16" 도 가능.
+  # Base dtype for conversion. "bf16" recommended; "f16" also possible.
   outtype: "bf16"
-  # 양자화. "none" 이면 변환만 하고 종료.
-  # 권장: 4B 모델 → Q4_K_M (속도/품질 균형) 또는 Q5_K_M (품질 우선)
+  # Quantization. "none" means only conversion is performed.
+  # Recommended: for 4B models use Q4_K_M (speed/quality balance) or Q5_K_M (quality-first)
   quantize: "Q4_K_M"
-  # llama.cpp 체크아웃 경로. convert_hf_to_gguf.py 가 여기 있어야 합니다.
-  llama_cpp_repo: "vendor/llama.cpp"
-  # llama-quantize 실행 파일 경로. quantize 가 "none" 이면 무시.
-  # null 이면 $env:LLAMA_CPP_BIN/llama-quantize(.exe) 를 자동 탐색.
-  llama_quantize_bin: null
+  # Path to llama.cpp SOURCE checkout (convert_hf_to_gguf.py + gguf-py + conversion/).
+  # vendor/llama_cpp is a prebuilt Windows release with only *.exe files and no
+  # Python source, so it cannot be used for conversion. Clone source separately for
+  # conversion:
+  #   cd vendor && git clone https://github.com/ggerganov/llama.cpp llama_cpp_src
+  llama_cpp_repo: "vendor/llama_cpp_src"
+  # Path to llama-quantize executable. Usually found in prebuilt vendor/llama_cpp.
+  # If null, PATH and $env:LLAMA_CPP_BIN are auto-detected.
+  llama_quantize_bin: "vendor/llama_cpp/llama-quantize.exe"

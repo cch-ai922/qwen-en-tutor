@@ -46,6 +46,7 @@ METRIC_DIRECTIONS: dict[str, int] = {
     "accuracy": 0,
     "vocabulary": 0,
     "interaction": 0,
+    "topic_adherence": 0,
 }
 
 

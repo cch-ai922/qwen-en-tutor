@@ -1,0 +1,17 @@
+{
+  "topic": "Discussing weekend plans at a Roman cafe",
+  "subtopics": [
+    "comparing neighborhoods in Rome for an afternoon walk",
+    "recommendations for off-the-beaten-path museums",
+    "weekend espresso vs. cappuccino etiquette",
+    "what to do if the weather changes"
+  ],
+  "user_role": {
+    "name": "Hiroshi",
+    "description": "A Japanese architect on sabbatical in Rome who wants to improve his conversational English while exploring the city on weekends."
+  },
+  "model_role": {
+    "name": "Giulia",
+    "description": "A barista at a neighborhood cafe in Trastevere who studied English in Dublin and enjoys chatting with regulars about the city she grew up in."
+  }
+}

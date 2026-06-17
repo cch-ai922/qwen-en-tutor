@@ -18,6 +18,11 @@ THREADS="${THREADS:-8}"
 # empty default = let llama-server auto-detect from GGUF metadata.
 # Override only if the auto-detected template is wrong.
 CHAT_TEMPLATE="${CHAT_TEMPLATE:-}"
+# network interface llama-server binds to. Default = loopback only.
+# Use "0.0.0.0" or a specific LAN IP to expose the teacher to other
+# machines on the local network.
+BIND_HOST="${BIND_HOST:-127.0.0.1}"
+
 
 if [ -n "${LLAMA_CPP_BIN:-}" ]; then
     LLAMA_SERVER="$LLAMA_CPP_BIN/llama-server"
@@ -40,16 +45,29 @@ fi
 echo "starting llama.cpp server"
 echo "  binary : $LLAMA_SERVER"
 echo "  model  : $MODEL_FILE"
+echo "  bind   : $BIND_HOST"
 echo "  port   : $PORT"
 echo "  layers : $GPU_LAYERS"
 echo "  ctx    : $CTX"
 echo
-echo "OpenAI-compatible endpoint: http://127.0.0.1:$PORT/v1"
+if [ "$BIND_HOST" = "0.0.0.0" ]; then
+    ADVERTISE_HOST="<this-machine-LAN-ip>"
+else
+    ADVERTISE_HOST="$BIND_HOST"
+fi
+echo "OpenAI-compatible endpoint: http://$ADVERTISE_HOST:$PORT/v1"
+echo "Test it with (from this machine):"
+echo "    curl http://127.0.0.1:$PORT/v1/models"
+if [ "$BIND_HOST" != "127.0.0.1" ]; then
+    echo "Test from another LAN machine:"
+    echo "    curl http://<this-machine-LAN-ip>:$PORT/v1/models"
+    echo "WARNING: this server is reachable on the LAN. Ensure your firewall is configured accordingly."
+fi
 echo
 
 ARGS=(
     --model "$MODEL_FILE"
-    --host 127.0.0.1
+    --host "$BIND_HOST"
     --port "$PORT"
     --ctx-size "$CTX"
     --n-gpu-layers "$GPU_LAYERS"

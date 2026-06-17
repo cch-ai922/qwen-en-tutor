@@ -1,0 +1,164 @@
+# =============================================================================
+# paper/training_a3_no_specialized.yaml  -  Condition A3
+# =============================================================================
+#
+# Condition: full system MINUS the 6 specialized redirect streams.
+# Tests whether the multi-axis redirect taxonomy (locale / pedagogy /
+# language / persona / topic / role_swap) matters beyond a single generic
+# "redirect" stream.
+#
+# Training streams: normal + generic redirect + 4 persistent_* streams
+# Dropped streams:  locale_redirect, pedagogy_redirect, language_redirect,
+#                   persona_redirect, topic_redirect, role_swap_redirect
+#
+# Pre-req: run `python scripts/setup_paper_ablation_data.py --conditions a3`
+# to materialize data/sft_filtered_a3/ before launching training.
+# -----------------------------------------------------------------------------
+
+base_model:
+  model_id: "./vendor/models/Qwen_3.5_0.8B-Base"
+  tokenizer_id: "./vendor/models/Qwen_3.5_0.8B-Base"
+  trust_remote_code: true
+  attn_implementation: "sdpa"
+  torch_dtype: "bfloat16"
+  quantization:
+    enabled: true
+    load_in_4bit: true
+    bnb_4bit_quant_type: "nf4"
+    bnb_4bit_compute_dtype: "bfloat16"
+    bnb_4bit_use_double_quant: true
+  gradient_checkpointing: true
+
+lora:
+  r: 16
+  lora_alpha: 32
+  lora_dropout: 0.05
+  bias: "none"
+  task_type: "CAUSAL_LM"
+  target_modules:
+    - q_proj
+    - k_proj
+    - v_proj
+    - o_proj
+    - gate_proj
+    - up_proj
+    - down_proj
+
+sft:
+  output_dir: "outputs/paper/a3/sft"
+  num_train_epochs: 2
+  max_steps: -1
+  per_device_train_batch_size: 1
+  per_device_eval_batch_size: 1
+  gradient_accumulation_steps: 4
+  learning_rate: 2.0e-4
+  warmup_ratio: 0.05
+  lr_scheduler_type: "cosine"
+  weight_decay: 0.01
+  max_seq_length: 1792  # see training_a1_full.yaml — 1792 gives headroom on 12GB
+  packing: false
+  bf16: true
+  fp16: false
+  optim: "paged_adamw_8bit"
+  logging_steps: 5
+  eval_strategy: "no"
+  save_strategy: "no"
+  save_total_limit: 1
+  load_best_model_at_end: false
+  report_to: "none"
+  seed: 42
+  data:
+    # A3-specific filtered dir built by setup_paper_ablation_data.py
+    sft_filtered_dir: "data/sft_filtered_a3"
+    eval_filtered_dir: "data/eval_filtered"
+    holdout_dir: "data/holdout"
+    mix_ratio_sft: 0.80
+    mix_ratio_eval: 0.20
+    use_all_data: true
+    validation_split: 0.05
+    shuffle_seed: 42
+
+dpo:
+  output_dir: "outputs/paper/a3/dpo"
+  num_train_epochs: 1
+  max_steps: -1
+  per_device_train_batch_size: 1
+  per_device_eval_batch_size: 1
+  gradient_accumulation_steps: 4
+  learning_rate: 5.0e-6
+  warmup_ratio: 0.05
+  lr_scheduler_type: "cosine"
+  weight_decay: 0.0
+  beta: 0.1
+  loss_type: "sigmoid"
+  max_length: 2400
+  max_prompt_length: 1500
+  bf16: true
+  fp16: false
+  optim: "paged_adamw_8bit"
+  logging_steps: 5
+  eval_strategy: "no"
+  save_strategy: "no"
+  save_total_limit: 1
+  report_to: "none"
+  seed: 42
+  sft_adapter_path: "outputs/paper/a3/sft"
+  ref_model: null
+  data:
+    dpo_filtered_dir: "data/dpo_filtered"
+    validation_split: 0.05
+    shuffle_seed: 42
+    mix_ratio_register: 0.65
+    mix_ratio_on_policy: 0.25
+    mix_ratio_sentinel: 0.10
+    use_all_data: true
+
+on_policy:
+  enabled: true
+  adapter_path: "outputs/paper/a3/sft"
+  max_per_level: 5
+  min_margin: 2
+  concurrency: 2
+  target_max_tokens: 320
+  target_temperature: 0.7
+
+logging:
+  wandb_project: "qwen-en-tutor"
+  wandb_entity: null
+  wandb_run_name_prefix: "paper-a3-no-specialized"
+
+eval_callback:
+  enabled: false
+  n_conversation_samples: 10
+  n_evaluation_samples: 10
+  max_new_tokens: 512
+  temperature: 0.7
+  top_p: 0.95
+  log_samples_table: true
+  conversation_filters:
+    - banned_terms
+    - mode_consistency
+    - naturalness
+  held_out_prompts_path: "data/holdout/eval_callback_prompts.jsonl"
+
+evaluation:
+  holdout_dir: data/holdout
+  n_per_level: 3
+  concurrency: 2
+  intermediate_adapter_path: outputs/paper/a3/sft
+  final_adapter_path: outputs/paper/a3/dpo
+
+comparison:
+  threshold: 0.05
+  fail_on_regression: false
+
+gguf_export:
+  adapter_path: "outputs/paper/a3/dpo"
+  merged_dir: "outputs/paper/a3/merged"
+  keep_merged: false
+  output_dir: "outputs/paper/a3/gguf"
+  model_name: "paper-a3"
+  outtype: "bf16"
+  quantize: "Q4_K_M"
+  llama_cpp_repo: "vendor/llama_cpp_src"
+  llama_quantize_bin: "vendor/llama_cpp/llama-quantize.exe"

@@ -1,19 +1,19 @@
 """Arch-aware base-model loader for SFT / DPO / evaluation / merge.
 
-학생 모델은 항상 같은 인터페이스 (causal LM) 로 학습되어야 하지만,
-체크포인트가 실제로 어떤 architecture 로 저장되어 있느냐는 다릅니다.
+The student model is always trained against the same interface (causal LM),
+but the checkpoint may actually be stored under a different architecture.
 
-  - Qwen3-8B            → ``Qwen3ForCausalLM``                  (text-only, AutoModelForCausalLM 로 로드)
-  - Qwen3-VL 4B (=3.5)  → ``Qwen3_5ForConditionalGeneration``    (multimodal, language tower 가 ``model.language_model.*`` 에 wrap)
+  - Qwen3-8B            → ``Qwen3ForCausalLM``                  (text-only, loaded via AutoModelForCausalLM)
+  - Qwen3-VL 4B (=3.5)  → ``Qwen3_5ForConditionalGeneration``    (multimodal, language tower wrapped under ``model.language_model.*``)
 
-전자는 ``AutoModelForCausalLM`` 로 충분하지만 후자는 image-text-to-text
-auto-class 가 필요합니다. 이 모듈은 ``config.json`` 의 ``architectures``
-필드를 읽어 적절한 class 를 자동으로 선택합니다.
+The former is fine with ``AutoModelForCausalLM``, but the latter requires an
+image-text-to-text auto-class. This module reads the ``architectures`` field
+from ``config.json`` and chooses the appropriate class automatically.
 
-학습 데이터에는 이미지가 없으므로 multimodal 모델이라도 vision encoder
-는 사용되지 않고, LoRA target_modules (q_proj/k_proj/v_proj/o_proj/
-gate_proj/up_proj/down_proj) 의 suffix 매칭으로 language tower 의 linear
-layer 만 어댑터가 붙습니다.
+The training data contains no images, so even for multimodal models the
+vision encoder is unused. Only the language tower's linear layers receive adapters
+via suffix-matching in LoRA target_modules (q_proj/k_proj/v_proj/o_proj/
+gate_proj/up_proj/down_proj).
 """
 
 from __future__ import annotations
@@ -26,8 +26,8 @@ logger = logging.getLogger(__name__)
 
 
 def _looks_multimodal(architectures: list[str]) -> bool:
-    """architectures 문자열에 vision / image / VL / ConditionalGeneration
-    같은 multimodal 시그널이 있는지 확인."""
+    """Check whether the architectures list contains multimodal signals such as
+    vision/image/VL/ConditionalGeneration."""
     needles = ("Vision", "Image", "VL", "ConditionalGeneration", "Multimodal")
     return any(any(n in a for n in needles) for a in architectures)
 

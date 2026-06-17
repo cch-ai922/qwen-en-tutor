@@ -1,7 +1,7 @@
 [project]
 name = "qwen-en-tutor"
 version = "0.1.0"
-description = "Fine-tune Qwen3 8B into an English conversation tutor for Iranian learners (CEFR A1–C2)."
+description = "Fine-tune Qwen3 into a locale-grounded English conversation tutor (CEFR A1-C2). Target country configurable via config/locale.yaml."
 readme = "README.md"
 requires-python = ">=3.11"
 authors = [

@@ -51,12 +51,13 @@ logger = logging.getLogger(__name__)
 
 
 def load_training_config(path: str | Path) -> dict[str, Any]:
-    """training.yaml 을 dict 로 읽어 반환합니다.
+    """Read training.yaml and return its contents as a dict.
 
-    배포 system 프롬프트와 평가 system 프롬프트는 더 이상 이 YAML 에서
-    오지 않습니다 — ``ChatFormatter`` 가 ``qwen_tutor.generation.prompts``
-    에서 직접 가져오고, 그 모듈이 ``config/locale.yaml`` 을 단일 진실 소스
-    로 사용합니다. 여기서 추가로 치환할 placeholder 는 없습니다.
+    The deployment system prompt and evaluation system prompt no longer come
+    from this YAML file — ``ChatFormatter`` imports them directly from
+    ``qwen_tutor.generation.prompts``, and that module uses
+    ``config/locale.yaml`` as the single source of truth. There are no
+    additional placeholders to replace here.
     """
     with Path(path).open("r", encoding="utf-8") as fh:
         doc = yaml.safe_load(fh) or {}
@@ -126,12 +127,23 @@ def mix_and_split(
     mix_ratio_eval: float,
     validation_split: float,
     seed: int,
+    use_all_data: bool = True,
 ) -> tuple[list[Any], list[Any]]:
     """Build a single train+val pair stratified by (example_type, cefr_level).
 
-    The mix ratios trim each pool down so the overall distribution
-    matches the request; the remaining 5% per stratum is held out for
-    validation.
+    Default behavior (``use_all_data=True``): skip the ratio-based
+    trim entirely and keep every loaded example. The natural on-disk
+    ratio wins; ``mix_ratio_sft`` / ``mix_ratio_eval`` are required
+    (sanity-checked, must sum > 0) but have no size effect.
+    ``validation_split`` per stratum is still held out.
+
+    When ``use_all_data=False``: trim the larger pool so the overall
+    distribution matches ``mix_ratio_sft : mix_ratio_eval``. Use this
+    when both pools are healthy and you specifically want to enforce
+    a target distribution (e.g. ensure eval mode gets enough gradient
+    updates). When one pool is much smaller than the ratio implies,
+    the trim is aggressive and will throw away most of the larger
+    pool -- typically NOT what you want.
     """
     if mix_ratio_sft + mix_ratio_eval <= 0:
         raise ValueError("mix ratios sum to zero")
@@ -143,17 +155,45 @@ def mix_and_split(
     rng.shuffle(sft_examples)
     rng.shuffle(eval_examples)
 
-    # Trim the larger pool so the (kept_sft, kept_eval) ratio matches.
-    if eval_examples and (
-        len(sft_examples) / max(1, len(eval_examples))
-    ) > mix_ratio_sft / mix_ratio_eval:
-        target = int(len(eval_examples) * mix_ratio_sft / mix_ratio_eval)
-        sft_examples = sft_examples[:target]
-    elif sft_examples and (
-        len(eval_examples) / max(1, len(sft_examples))
-    ) > mix_ratio_eval / mix_ratio_sft:
-        target = int(len(sft_examples) * mix_ratio_eval / mix_ratio_sft)
-        eval_examples = eval_examples[:target]
+    if use_all_data:
+        logger.info(
+            "mix_and_split: use_all_data=True -- skipping ratio trim, "
+            "keeping all %d SFT + %d eval examples (resulting natural "
+            "ratio %.2f%% SFT : %.2f%% eval)",
+            len(sft_examples), len(eval_examples),
+            100.0 * len(sft_examples) / max(1, len(sft_examples) + len(eval_examples)),
+            100.0 * len(eval_examples) / max(1, len(sft_examples) + len(eval_examples)),
+        )
+    else:
+        # Trim the larger pool so the (kept_sft, kept_eval) ratio matches.
+        if eval_examples and (
+            len(sft_examples) / max(1, len(eval_examples))
+        ) > mix_ratio_sft / mix_ratio_eval:
+            target = int(len(eval_examples) * mix_ratio_sft / mix_ratio_eval)
+            dropped = len(sft_examples) - target
+            sft_examples = sft_examples[:target]
+            if dropped > 0:
+                logger.warning(
+                    "mix_and_split: trimmed %d SFT examples (%d -> %d) "
+                    "to match %.2f:%.2f ratio against %d eval examples. "
+                    "Set data.use_all_data=true to disable this trim.",
+                    dropped, dropped + target, target,
+                    mix_ratio_sft, mix_ratio_eval, len(eval_examples),
+                )
+        elif sft_examples and (
+            len(eval_examples) / max(1, len(sft_examples))
+        ) > mix_ratio_eval / mix_ratio_sft:
+            target = int(len(sft_examples) * mix_ratio_eval / mix_ratio_sft)
+            dropped = len(eval_examples) - target
+            eval_examples = eval_examples[:target]
+            if dropped > 0:
+                logger.warning(
+                    "mix_and_split: trimmed %d eval examples (%d -> %d) "
+                    "to match %.2f:%.2f ratio against %d SFT examples. "
+                    "Set data.use_all_data=true to disable this trim.",
+                    dropped, dropped + target, target,
+                    mix_ratio_sft, mix_ratio_eval, len(sft_examples),
+                )
 
     # Stratify: bucket by (type, cefr_level).
     buckets: dict[tuple[str, str], list[Any]] = defaultdict(list)
@@ -266,6 +306,7 @@ def run_sft(config_path: str | Path = "config/training.yaml") -> str:
         mix_ratio_eval=data_cfg["mix_ratio_eval"],
         validation_split=data_cfg["validation_split"],
         seed=data_cfg["shuffle_seed"],
+        use_all_data=bool(data_cfg.get("use_all_data", True)),
     )
     logger.info("train=%d  val=%d", len(train_examples), len(val_examples))
 
@@ -336,6 +377,11 @@ def run_sft(config_path: str | Path = "config/training.yaml") -> str:
         report_to=sft_cfg.get("report_to", "none"),
         seed=sft_cfg["seed"],
         dataset_text_field=None,  # we pass pre-tokenized rows
+        # Force PrinterCallback (vs default ProgressCallback). Without this
+        # the loss dict goes into a tqdm postfix that never appears in the
+        # log file, so training looks silent even when it is actually
+        # running. Set disable_tqdm=False in the YAML to revert.
+        disable_tqdm=sft_cfg.get("disable_tqdm", True),
     )
 
     # We pre-tokenize and pre-mask `labels` ourselves (assistant-only spans),

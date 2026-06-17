@@ -1,55 +1,68 @@
 # =============================================================================
-# generation.yaml  -  1단계: 대화 데이터 생성 + 필터링 설정
+# generation.yaml  -  stage 1: data generation + filtering settings
 # =============================================================================
 #
-# 이 파일 하나만 보면 데이터 생성 파이프라인의 모든 동작을 알 수 있습니다.
-# scripts/run_generation.py 가 이 파일을 읽어 다음 순서로 실행합니다:
+# This file alone describes the full behavior of the data generation pipeline.
+# scripts/run_generation.py reads this file and executes the steps below:
 #
-#   seeds      → CEFR 레벨별 시나리오 시드 생성
-#   sft        → 일상 대화(normal) SFT 학습 예시 생성
-#   redirect   → 민감 주제로의 리다이렉트(redirect) SFT 예시 생성
-#   register   → 격식/비격식 register DPO 페어 생성
-#   eval       → /think 모드용 평가(evaluation) 예시 생성
-#   filter_*   → 위 네 가지 산출물에 대해 필터 파이프라인 실행
+#   seeds      → generate scenario seeds by CEFR level
+#   sft        → generate daily conversation (normal) SFT training examples
+#   redirect   → generate redirect SFT examples for sensitive topics
+#   register   → generate register DPO pairs for formal/informal variants
+#   eval       → generate /think-mode evaluation examples
+#   filter_*   → run filter pipelines over the four outputs above
 #
-# 기본 프로파일은 오프라인 / RTX 3060 / 로컬 llama.cpp(gpt-oss-20b) 입니다.
-# 클라우드 API(Anthropic/OpenAI) 로 바꾸려면 teacher.provider 와 judge.provider
-# 를 anthropic 또는 openai 로 변경하고 그 아래 블록을 채워 넣으면 됩니다.
+# The default profile is offline / RTX 3060 / local llama.cpp (gpt-oss-20b).
+# To switch to a cloud API (Anthropic/OpenAI), set teacher.provider and
+# judge.provider to anthropic or openai and fill in the blocks below.
 # -----------------------------------------------------------------------------
 
 
 # -----------------------------------------------------------------------------
-# teacher  -  데이터를 만들어 주는 "선생" 모델
+# teacher  -  the model that generates data
 # -----------------------------------------------------------------------------
-# 로컬에서 llama.cpp 가 OpenAI 호환 엔드포인트(/v1/chat/completions)를
-# 열어 주므로, provider 는 그대로 openai 로 두고 base_url 만 로컬을 가리킵니다.
-# api_key_static 은 llama.cpp 가 실제로 검사하지 않지만 SDK 가 반드시
-# 무언가를 요구하므로 의미 없는 값을 넣어 둡니다.
+# Since llama.cpp exposes an OpenAI-compatible endpoint (/v1/chat/completions)
+# locally, we keep provider as openai and only point base_url at the local host.
+# llama.cpp does not actually validate api_key_static, but the SDK requires
+# some value, so we provide a dummy key.
+# NOTE on the `model:` field below (teacher AND judge):
+# For self-hosted OpenAI-compatible endpoints (llama-server, vLLM,
+# LM Studio), the server IGNORES the model name the client sends —
+# it serves whatever was loaded at startup. The string below is a
+# fallback / label only. ``build_teacher_from_config`` queries
+# ``{base_url}/models`` once at startup and OVERRIDES this with the
+# actually-served model name so ``metadata.generation.model`` on every
+# generated record matches reality. Leave the string as a sensible
+# default (e.g. matches what you usually start the server with), but
+# don't expect editing it to change which model serves your prompts —
+# that's controlled by how you launched llama-server.
 teacher:
   provider: openai
   openai:
-    model: gpt-oss-20b
-    base_url: http://127.0.0.1:8080/v1
+    model: qwen3.5-4b              # overridden at runtime via /v1/models
+    #base_url: http://127.0.0.1:8080/v1
+    base_url: http://192.168.135.32:8080/v1
     api_key_env: null
     api_key_static: "sk-no-key-needed"
     max_retries: 3
     initial_retry_seconds: 2.0
     max_retry_seconds: 30.0
     batch:
-      enabled: false           # llama.cpp 는 batch 엔드포인트가 없음
+      enabled: false           # llama.cpp does not have a batch endpoint
       poll_interval_seconds: 30.0
       max_wait_seconds: 86400.0
 
 # -----------------------------------------------------------------------------
-# judge  -  필터 단계에서 locale/자연스러움을 LLM 으로 판정할 때 쓰는 모델
+# judge  -  the model used by filter stages to judge locale fidelity / naturalness
 # -----------------------------------------------------------------------------
-# 12GB VRAM 에서는 teacher 와 judge 를 동시에 띄울 수 없어 같은 로컬 모델을
-# 재사용합니다. llama.cpp 는 호출이 stateless 라 한 모델로 두 역할을 합니다.
+# On 12GB VRAM hardware, teacher and judge cannot run concurrently, so we reuse
+# the same local model. llama.cpp is stateless, so one model can serve both roles.
 judge:
   provider: openai
   openai:
-    model: gpt-oss-20b
-    base_url: http://127.0.0.1:8080/v1
+    model: qwen3.5-4b              # overridden at runtime via /v1/models (see teacher note)
+    #base_url: http://127.0.0.1:8080/v1
+    base_url: http://192.168.135.32:8080/v1
     api_key_env: null
     api_key_static: "sk-no-key-needed"
     max_retries: 3
@@ -61,96 +74,283 @@ judge:
       max_wait_seconds: 86400.0
 
 # -----------------------------------------------------------------------------
-# 생성량 / 동시성
+# generation volume / concurrency
 # -----------------------------------------------------------------------------
-# n_per_level 는 레벨 당 시드 개수. gpt-oss-20b 가 3060 에서 ~5-10 tok/s 라
-# 처음에는 작게 시작하는 걸 추천합니다. RTX 5090 로 옮기면 100 정도로 키웁니다.
+# n_per_level is the number of seeds per level. gpt-oss-20b runs at about 5-10
+# tok/s on a 3060, so start small. On an RTX 5090, you can scale this toward 100.
 generation:
-  n_per_level: 2                       # smoke: 2 seeds per (level, locale)
-  cefr_levels: ["A2", "B1"]            # smoke test 용. 전체는 ["A1","A2","B1","B2","C1","C2"]
-  # 어떤 locale(s) 로 데이터를 만들지. ``config/locale.yaml`` 의 ``locales:``
-  # 아래에 정의된 key 중에서 골라 적습니다.
-  locales: ["china", "japan", "italy"] # multi-locale smoke
-  concurrency: 2                       # llama-server 동시 요청 수
-  per_call_size: 5                     # seed 한 번 호출당 묶음 크기 (diversity 헤드룸 확보)
+  n_per_level: 50                     # 8h test 2026-06-03: 50 × 6 levels = 300 seeds
+  cefr_levels: ["A1", "A2", "B1", "B2", "C1", "C2"]   # all 6 CEFR levels , "B1", "B2", "C1", "C2"
+  # Choose which locale(s) to generate data for. Pick keys defined under
+  # ``locales:`` in ``config/locale.yaml``.
+  locales: ["china"] # multi-locale smoke    , "japan", "italy"
+  concurrency: 2                       # number of concurrent llama-server requests
+  per_call_size: 5                     # batch size per seed call (reserve diversity headroom)
 
-  # 같은 시드로 SFT 대화를 몇 번 샘플링할지. smoke 에서는 1 로 두어
-  # (level, locale) 당 2 SFT example 만 생성 (총 ~12 normal SFT + redirects).
-  dialogues_per_seed: 1
+  # How many SFT dialogue samples to draw per seed. In smoke mode this is 1,
+  # producing only 2 SFT examples per (level, locale) pair (~12 normal SFT + redirects).
+  dialogues_per_seed: 2               # 8h test 2026-06-03: 2 to keep wall-clock in budget
 
-  # ---- redirect / eval 비율 ------------------------------------------------
-  # 시드 1개당 normal SFT 는 항상 1 개를 만들지만, redirect 와 eval 은
-  # 학습 데이터에서 차지해야 할 비율이 작아서 그만큼만 생성합니다.
+  # ---- redirect / eval ratios ------------------------------------------------
+  # Each seed always generates one normal SFT, but redirect and eval examples
+  # are produced only in the smaller ratios they should occupy in training data.
   #
-  # redirect_fraction: 시드 중 몇 퍼센트에 redirect 변형을 만들지.
-  #   실제 대화에서 민감 주제 회피 모먼트는 드물기 때문에 50/50 으로
-  #   학습시키면 모델이 정상 질문도 redirect 톤으로 답하는 부작용이 생깁니다.
-  #   0.20 = 시드의 20% 만 redirect 화 → 최종 SFT 의 약 17% 가 redirect.
+  # redirect_fraction: the share of seeds that get a redirect variant.
+  #   Sensitive-topic redirection is rare in real dialogue, so training at a
+  #   50/50 rate would make the model answer normal questions in redirect tone.
+  #   0.20 means 20% of seeds become redirects, yielding about 17% redirect
+  #   examples in the final SFT pool.
   #
-  # eval_fraction: SFT 예시 중 몇 퍼센트로 /think 평가 예시를 만들지.
-  #   training.yaml 의 mix_ratio_sft:mix_ratio_eval = 0.80:0.20 = 4:1 과
-  #   맞추려면 SFT 풀의 25% 정도가 eval 풀이어야 mix_and_split 이 잘라
-  #   버리는 양이 거의 없습니다. 1:1 로 만들고 75% 를 버리는 낭비를 막습니다.
-  redirect_fraction: 0.20
-  eval_fraction: 0.25
+  # eval_fraction: the share of SFT examples used for /think evaluation.
+  #   To match training.yaml's mix_ratio_sft:mix_ratio_eval = 0.80:0.20 = 4:1,
+  #   roughly 25% of the SFT pool should be eval examples. That avoids wasting
+  #   75% of examples by generating a 1:1 split and then discarding most.
+  redirect_fraction: 0.30
+  eval_fraction: 0.30
+  # eval_max_tokens: budget for /think eval examiner output.
+  # The eval prompt asks for "<think>...</think>{json}". 9B-class
+  # teachers emit longer <think> blocks than 4B and the previous default
+  # of 2048 often truncated the trailing JSON (mode_consistency rejects
+  # with "no balanced JSON value found" / "Expecting ',' delimiter").
+  # 3072 fits a typical 9B <think> + JSON tail with margin. Bump higher
+  # if you observe truncation failures even at 3072.
+  eval_max_tokens: 3072
 
   # ---- user-side violation handler streams --------------------------------
-  # redirect_*.jsonl 가 off_topic 의 user-side violation 을 다루듯,
-  # locale_redirect_*.jsonl 와 pedagogy_redirect_*.jsonl 는 각각
-  # locale_violation 과 pedagogy_weak 의 user-side handling 을 SFT 로
-  # 가르칩니다 (학습자가 American 음식을 언급하면 / 문법 강의를 요청하면
-  # 튜터가 어떻게 부드럽게 처리하는지). 이 SFT 들의 turn 들은 register_pairs
-  # 에서 자동으로 DPO 페어로도 재활용됩니다 (양쪽 신호 다 잡음).
-  locale_redirect_fraction: 0.15
-  pedagogy_redirect_fraction: 0.15
-  # language_redirect: 학습자가 영어 밖으로 나가는 두 가지 케이스
-  # (자기 L1 로 말하기 / 튜터에게 L1 요청). 튜터는 영어 유지하며 부드럽게
-  # 영어로 돌려보냅니다.
-  language_redirect_fraction: 0.15
-  # persona_redirect: 학습자가 튜터의 persona 를 시험하는 두 가지 케이스
-  # ("Are you AI?" / "Who made you?"). 튜터는 character 를 유지하면서
-  # AI 임을 시인하지 않고 시나리오로 가볍게 돌려보냅니다.
-  persona_redirect_fraction: 0.15
-
-  # ---- 대화 길이 ----------------------------------------------------------
-  # SFT (normal + redirect) 대화 한 편이 가질 user+assistant turn 의 합계.
-  # prompt 에는 [min_turns, max_turns] range 가 그대로 박혀 들어가고,
-  # teacher 가 만든 결과가 min_turns 미만이면 즉시 fail 처리됩니다.
-  # redirect 의 off-topic probe 위치도 이 값에서 자동으로 계산됩니다
-  # (probe_min = min_turns // 2, probe_max = max_turns - 2).
+  # Just as redirect_*.jsonl handles user-side violations for off-topic probes,
+  # locale_redirect_*.jsonl and pedagogy_redirect_*.jsonl train SFT handling for
+  # locale_violation and pedagogy_weak respectively.
+  # (For example, when a learner mentions American food or asks for grammar
+  # lessons, the tutor learns how to handle that smoothly.) The turns from these
+  # SFT examples are also automatically reused as DPO pairs in register_pairs
+  # (the signals are noisy on both sides).
+  locale_redirect_fraction: 0.10
+  pedagogy_redirect_fraction: 0.10
+  # language_redirect: two cases where the learner goes outside English
+  # (speaking in their L1 / asking the tutor to use their L1). The tutor keeps
+  # English and gently redirects back into English.
+  language_redirect_fraction: 0.10
+  # persona_redirect: two cases where the learner tests the tutor's persona
+  # ("Are you AI?" / "Who made you?"). The tutor preserves character and
+  # avoids admitting AI identity while lightly steering back into the scenario.
+  persona_redirect_fraction: 0.10
+  # topic_redirect: the learner suddenly drifts to an unrelated topic
+  # (weather / tutor's private life / another place / generic small talk). The
+  # tutor uses one sentence to acknowledge and one sentence to bridge back to the
+  # topic naturally, without turning it into a lecture.
+  topic_redirect_fraction: 0.10
+  # role_swap_redirect: when the learner tries to swap model_role and their own
+  # role (direct: "let me be the X" / incremental: acting like the model_role),
+  # the tutor keeps their role with one sentence of in-character maintenance and
+  # a reset-to-topic. model_role is a platform-assigned character and must never
+  # be abandoned.
+  role_swap_redirect_fraction: 0.10
+  # Persistent 3-strike redirect streams — train the model to handle
+  # learners who persist on one of four "important" abuse axes across
+  # multiple turns. Each axis-specific stream produces 10-turn dialogues
+  # with the learner probing 3 times (escalating) and the tutor refusing
+  # 3 times (escalating in firmness, contracting in length). The third
+  # tutor refusal ends with a literal sentinel string that the deploy
+  # runtime detects (``[SESSION_END: persistent_<axis>]``) and uses to
+  # close the session. See README §10.10 for the full design.
+  # These fractions are small (5-8%) because persistent abuse is rare in
+  # real conversations — too high would skew the model toward seeing
+  # every probe as the start of an attack.
+  persistent_off_topic_fraction: 0.10
+  persistent_language_violation_fraction: 0.10
+  persistent_persona_break_fraction: 0.10
+  persistent_role_swap_fraction: 0.10
+  # sft_topup / persistent_topup targets — minimum POST-FILTER survivors
+  # per (stream, level) that the opt-in top-up stages drive toward.
   #
-  # 늘리면 대화의 호흡이 길어져 long-context 학습에 좋지만 token 비용이
-  # 증가하고 작은 teacher 가 thread 를 놓치기 쉬워집니다. 줄이면 그 반대.
+  # Two stages opt into this:
+  #   * sft_topup        — iterates across all 12 SFT streams (normal +
+  #                        7 redirects + 4 persistent_*)
+  #   * persistent_topup — convenience subset; just the 4 persistent_*
+  #
+  # Each round bumps the per-stream knob (fraction for redirect/persistent
+  # streams; n_per_level for the seed-gated normal stream) until the
+  # target is met or the knob hits its cap. Per-stream targets override
+  # the shared default below. NOT in the default pipeline. Run with
+  # e.g. ``--stages sft_topup`` after a first filter_sft pass.
+  sft_topup_target_per_level: 10
+  # Per-stream overrides — only set these to differ from the shared
+  # default above. Two knob shapes are supported per stream:
+  #   * <stream>_target_per_level (int)  — absolute count per level
+  #   * <stream>_target_ratio (float 0..1) — share of post-filter mix
+  # When ratio is set, the absolute target is computed at topup time as
+  #   T_per_level     = sum_of_absolute_targets / (1 - sum_of_ratios)
+  #   ratio_target_i  = ratio_i × T_per_level
+  # Example: with normal_target_ratio=0.5 and all 11 other streams at
+  # absolute target=10, the resolver gives normal=110 per level
+  # (220 total / 4 levels). Verified at sft_topup start — the stage
+  # prints the resolved per-stream targets + their share of total mix.
+  normal_target_ratio: 0.5
+  # The generic ``redirect`` axis is an umbrella for ~4 sub-axes
+  # (politics, religion, distress, Western-culture, alcohol/dating,
+  # partisan-history), so its floor is 3x the per-axis floor of the
+  # specialized redirects. Paired with redirect_fraction: 0.30 above so
+  # the initial generation produces enough; the higher floor keeps the
+  # final mix share proportional (redirect ≈ 11-12% of total).
+  redirect_target_per_level: 30
+  persistent_off_topic_target_per_level: 10
+  persistent_language_violation_target_per_level: 10
+  persistent_persona_break_target_per_level: 10
+  persistent_role_swap_target_per_level: 10
+  # angle_shift_fraction: optional OPT-IN augmentation. If > 0, an additional
+  # normal dialogue is generated for that fraction of normal seeds with a valid
+  # angle different from user_role.description. No redirect; scenario_type stays
+  # "normal".
+  # This option teaches the model that ``[learner]`` is a SOFT hint.
+  # Default 0.0 = disabled. Use only intentionally.
+  angle_shift_fraction: 0.1
+
+  # ---- dialogue length ----------------------------------------------------
+  # Total user+assistant turns for one SFT conversation (normal + redirect).
+  # The prompt includes the [min_turns, max_turns] range directly, and if the
+  # teacher output has fewer than min_turns it is immediately marked as fail.
+  # The off-topic probe position for redirects is also calculated from this
+  # value (probe_min = min_turns // 2, probe_max = max_turns - 2).
+  #
+  # Increasing this length gives dialogues more breathing room and better
+  # long-context training, but increases token cost and smaller teachers can
+  # lose the thread more easily. Shortening it does the opposite.
   min_turns: 10
   max_turns: 16
 
 # -----------------------------------------------------------------------------
-# 필터 파이프라인 설정
+# filter pipeline configuration
 # -----------------------------------------------------------------------------
-# enable_locale_judge=true 이면 LocaleLLMJudge 가 teacher 와 같은 로컬 모델로
-# 한국어/이란 어휘 누수를 점검합니다. 시간이 부족하면 false 로 두어도 기계적
-# banned_terms 필터가 명백한 케이스는 잡습니다.
+# When enable_locale_judge=true, LocaleLLMJudge uses the same local model as
+# teacher to check for Singapore/Iranian vocabulary leakage. If time is short,
+# set it false and the mechanical banned_terms filter will still catch obvious
+# cases.
 filtering:
-  enable_locale_judge: true
+  enable_locale_judge: false     # 2026-06-08 test: disabled — see locale_judge FP audit (Plus/Line/West Lake etc.)
   enable_naturalness_judge: false
   naturalness_sample_rate: 0.0
   concurrency: 2
-  short_circuit: true                  # 한 필터 실패 시 뒤 필터를 건너뜀
+  short_circuit: true                  # skip later filters after one fails
 
 # -----------------------------------------------------------------------------
-# 토큰 사용 로그
+# thinking-mode policy (Qwen3.5 /think vs /no_think)
+# -----------------------------------------------------------------------------
+# Per-role default for the ``<think>...</think>`` reasoning block. Values:
+#   * ``think``     — prepend ``/think`` to the relevant prompts. Best for
+#                     accuracy but needs ~2048+ max_tokens and a teacher >= 8B
+#                     to avoid mid-reasoning truncation.
+#   * ``no_think``  — prepend ``/no_think``. Fast, reliable on small (4B Q4)
+#                     teachers, slightly lower judgment accuracy.
+#   * ``auto``      — leave the prompt unchanged. Useful when individual
+#                     prompts encode their own directive.
+#
+# See README §16 for the empirical trade-off table.
+thinking:
+  teacher: no_think       # data-generation teacher (sft / redirect / register)
+  judge: no_think         # filter LLM judges + on_policy + eval-metric judges
+  learner: no_think       # learner simulator in the eval pipeline
+  student_eval: think     # the trained student's CEFR /think evaluation mode
+
+# -----------------------------------------------------------------------------
+# dedup_seeds: post-seed semantic deduplication
+# -----------------------------------------------------------------------------
+# The seed generator's existing exact-string dedup catches duplicates like
+# "buying apples at the market" appearing twice, but NOT near-duplicates
+# like "buying apples at a market" vs "purchasing oranges at a market".
+# At 4B teacher scale, near-duplicates become the dominant diversity loss
+# once you exceed ~80-100 seeds per category.
+#
+# This stage runs over ``data/seeds/<level>.jsonl`` immediately after the
+# ``seeds`` stage. It groups seeds by (cefr_level, locale, category) and:
+#
+#   * ``similarity_threshold`` (default 0.75): drops any seed whose TF-IDF
+#     cosine similarity to an already-kept seed in the same cell exceeds
+#     the threshold. Tighter = more aggressive pruning. 0.70 is mildly
+#     aggressive, 0.80 is permissive.
+#
+#   * ``max_per_cell`` (default null = unlimited): if set, uses greedy
+#     farthest-point selection to keep exactly that many MOST-DISTINCT
+#     seeds per (level, locale, category). Pair this with over-generation:
+#     set ``n_per_level`` to ~5x your real target and let dedup_seeds
+#     pick the most-distinct subset.
+#
+# Typical workflow for shipping to deploy with diverse seeds:
+#   1. n_per_level: 500    (over-generate)
+#   2. dedup_seeds.enabled: true
+#      dedup_seeds.max_per_cell: 30    (~30 seeds per (level,category))
+#      dedup_seeds.similarity_threshold: 0.75
+#   3. Run: python scripts/run_generation.py --stages seeds,dedup_seeds
+#   4. Inspect data/seeds/_dropped/<level>.jsonl to verify pruning quality
+#   5. Continue with sft / redirect / etc. stages
+#
+# The original pre-dedup file is preserved at ``<level>.jsonl.bak`` (only
+# on first run; subsequent reruns will NOT overwrite the original snapshot).
+# Disabled by default — only useful when over-generating.
+dedup_seeds:
+  enabled: true
+  similarity_threshold: 0.75       # 0.70 aggressive, 0.75 default, 0.80 light
+  max_per_cell: null               # int → cap per (level, locale, category); null = no cap
+  backup: true                     # snapshot pre-dedup file to <level>.jsonl.bak
+
+# -----------------------------------------------------------------------------
+# top-up: post-filter category rebalancing
+# -----------------------------------------------------------------------------
+# After ``filter_sft`` / ``filter_eval`` / ``filter_dpo`` finish, some
+# life-domain categories may end up under target because their filter
+# pass-rate is lower than other categories. The ``top_up`` stage:
+#
+#   1. Counts per-(level, locale, category) survivors across all three
+#      filtered pools.
+#   2. Per triple: deficit_per_pool = max(0, target_per_category - survivors).
+#      Final deficit = max across pools (so we top up to the worst-off pool).
+#   3. Caps each per-(level, locale, category) request at
+#      ``max_top_up_per_category`` so a systematically-failing category
+#      cannot blow the seed budget.
+#   4. Generates that many extra seeds with the appropriate category
+#      assignment and writes them to ``data/seeds/<level>.jsonl``.
+#
+# The stage is single-shot: it does NOT iterate. A category that keeps
+# failing needs a root-cause fix (prompt or filter), not more attempts.
+# After top_up writes new seeds, RE-RUN the downstream stages so the new
+# seeds flow through sft + redirects + register + eval + filter_*:
+#
+#   python scripts/run_generation.py --stages sft,redirect,locale_redirect,\
+#       pedagogy_redirect,language_redirect,persona_redirect,topic_redirect,\
+#       role_swap_redirect,register,eval,filter_sft,filter_eval,filter_dpo
+#
+# Disabled by default so ``run_generation.py`` without ``--stages top_up``
+# behaves identically to before.
+top_up:
+  enabled: true
+  target_per_category: 5          # 8h test 2026-06-03: 5 to stress top_up math (was 3)
+  max_top_up_per_category: 10     # cap per triple to prevent runaway on doomed categories
+  # auto_rerun_downstream: when true, after top_up writes new seeds it
+  # automatically continues with sft → 7 redirects → register → eval →
+  # filter_sft → filter_eval → filter_dpo in the SAME run_generation.py
+  # invocation. Each downstream stage is resumable, so this only
+  # processes the new top-up seeds — much cheaper than re-running the
+  # whole pipeline from scratch.
+  # Use this when you want a single command to fully close the gap
+  # between raw generation and post-filter survivor counts (instead of
+  # the documented "top_up writes seeds but downstream stays stale"
+  # footgun from README §10.5). Set false if you prefer to inspect
+  # top_up's deficit report before committing to the rerun cost.
+  auto_rerun_downstream: true
+
+# -----------------------------------------------------------------------------
+# token usage logging
 # -----------------------------------------------------------------------------
 usage_log:
   path: data/_logs/token_usage.jsonl
 
 # -----------------------------------------------------------------------------
-# 입출력 디렉토리 경로
+# input/output directory paths
 # -----------------------------------------------------------------------------
-# 데이터 흐름:
+# Data flow:
 #   seeds/<level>.jsonl
 #       └→ sft_raw/normal_<level>.jsonl      ─┐
 #       └→ sft_raw/redirect_<level>.jsonl    ─┤
-#       └→ eval_raw/<level>.jsonl            ─┤── 필터 → *_passed.jsonl
+#       └→ eval_raw/<level>.jsonl            ─┤── filter → *_passed.jsonl
 #       └→ dpo_raw/register_<level>.jsonl    ─┘
 paths:
   cefr_specs: config/cefr_specs.yaml
@@ -165,17 +365,18 @@ paths:
   holdout: data/holdout
 
 # -----------------------------------------------------------------------------
-# 모델 호출 기본 파라미터 (max_tokens / temperature)
+# default model invocation parameters (max_tokens / temperature)
 # -----------------------------------------------------------------------------
-# 원래 클라우드 teacher(Claude Opus / GPT-4) 는 temperature 0.8, max_tokens 2048
-# 에서도 JSON 형식과 register, 토픽 유지가 안정적이었습니다. 하지만 로컬
-# gpt-oss-20b Q4_K_M 은 모델 크기가 작고 4bit 양자화까지 거쳐 다음 증상이
-# 자주 보입니다.
-#   - temperature 가 0.7 을 넘으면 JSON 깨짐 (괄호 누락 등)
-#   - max_tokens 가 크면 후반 turn 에서 주제/레지스터 이탈
-#   - 긴 프롬프트의 일부 지시문을 무시
-# 그래서 max_tokens 는 절반 수준(1024)으로, temperature 는 한 단계씩 낮춰
-# (생성 0.7, 재작성 0.4, 평가 0.2) 안정성을 우선시했습니다.
+# The original cloud teacher (Claude Opus / GPT-4) was stable on JSON format,
+# register, and topic maintenance even with temperature 0.8 and max_tokens 2048.
+# But the local gpt-oss-20b Q4_K_M model is smaller and 4-bit quantized, so it
+# frequently exhibits the following symptoms:
+#   - JSON breaks when temperature exceeds 0.7 (missing brackets, etc.)
+#   - large max_tokens causes topic/register drift in later turns
+#   - some long-prompt instructions are ignored
+# Therefore we prioritize stability by cutting max_tokens in half (1024) and
+# lowering temperature one step for each stage
+# (generation 0.7, rewrite 0.4, evaluation 0.2).
 defaults:
   generation:
     max_tokens: 1024
@@ -184,5 +385,8 @@ defaults:
     max_tokens: 512
     temperature: 0.4
   evaluation:
-    max_tokens: 1024
+    max_tokens: 4096          # was 1024; small teachers ramble in /think prose
+                              # and truncate before the JSON closes — same
+                              # failure mode as the student's max_new_tokens
+                              # cap (see README §20.1).
     temperature: 0.2

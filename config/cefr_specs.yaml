@@ -2,17 +2,20 @@
 #
 # CEFR A1-C2 target-register specifications for the English tutor.
 #
-# 각 레벨에 정의되는 필드:
+# Fields defined for each level:
 #   - vocabulary / grammar / naturalness_requirements / things_to_avoid:
-#     해당 CEFR 레벨에서 teacher 가 지켜야 할 가이드. country-agnostic.
-#   - few_shot_examples: 레벨별 2-3개의 짧은 예시 대화. (참고: 현재 예시는
-#     Iranian 컨텍스트로 작성되어 있습니다. config/locale.yaml 의 country 를
-#     다른 나라로 바꿔도 teacher 는 register 만 학습하고 cultural detail 은
-#     locale.yaml 에서 받습니다. 다른 country 로 갈 때 더 깔끔하려면 이
-#     few-shot 들을 country-neutral 로 다시 써도 좋습니다.)
+#     guidance that the teacher should follow at that CEFR level.
+#     Country-agnostic.
+#   - few_shot_examples: 2-3 short example dialogues per level.
+#     Note: the current examples are written in an Iranian context. If you
+#     change country in config/locale.yaml, the teacher only learns register and
+#     receives cultural detail from locale.yaml. For a cleaner transition to a
+#     different country, consider rewriting these few-shot examples to be
+#     country-neutral.
 #
-# locale-instruction 블록은 prompts.py 가 config/locale.yaml 에서 빌드해
-# render_level_spec 의 맨 위에 자동으로 붙여 줍니다 - 여기 적어 둘 필요 없음.
+# The locale-instruction block is built by prompts.py from config/locale.yaml
+# and automatically prepended to render_level_spec, so it does not need to be
+# included here.
 
 levels:
 
@@ -44,7 +47,7 @@ levels:
           User: Is it near Karim Khan Castle?
           Tutor: Yes, it is very near. You can walk from the castle.
           User: Thank you very much.
-          Tutor: You are welcome. Have a nice day.
+          Tutor: You're welcome. Have a nice day.
       - title: "Buying fruit at the bazaar"
         dialogue: |
           User: Hello. How much is one kilo of pomegranates?
@@ -56,7 +59,7 @@ levels:
       - title: "Meeting a neighbor in Yazd"
         dialogue: |
           User: Hello, Mrs. Rezaei. How are you today?
-          Tutor: Hello, Maryam. I am very well, thank you. And you?
+          Tutor: Hello, Maryam. I'm very well, thank you. And you?
           User: I am good. The weather is hot today.
           Tutor: Yes, Yazd is very hot in summer. I drink a lot of water.
 
@@ -82,25 +85,25 @@ levels:
       - title: "Weekend trip to Isfahan"
         dialogue: |
           User: How was your weekend, Sara?
-          Tutor: It was very nice. I went to Isfahan with my family.
+          Tutor: It was great. I went to Isfahan with my family — we had not been there in years.
           User: That is great. What did you do there?
-          Tutor: We visited Naqsh-e Jahan Square and ate beryani for lunch.
+          Tutor: We visited Naqsh-e Jahan Square and ate beryani for lunch. It's still my favourite dish.
           User: I love beryani. Did you take any photos?
-          Tutor: Yes, we took many photos at Si-o-se-pol in the evening.
+          Tutor: Yes, lots. I'll send you a few this evening if you want.
       - title: "At a clinic in Mashhad"
         dialogue: |
           User: Hello, doctor. I have a sore throat and a small fever.
           Tutor: When did the symptoms start, Hossein?
           User: Yesterday afternoon. I also feel a little tired.
-          Tutor: I see. I will give you a prescription for some syrup.
+          Tutor: I see. I'll give you a prescription for some cough syrup.
           User: Should I take it before or after meals?
-          Tutor: After meals, three times a day, for five days.
+          Tutor: After meals, three times a day, for five days. You should not skip a dose.
       - title: "Planning a picnic in Tabriz"
         dialogue: |
           User: Are you free on Friday? We are going to El Goli park.
           Tutor: That sounds fun. What time will you go?
           User: Around ten in the morning. We will take ash reshteh.
-          Tutor: Great. I can bring some doogh and fruit.
+          Tutor: Great. I'll bring some doogh and fruit. We do not need anything else, right?
           User: Perfect. See you at the park gate at ten.
 
   B1:
@@ -180,18 +183,19 @@ levels:
           User: He's also worried about the entrance exam pressure.
           Tutor: That's understandable. Konkour is brutal, but consistent
             preparation over the year usually matters more than
-            last-minute cramming.
+            last-minute cramming. He should not panic if a single mock
+            exam goes badly — those are normal.
       - title: "Rooftop gardens in Rasht"
         dialogue: |
           User: I read an article about rooftop gardens in Rasht. Do you
             think they could really change how people use space in cities
             like ours?
           Tutor: They could, especially in a humid climate like Rasht's,
-            where plants flourish almost year-round. The main challenge
-            is structural — older buildings weren't designed to hold the
-            weight of wet soil. Where it's feasible, though, rooftop
-            gardens noticeably cool the interiors below and create small
-            community spaces.
+            where plants flourish almost year-round. They are not a
+            complete solution, of course — older buildings weren't
+            designed to hold the weight of wet soil. Where it's
+            feasible, though, rooftop gardens noticeably cool the
+            interiors below and create small community spaces.
       - title: "Carpet weaving in Kerman"
         dialogue: |
           User: I've been reading about how younger weavers in Kerman are
@@ -199,8 +203,9 @@ levels:
           Tutor: Not entirely, but it's a steep climb. The workshops that
             survive tend to be the ones that have managed to reach
             collectors abroad and that pay weavers a wage closer to what
-            other skilled work pays. If a young weaver can earn a fair
-            income, the tradition stops feeling like a sacrifice.
+            other skilled work pays. Younger artisans are not walking
+            away because they have lost interest — they are leaving
+            because the economics no longer add up.
 
   C1:
     vocabulary: |
@@ -231,7 +236,8 @@ levels:
             glazes three times this year. Cash-flow planning has become
             almost guesswork, and many family-run businesses are
             reluctantly raising prices, knowing their customers'
-            purchasing power keeps shrinking.
+            purchasing power keeps shrinking. They do not see an easy
+            way out of that spiral.
       - title: "Diaspora attachment to ancestral cities"
         dialogue: |
           User: Do you think second-generation Iranians abroad feel a
@@ -240,8 +246,9 @@ levels:
             geography through family stories — they could describe an
             alley in their grandmother's neighborhood in Hamedan they've
             never actually walked. Others develop a more abstract
-            attachment, anchored in cuisine or Nowruz rituals rather than
-            in any particular city.
+            attachment, anchored in cuisine or Nowruz rituals rather
+            than in any particular city. The connection does not have
+            to be tied to a specific street to feel real.
 
   C2:
     vocabulary: |
@@ -271,7 +278,8 @@ levels:
             and televised serials that genuinely shape everyday talk in
             Iran rarely make it across borders. So the "international
             gaze," if you'll pardon the cliche, often mistakes the
-            periphery for the center.
+            periphery for the center — and that does not always trouble
+            the curators who shape it.
       - title: "Translating Hafez"
         dialogue: |
           User: Why does Hafez resist translation so stubbornly?
@@ -281,4 +289,5 @@ levels:
             the way ambiguity is deliberately engineered between the
             literal and the mystical. Translators can render the imagery,
             but the music and the calculated slipperiness almost always
-            have to be sacrificed for one or the other.
+            have to be sacrificed for one or the other. We do not yet
+            have a rendering that holds all of those together.

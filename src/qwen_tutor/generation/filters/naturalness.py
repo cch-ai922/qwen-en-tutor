@@ -98,7 +98,12 @@ class MetricRange:
     soft_high: float
 
     def score(self, value: float) -> float:
-        if value <= self.soft_low or value >= self.soft_high:
+        # Strict inequality on the soft edges so that a value sitting EXACTLY
+        # on soft_low (or soft_high) gets evaluated against the target range
+        # instead of being short-circuited to 0. This matters for levels where
+        # ``soft_low == target_low`` (e.g. A1 contraction_rate at 0.0 — zero
+        # contractions is in-target for A1, not a failure).
+        if value < self.soft_low or value > self.soft_high:
             return 0.0
         if self.target_low <= value <= self.target_high:
             return 1.0

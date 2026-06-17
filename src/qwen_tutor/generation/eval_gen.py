@@ -10,7 +10,6 @@ Resumes from existing output.
 
 from __future__ import annotations
 
-import json
 import logging
 from pathlib import Path
 from typing import Any
@@ -46,8 +45,33 @@ def _eval_id(sft_id: str) -> str:
     return f"eval_{sft_id}"
 
 
+def _render_subtopics_block(subtopics: list[str]) -> str:
+    return "\n".join(f"- {s}" for s in subtopics)
+
+
 def _render_transcript(sft: SFTExample) -> str:
-    lines: list[str] = ["Transcript:"]
+    # Roles + topic + subtopics are prepended so the deployed /think model sees
+    # the same context at inference as the teacher saw at generation. Roles let
+    # the judge score topic_adherence and interaction against what's appropriate
+    # for the LEARNER/TUTOR personas, not just the bare topic.
+    #
+    # CEFR header: the EVALUATION_SYSTEM_PROMPT says "Given the transcript and
+    # a target CEFR level, produce ..." — but historically the level was never
+    # actually injected into the user content. Without it the model can only
+    # guess the learner's *absolute* level, and ``overall_cefr_estimate`` loses
+    # its meaning ("how does the learner compare to the target?"). Always emit
+    # the level as the first line so training and deploy both surface it.
+    md = sft.metadata
+    lines: list[str] = [
+        f"Target CEFR level: {md.cefr_level}",
+        f"Tutor role: {md.model_role.name} -- {md.model_role.description}",
+        f"Learner role: {md.user_role.description}",
+        f"Assigned topic: {md.topic}",
+        "Assigned subtopics:",
+        _render_subtopics_block(md.subtopics),
+        "",
+        "Transcript:",
+    ]
     user_idx = 0
     for m in sft.messages:
         if m.role == "user":
@@ -65,9 +89,10 @@ def _iter_sft_examples(
 ) -> list[tuple[str, SFTExample]]:
     out: list[tuple[str, SFTExample]] = []
     for level in levels:
-        # 6-way SFT 출처: normal + redirect + 4 user-side redirect 스트림
-        # (locale / pedagogy / language / persona). 각 스트림이 다른 종류의
-        # graceful 응답을 담고 있어 eval(/think 채점)도 다양해집니다.
+        # 8-way SFT sources: normal + redirect + 6 user-side redirect streams
+        # (locale / pedagogy / language / persona / topic / role_swap). Each
+        # stream contains a different kind of graceful response, which makes
+        # eval(/think) grading more diverse.
         for prefix in (
             "normal",
             "redirect",
@@ -75,6 +100,8 @@ def _iter_sft_examples(
             "pedagogy_redirect",
             "language_redirect",
             "persona_redirect",
+            "topic_redirect",
+            "role_swap_redirect",
         ):
             path = sft_dir / f"{prefix}_{level}.jsonl"
             if not path.exists():
@@ -93,30 +120,32 @@ async def _generate_one(
 ) -> EvaluationExample | None:
     locale = sft.metadata.locale
     try:
-        dialogue_payload = json.dumps(
-            {"messages": [m.model_dump() for m in sft.messages]},
-            ensure_ascii=False,
-        )
-        template = render_prompt("evaluation_generation", locale_name=locale)
-        prompt = template.format(
-            full_dialogue_json=dialogue_payload,
-            target_cefr=sft.metadata.cefr_level,
-        )
-        validate_prompt_has_locale_instruction(prompt, locale_name=locale)
+        # Three-way alignment: the teacher sees the same prompt shape the
+        # trained student will see at train and deploy time.
+        #   - system: instructions only (rubric, JSON schema, output format)
+        #   - user:   _render_transcript(sft), which carries the target CEFR
+        #             level + roles + topic + subtopics + transcript
+        # Previously the dialogue was embedded inside the system prompt and
+        # the user turn was empty; small teachers (4B Q4) interpreted the
+        # empty user turn as "Begin." and wasted their <think> budget
+        # hunting for where the transcript actually was.
+        system_prompt = render_prompt("evaluation_generation", locale_name=locale)
+        validate_prompt_has_locale_instruction(system_prompt, locale_name=locale)
+        transcript_payload = _render_transcript(sft)
         raw = await teacher.generate(
-            system=prompt,
-            messages=[],
+            system=system_prompt,
+            messages=[Message(role="user", content=transcript_payload)],
             cacheable_prefix=None,
             max_tokens=max_tokens,
             temperature=temperature,
         )
-        # gpt-oss 같은 모델은 harmony 채널로 reasoning 을 따로 보내고 `<think>`
-        # 태그를 안 쓸 수 있습니다. 그런 경우 reasoning 텍스트를 prose 에서
-        # 끌어와 ``<think>...</think>`` 형식으로 래핑합니다. 단, reasoning 이
-        # 사실상 비어 있으면 (Qwen3 가 ``<think>\n</think>`` 만 찍은 경우 등)
-        # 학습 데이터로서 가치가 없으므로 실패로 처리해서 재생성하게 만듭니다.
+        # Some models like gpt-oss may send reasoning separately over a harmony
+        # channel and omit the `<think>` tags. In that case, we wrap the prose
+        # reasoning into `<think>...</think>`. If the reasoning is effectively
+        # empty (e.g. Qwen3 outputs only `<think>\n</think>`), it has no value
+        # as training data, so we treat it as a failure and regenerate.
         if "<think>" not in raw or "</think>" not in raw:
-            # JSON 본문은 있어야 합니다 - 없으면 진짜 실패.
+            # There must be a JSON body; otherwise this is a real failure.
             if "{" not in raw:
                 raise ValueError(
                     "evaluation response missing both <think> block and JSON"
@@ -129,13 +158,13 @@ async def _generate_one(
                     "evaluation response is JSON-only (no reasoning); "
                     "ensure teacher is in /think mode"
                 )
-            # prose 가 있으면 그게 reasoning 본문 (e.g. gpt-oss harmony final
-            # channel 의 prose).
+            # If prose exists, use it as the reasoning body (e.g. gpt-oss harmony
+            # final channel prose).
             raw = f"<think>\n{head}\n</think>\n{tail}"
         else:
-            # think 블록은 있는데 비어 있는 경우 (`<think>\n</think>`) - Qwen3
-            # 가 /no_think 으로 응답했거나, 같은 close tag 가 중복으로 찍힌
-            # 경우. 학습 데이터로 무가치하니 reject.
+            # The think block exists but is empty (`<think>\n</think>`) - Qwen3
+            # may have responded with /no_think or duplicated the close tag.
+            # This is worthless as training data, so reject it.
             t_open = raw.index("<think>") + len("<think>")
             t_close = raw.index("</think>")
             if t_close <= t_open:
@@ -145,14 +174,14 @@ async def _generate_one(
                 )
             think_body = raw[t_open:t_close].strip()
             if len(think_body) < 30:
-                # 30 chars 미만이면 사실상 비어 있다고 간주
+                # If it is under 30 chars, treat it as effectively empty.
                 raise ValueError(
                     f"evaluation response has empty/trivial <think> block "
                     f"({len(think_body)} chars); ensure teacher is in /think mode"
                 )
         if "{" not in raw[raw.rindex("</think>") :]:
             raise ValueError("evaluation response missing JSON after </think>")
-        # 같은 close tag 가 중복 찍힌 경우 마지막 것만 남깁니다.
+        # If the close tag is duplicated, keep only the last one.
         last_close = raw.rindex("</think>")
         first_close = raw.index("</think>")
         if last_close != first_close:
@@ -177,6 +206,9 @@ async def _generate_one(
             source_dialogue_id=sft.id,
             learner_cefr_target=sft.metadata.cefr_level,
             locale=locale,
+            scenario_type=sft.metadata.scenario_type,
+            category=sft.metadata.category,
+            generation=sft.metadata.generation,
         ),
         system_prompt=render_evaluation_system_prompt(locale_name=locale),
         messages=[
@@ -194,17 +226,18 @@ async def generate_batch(
     config_path: str | Path = "config/generation.yaml",
     role: str = "judge",
     concurrency: int = 20,
-    max_tokens: int = 2048,
+    max_tokens: int | None = 2048,
     temperature: float = 0.3,
     teacher: TeacherClient | None = None,
     eval_fraction: float = 0.25,
 ) -> dict[str, int]:
     """Generate EvaluationExample for a fraction of SFT examples.
 
-    ``eval_fraction`` 는 SFT 풀 중 /think eval 예시를 만들 비율(0.0~1.0).
-    training.yaml 의 SFT/eval mix ratio 와 맞춰 두면 ``mix_and_split`` 이
-    잘라 버리는 양이 거의 없어집니다. 같은 SFT id 에 대해 항상 같은
-    부분집합이 선택되어 부분 resume 도 안전합니다.
+    ``eval_fraction`` is the fraction of the SFT pool to use for /think eval
+    examples (0.0–1.0). Matching this to the SFT/eval mix ratio in
+    training.yaml minimizes the amount that ``mix_and_split`` discards. The
+    same subset is always chosen for a given SFT id, so partial resume is
+    safe.
 
     By default uses the ``judge`` role from ``generation.yaml`` (typically
     a smaller / cheaper examiner model). Returns ``{level: n_written}``.
@@ -215,6 +248,11 @@ async def generate_batch(
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
     failures_path = Path(failures_path)
+    # max_tokens=None means "use the default 2048". Callers that need a
+    # bigger budget for /think output (e.g. 9B teachers whose <think> is
+    # verbose enough to truncate the trailing JSON) pass an explicit int.
+    if max_tokens is None:
+        max_tokens = 2048
 
     sft_examples = _iter_sft_examples(Path(sft_dir), cefr_levels)
     by_level: dict[str, list[SFTExample]] = {lvl: [] for lvl in cefr_levels}
@@ -226,7 +264,7 @@ async def generate_batch(
         out_path = output_dir / f"{level}.jsonl"
         done_ids = load_existing_ids(out_path)
 
-        # SFT 풀에서 eval_fraction 만큼만 deterministic 하게 골라 eval 생성.
+        # Deterministically select only eval_fraction of the SFT pool for eval generation.
         pool = by_level[level]
         selected = deterministic_sample(
             pool, eval_fraction, key=lambda ex: ex.id

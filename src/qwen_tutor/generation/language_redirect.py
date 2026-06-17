@@ -34,7 +34,7 @@ from typing import Any
 from pydantic import ValidationError
 
 from qwen_tutor.generation._prompt_select import (
-    render_deployment_system_prompt,
+    render_scenario_deployment_system_prompt,
     render_level_spec,
     render_prompt,
     validate_prompt_has_locale_instruction,
@@ -153,6 +153,7 @@ async def _generate_one(
         cefr_level=seed.cefr_level,
         scenario_type="redirect",
         locale=locale,
+        category=seed.category,
         generation={
             **generation_meta_base,
             "language_trigger": trigger,
@@ -162,8 +163,15 @@ async def _generate_one(
     return SFTExample(
         id=_language_redirect_id(seed_id, trigger, variant),
         metadata=metadata,
-        system_prompt=render_deployment_system_prompt(
-            seed.cefr_level, locale_name=locale
+        system_prompt=render_scenario_deployment_system_prompt(
+            cefr_level=seed.cefr_level,
+            locale_name=locale,
+            topic=seed.topic,
+            subtopics=seed.subtopics,
+            user_role_name=seed.user_role.name,
+            user_role_description=seed.user_role.description,
+            model_role_name=seed.model_role.name,
+            model_role_description=seed.model_role.description,
         ),
         messages=messages,
     )
@@ -207,7 +215,15 @@ async def generate_batch(
     def _level_spec(level: str, locale: str) -> str:
         key = (level, locale)
         if key not in level_spec_cache:
-            level_spec_cache[key] = render_level_spec(level, locale_name=locale)
+            # allow_l1=True so the locale block embedded in the level spec
+            # matches the relaxed block substituted into the outer prompt.
+            # Without this, the prompt contains TWO locale blocks (one
+            # relaxed at the top, one strict inside the level spec) and the
+            # teacher resolves the contradiction randomly — speaks_l1 pass
+            # rate hit a ceiling of ~50% as a result.
+            level_spec_cache[key] = render_level_spec(
+                level, locale_name=locale, allow_l1=True,
+            )
         return level_spec_cache[key]
 
     results: dict[str, int] = {}

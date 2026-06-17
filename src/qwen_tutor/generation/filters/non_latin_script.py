@@ -1,19 +1,20 @@
 """Non-Latin-script filter.
 
-영어 conversational tutor 학습 데이터에는 CJK / Cyrillic / Arabic /
-Devanagari 등 비-Latin 글자가 들어가면 안 됩니다 (대화 본문은 영어, 이름·
-지명은 romanized form 이 원칙). 프롬프트에 명시했지만 teacher 가 가끔
-무시하기 때문에 mechanical guard 로 한 번 더 잡아 줍니다.
+English conversational-tutor training data should never contain non-Latin
+glyphs (CJK / Cyrillic / Arabic / Devanagari, etc.) - dialogue body is
+English, and names / places must be in romanized form. The prompt says so
+explicitly, but teacher models occasionally ignore the instruction, so we
+add a mechanical guard.
 
-이 필터는 SFT / DPO / Evaluation 예시 모두에서 다음 위치를 검사합니다:
-  - user_role.name, model_role.name (있을 경우)
-  - 모든 message 의 content
-  - DPO 의 chosen / rejected message content
-  - SFT 의 system_prompt 도 한 번 더 점검 (보통 안 문제이지만 안전 차원)
+The filter scans these locations in every SFT / DPO / Evaluation example:
+  - user_role.name, model_role.name (when present)
+  - every message's content
+  - DPO chosen / rejected message content
+  - SFT system_prompt (usually safe, but checked as a precaution)
 
-차단 결정: 매칭되는 비-Latin 문자가 단 하나라도 발견되면 fail. score 는
-"발견된 비-Latin 문자의 개수" 의 역수로 계산 (정보용; 임계값에는 사용되지
-않음 — pass/fail 은 binary).
+Reject decision: any non-Latin character match fails the example. ``score``
+is the inverse of the hit count (informational; not used as a threshold -
+pass / fail is binary).
 """
 
 from __future__ import annotations
@@ -27,9 +28,9 @@ from qwen_tutor.generation.filters.base import (
 )
 from qwen_tutor.schemas import DPOExample, EvaluationExample, SFTExample
 
-# 비-Latin script 유니코드 블록들. 좁게 시작해서 필요시 더 넓힐 수 있습니다.
-# Latin-1/Latin Extended/공백/구두점/숫자는 제외하고, 영어 대화에 들어가서
-# 곤란한 스크립트들만 잡습니다.
+# Non-Latin-script Unicode blocks. Starts narrow and can be widened later.
+# Excludes Latin-1 / Latin Extended / whitespace / punctuation / digits so
+# only scripts that should never appear in English dialogue are matched.
 _NON_LATIN_RE = re.compile(
     "["
     "぀-ゟ"   # Hiragana
@@ -57,6 +58,12 @@ _NON_LATIN_RE = re.compile(
     "฀-๿"   # Thai
     "]"
 )
+
+# Used to slice eval-mode assistant turns into post-`</think>` content.
+# The `<think>` reasoning is private examiner thought — the examiner
+# SHOULD reason about non-Latin content to identify it. Only the JSON
+# portion is user-facing and must be script-clean.
+_THINK_CLOSE_RE = re.compile(r"</think\s*>", re.IGNORECASE)
 
 
 def _scan(text: str) -> list[str]:
@@ -116,21 +123,61 @@ class NonLatinScriptFilter(Filter):
         gen_meta = (md.generation or {}) if md is not None and hasattr(md, "generation") else {}
         is_speaks_l1 = isinstance(gen_meta, dict) and gen_meta.get("language_trigger") == "speaks_l1"
 
+        # Eval examples are built from already-filtered SFT transcripts —
+        # the user turn is a verbatim render of an SFT dialogue that
+        # already passed this filter at the SFT stage. Re-scanning it
+        # here would false-positive on input context the assistant only
+        # has to *judge*, not produce. ``source_dialogue_id`` is the
+        # unique-to-EvaluationMetadata field we duck-type on.
+        is_eval = md is not None and hasattr(md, "source_dialogue_id")
+
+        # Redirect-family SFT (single-shot + 4 persistent 3-strike streams):
+        # what the model learns to PRODUCE is the assistant turn; the user
+        # turn is training-time CONTEXT that the model never emits. A
+        # stray non-Latin glyph the teacher may have leaked into a user
+        # turn doesn't teach the model to produce non-Latin — it just
+        # discards an otherwise-valid example. Mirror the same scoping
+        # banned_terms uses: skip user turns for scenario_type=="redirect".
+        scenario_type = getattr(md, "scenario_type", None) if md is not None else None
+        is_redirect = scenario_type == "redirect"
+
         # Messages (SFTExample, EvaluationExample) — list of Message objects.
         msgs = getattr(example, "messages", None) or []
         for i, m in enumerate(msgs):
             if is_speaks_l1 and m.role == "user":
                 continue  # L1 user turn is allowed/required for speaks_l1
-            fields_to_scan.append((f"messages[{i}].content", m.content))
+            if is_redirect and m.role == "user":
+                continue  # user turns are training-time context only
+            if is_eval and m.role == "user":
+                continue  # transcript is pre-filtered
+            content = m.content
+            # For eval examples, the assistant turn is
+            # ``<think>...</think>{json}``. The <think> block is private
+            # examiner reasoning — the examiner SHOULD reason about
+            # banned/non-Latin content to identify it, so filtering that
+            # body defeats the purpose. Only the JSON portion
+            # (post-</think>) is the user-facing structured output that
+            # the trained student will produce; that's what must be
+            # script-clean. Slice to post-</think> for eval-mode
+            # assistant turns; leave non-eval assistant turns intact.
+            if is_eval and m.role == "assistant":
+                close_match = _THINK_CLOSE_RE.search(content)
+                if close_match is not None:
+                    content = content[close_match.end():]
+            fields_to_scan.append((f"messages[{i}].content", content))
 
-        # DPO-specific fields.
+        # DPO-specific fields. ALL THREE are skipped here — non_latin_script
+        # is a no-op on DPO records by design:
+        #   * prompt_messages → derived from already-filtered SFT context.
+        #   * chosen → register pairs use the original SFT assistant turn
+        #     (from ``sft_filtered/``); on-policy pairs use the teacher's
+        #     original turn (also from ``sft_filtered/``). Either way the
+        #     chosen content already passed this filter at the SFT stage.
+        #   * rejected → the whole point of rejected is to be the bad-pattern
+        #     reference. Non-Latin script there is exactly the signal DPO
+        #     uses to push the model away from producing it.
         if isinstance(example, DPOExample):
-            for i, m in enumerate(example.prompt_messages):
-                if is_speaks_l1 and m.role == "user":
-                    continue
-                fields_to_scan.append((f"prompt_messages[{i}].content", m.content))
-            fields_to_scan.append(("chosen.content", example.chosen.content))
-            fields_to_scan.append(("rejected.content", example.rejected.content))
+            pass  # see comment above — DPO content is pre-filtered upstream
 
         offenders: list[tuple[str, list[str]]] = []
         total = 0

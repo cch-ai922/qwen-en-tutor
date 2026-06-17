@@ -63,14 +63,14 @@ else:
     )
 
 # These helpers are style-independent. AXIS_SPOIL_INSTRUCTIONS / SPOIL_AXES /
-# REJECTION_NOTES 는 둘 다 같은 dict 를 보므로 한 번만 import.
+# REJECTION_NOTES are the same dict in both prompt modules, so we import once.
 from qwen_tutor.generation.prompts import (  # noqa: F401, E402
     AXIS_SPOIL_INSTRUCTIONS,
     LOCALE_INSTRUCTION_BLOCK,
     LOCALE_INSTRUCTION_HEADER,
     REJECTION_NOTES,
     SPOIL_AXES,
-    render_deployment_system_prompt,
+    render_scenario_deployment_system_prompt,
     render_level_spec,
     validate_prompt_has_locale_instruction,
 )

@@ -81,6 +81,219 @@ DEFAULT_DEPLOY_BANNED_TERMS = Path("config/banned_terms_deploy.yaml")
 
 
 # ---------------------------------------------------------------------------
+# Persistent-redirect sentinel — the tutor emits this string at the end of
+# its third (and final) refusal turn when the learner has persisted past
+# one redirect on one of the four "important" axes (off-topic safety
+# probes, sustained L1 / English-refusal, sustained "are you AI?", or
+# sustained role-swap attempts). The dispatching layer detects the marker
+# and closes the session.
+#
+# The trained model emits the literal string verbatim — see the
+# ``[persistence]`` block in the deployment system prompt template
+# ([prompts.py](src/qwen_tutor/generation/prompts.py)) and §10.10 in the
+# README for the full design.
+# ---------------------------------------------------------------------------
+
+SESSION_END_AXES = (
+    "persistent_off_topic",
+    "persistent_language_violation",
+    "persistent_persona_break",
+    "persistent_role_swap",
+)
+_SESSION_END_RE = re.compile(
+    r"\[SESSION_END:\s*(persistent_(?:off_topic|language_violation|persona_break|role_swap))\]"
+)
+
+
+def detect_session_end(text: str) -> str | None:
+    """Scan ``text`` for the persistent-redirect sentinel.
+
+    Returns the axis label (e.g. ``"persistent_off_topic"``) when the
+    sentinel is present, or ``None`` if not. The dispatching layer should
+    call this on every tutor reply and end the session on a non-None return.
+    """
+    m = _SESSION_END_RE.search(text)
+    return m.group(1) if m else None
+
+
+# ---------------------------------------------------------------------------
+# Scenario -- the topic + roles a session is grounded in.
+# ---------------------------------------------------------------------------
+
+
+# Training-only seed fields that the deploy runtime ignores when rendering
+# the system prompt but keeps in ``Scenario.metadata`` so callers can read
+# them (CLI uses ``cefr_level`` / ``locale`` here as defaults).
+_SEED_METADATA_FIELDS = ("id", "setting", "cefr_level", "locale", "category")
+
+
+@dataclass
+class Scenario:
+    """Per-session scenario: topic, subtopics, learner role, tutor role.
+
+    Mirrors the (topic, subtopics, user_role, model_role) fields the SFT/DPO
+    training data carried in ``ExampleMetadata``. The values are baked into
+    the deployment system prompt via
+    ``render_scenario_deployment_system_prompt`` so the trained model sees
+    the same shape at inference that it saw at training.
+
+    Field expectations:
+      * ``topic``                 -- 1-line description ("shopping at a wet
+                                     market in Beijing")
+      * ``subtopics``             -- 3-5 short labels ("prices", "freshness",
+                                     "payment methods")
+      * ``user_role_name``        -- the learner's display name
+      * ``user_role_description`` -- 1-line description of the learner persona
+      * ``model_role_name``       -- the tutor's display name (the character
+                                     the model plays in this session)
+      * ``model_role_description``-- 1-line description of the tutor persona
+      * ``metadata``              -- optional bag of source-side fields. Set
+                                     when loaded from a training seed; carries
+                                     ``id`` / ``setting`` / ``cefr_level`` /
+                                     ``locale`` / ``category``. Not used by
+                                     the renderer; callers (e.g. ``run_deploy``)
+                                     read it to default CEFR / locale.
+    """
+
+    topic: str
+    subtopics: list[str]
+    user_role_name: str
+    user_role_description: str
+    model_role_name: str
+    model_role_description: str
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+    @classmethod
+    def from_dict(cls, doc: dict[str, Any]) -> "Scenario":
+        """Construct from a dict (typically loaded from a JSON scenario file).
+
+        Tolerates three shapes:
+          1. flat keys: ``topic``, ``subtopics``, ``user_role_name``, ...
+          2. nested deploy shape: ``{"topic": ..., "user_role": {"name": ...,
+             "description": ...}, "model_role": {...}}`` (the hand-crafted
+             [`scenarios/china_market_a2.json`](scenarios/china_market_a2.json)
+             format).
+          3. **training ``ScenarioSeed`` shape** — same as (2) plus the extra
+             fields ``id`` / ``setting`` / ``cefr_level`` / ``locale`` /
+             ``category``. The extras are captured in ``Scenario.metadata``
+             so ``run_deploy.py`` can default CEFR / locale from them when
+             the user didn't pass ``--cefr`` / ``--locale`` explicitly.
+
+        So you can pass either a single hand-crafted ``scenarios/*.json``
+        file OR a single training-seed dict (one row from
+        ``data/seeds/<level>.jsonl``) without converting first.
+        """
+        def _role(field: str) -> tuple[str, str]:
+            obj = doc.get(field)
+            if isinstance(obj, dict) and "name" in obj and "description" in obj:
+                return obj["name"], obj["description"]
+            # flat fallback
+            return (
+                doc.get(f"{field}_name", ""),
+                doc.get(f"{field}_description", ""),
+            )
+
+        user_name, user_desc = _role("user_role")
+        model_name, model_desc = _role("model_role")
+        subtopics = doc.get("subtopics") or []
+        if isinstance(subtopics, str):
+            subtopics = [s.strip() for s in subtopics.split(",") if s.strip()]
+        # Capture training-only fields if present so CEFR / locale can be
+        # auto-derived later. Empty dict when called with a plain scenario.
+        metadata = {k: doc[k] for k in _SEED_METADATA_FIELDS if k in doc}
+        return cls(
+            topic=doc["topic"],
+            subtopics=list(subtopics),
+            user_role_name=user_name,
+            user_role_description=user_desc,
+            model_role_name=model_name,
+            model_role_description=model_desc,
+            metadata=metadata,
+        )
+
+    @classmethod
+    def from_json_file(cls, path: str | Path) -> "Scenario":
+        """Load a single-object JSON file.
+
+        Accepts both the hand-crafted ``scenarios/*.json`` shape and a
+        seed JSON that was dumped to a single-object file. For multi-line
+        ``data/seeds/<level>.jsonl`` files, use ``from_seed_jsonl`` instead.
+        """
+        with Path(path).open("r", encoding="utf-8") as fh:
+            return cls.from_dict(json.load(fh))
+
+    @classmethod
+    def from_seed_jsonl(
+        cls,
+        path: str | Path,
+        *,
+        seed_id: str | None = None,
+        seed_index: int = 0,
+    ) -> "Scenario":
+        """Load one ``ScenarioSeed`` row out of a training seeds JSONL file.
+
+        ``seed_id`` picks the row whose ``id`` field matches (preferred for
+        reproducibility). If ``seed_id`` is None, ``seed_index`` selects the
+        Nth (0-indexed) non-blank line. Raises ``FileNotFoundError`` if the
+        path is missing, ``ValueError`` if the file is empty, the ``seed_id``
+        is not found, or ``seed_index`` is out of range.
+
+        Use this when the user wants to deploy directly from
+        ``data/seeds/<level>.jsonl`` without converting to a single-file
+        scenario first.
+        """
+        p = Path(path)
+        if not p.exists():
+            raise FileNotFoundError(f"seeds JSONL not found: {p}")
+        rows: list[dict[str, Any]] = []
+        with p.open("r", encoding="utf-8") as fh:
+            for line_no, line in enumerate(fh, start=1):
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    rows.append(json.loads(line))
+                except json.JSONDecodeError as exc:
+                    raise ValueError(
+                        f"{p}:{line_no} malformed JSON: {exc}"
+                    ) from exc
+        if not rows:
+            raise ValueError(f"{p}: contains no non-blank lines")
+        if seed_id is not None:
+            for row in rows:
+                if row.get("id") == seed_id:
+                    return cls.from_dict(row)
+            raise ValueError(
+                f"{p}: no seed with id {seed_id!r} "
+                f"(found {len(rows)} rows; ids start with: "
+                f"{[r.get('id', '?') for r in rows[:5]]}...)"
+            )
+        if not (0 <= seed_index < len(rows)):
+            raise ValueError(
+                f"{p}: seed_index {seed_index} out of range "
+                f"(file has {len(rows)} rows)"
+            )
+        return cls.from_dict(rows[seed_index])
+
+    def validate(self) -> None:
+        """Hard-fail on missing fields so the runtime never builds a half-
+        rendered system prompt that confuses the trained model."""
+        missing = [
+            f for f in (
+                "topic", "user_role_name", "user_role_description",
+                "model_role_name", "model_role_description",
+            ) if not getattr(self, f).strip()
+        ]
+        if missing:
+            raise ValueError(f"Scenario missing required fields: {missing}")
+        if not self.subtopics:
+            raise ValueError(
+                "Scenario.subtopics is empty -- training data always has 3-5 "
+                "subtopics, so the trained distribution expects at least one."
+            )
+
+
+# ---------------------------------------------------------------------------
 # EvaluationResult — what `TutorRuntime.evaluate()` returns
 # ---------------------------------------------------------------------------
 
@@ -196,6 +409,7 @@ class TutorRuntime:
         top_p: float = 0.95,
         enable_safety_filter: bool = True,
         banned_terms_path: str | Path | None = None,
+        scenario: Scenario | None = None,
     ) -> None:
         import torch
         from peft import PeftModel
@@ -249,11 +463,49 @@ class TutorRuntime:
         # max_seq_length here only caps tokenization in format_for_training;
         # we don't call that path at deploy. Pick a generous value.
         self.formatter = ChatFormatter(tokenizer=self.tokenizer, max_seq_length=8192)
-        self.system_prompt = self.formatter._render_deployment_system_prompt(
-            self.cefr_level, locale_name=self.locale
-        )
-        # /think evaluation system prompt — same one the formatter uses at
-        # training time, so the LoRA sees its trained distribution.
+
+        # Scenario routing: if a Scenario was provided, use the scenario-aware
+        # system prompt (matches what SFT/DPO formatter feeds the model). This
+        # is the path the trained model expects. Falling back to the generic
+        # prompt is supported for back-compat but the model will then be
+        # operating outside its trained distribution.
+        self.scenario = scenario
+        if scenario is not None:
+            scenario.validate()
+            from qwen_tutor.generation.prompts import (
+                render_scenario_deployment_system_prompt,
+            )
+
+            self.system_prompt = render_scenario_deployment_system_prompt(
+                cefr_level=self.cefr_level,
+                locale_name=self.locale,
+                topic=scenario.topic,
+                subtopics=scenario.subtopics,
+                user_role_name=scenario.user_role_name,
+                user_role_description=scenario.user_role_description,
+                model_role_name=scenario.model_role_name,
+                model_role_description=scenario.model_role_description,
+            )
+            logger.info(
+                "scenario loaded: topic=%r model_role=%r user_role=%r",
+                scenario.topic, scenario.model_role_name, scenario.user_role_name,
+            )
+        else:
+            from qwen_tutor.generation.prompts import (
+                render_default_scenario_deployment_system_prompt,
+            )
+
+            self.system_prompt = render_default_scenario_deployment_system_prompt(
+                cefr_level=self.cefr_level, locale_name=self.locale
+            )
+            logger.warning(
+                "TutorRuntime started WITHOUT a Scenario. Falling back to a "
+                "neutral default scenario so the model still sees the "
+                "structured deployment prompt it was trained on, but pass "
+                "scenario=Scenario(...) for properly grounded conversations."
+            )
+        # /think evaluation system prompt: locale-aware but scenario-agnostic
+        # (the examiner judges the transcript, doesn't play a role).
         self.evaluation_system_prompt = self.formatter._render_evaluation_system_prompt(
             locale_name=self.locale
         )
@@ -321,6 +573,17 @@ class TutorRuntime:
                     draft = _CANNED_FALLBACK
 
         self.history.append(_Msg(role="assistant", content=draft))
+        # Detect persistent-redirect sentinel so callers that care can end
+        # the session immediately. The sentinel is left IN ``draft`` —
+        # callers that want it stripped from the user-facing surface can
+        # do so themselves by replacing the matched bracket-tag.
+        end_axis = detect_session_end(draft)
+        if end_axis is not None:
+            logger.info(
+                "tutor emitted persistent-redirect sentinel: axis=%s — "
+                "caller should close session",
+                end_axis,
+            )
         return draft
 
     def evaluate(
@@ -361,16 +624,25 @@ class TutorRuntime:
             raise RuntimeError("no user turns in history to evaluate")
 
         target = target_cefr or self.cefr_level
-        transcript = self._render_eval_transcript(target)
+        transcript = self._render_eval_transcript(target_cefr=target)
         chat = [
             {"role": "system", "content": self.evaluation_system_prompt},
             {"role": "user", "content": transcript},
         ]
+        # Honor ``thinking.student_eval`` so deploy-time eval matches the
+        # SFT training-time shape. If the user set ``no_think`` and trained
+        # accordingly, the model emits JSON-only here and the lenient
+        # ``_parse_eval_output`` below handles the missing ``<think>`` block.
+        # If the model was trained for ``think`` but deploy flips to
+        # ``no_think`` (or vice versa) WITHOUT retraining, the output will
+        # be inconsistent — the trained distribution wins.
+        from qwen_tutor.utils.thinking import get_thinking_mode
+
         raw = self._generate_chat(
             chat,
             temperature=temperature,
             max_new_tokens=max_new_tokens,
-            enable_thinking=True,
+            enable_thinking=get_thinking_mode("student_eval") != "no_think",
         )
         reasoning, scores, parse_error = _parse_eval_output(raw)
         return EvaluationResult(
@@ -383,21 +655,38 @@ class TutorRuntime:
 
     # ----- internals ------------------------------------------------------
 
-    def _render_eval_transcript(self, target_cefr: str) -> str:
+    def _render_eval_transcript(self, *, target_cefr: str | None = None) -> str:
         """Build the transcript-style user turn the model was trained on.
 
-        Format mirrors ``qwen_tutor.generation.eval_gen._render_transcript`` so
-        the LoRA's eval mode receives the exact same text shape. ``/no_think``
-        markers from training-time anchoring are stripped — they're a
-        conversation-mode artifact and irrelevant to evaluation.
+        Format mirrors ``qwen_tutor.generation.eval_gen._render_transcript``
+        so the LoRA's eval mode receives the exact same text shape. When a
+        Scenario is set, the assigned topic and subtopics are prepended —
+        the trained model uses these as the reference for the
+        ``topic_adherence`` score. ``/no_think`` markers from training-time
+        anchoring are stripped (they're a conversation-mode artifact).
+
+        ``target_cefr`` is emitted as the first line ("Target CEFR level: X")
+        so the evaluator model knows what level to score against. Mirrors
+        the training-time renderer in eval_gen.py; without this line the
+        EVALUATION_SYSTEM_PROMPT's "given a target CEFR level" clause has
+        no actual data to operate on.
         """
-        lines: list[str] = [f"Target CEFR level: {target_cefr}", "", "Transcript:"]
+        lines: list[str] = []
+        if target_cefr:
+            lines.append(f"Target CEFR level: {target_cefr}")
+        if self.scenario is not None:
+            sc = self.scenario
+            lines.append(f"Tutor role: {sc.model_role_name} -- {sc.model_role_description}")
+            lines.append(f"Learner role: {sc.user_role_description}")
+            lines.append(f"Assigned topic: {sc.topic}")
+            lines.append("Assigned subtopics:")
+            for s in sc.subtopics:
+                lines.append(f"- {s}")
+            lines.append("")
+        lines.append("Transcript:")
         user_idx = 0
         for m in self.history:
             content = m.content
-            # Strip the /no_think anchor we injected on turn 0 — it's a
-            # conversation-mode directive that shouldn't appear in the
-            # transcript the examiner reads.
             if content.lstrip().startswith("/no_think"):
                 content = content.lstrip()[len("/no_think"):].lstrip()
             if m.role == "user":

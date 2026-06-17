@@ -44,7 +44,7 @@ logger = logging.getLogger(__name__)
 def _iter_filtered_records_by_prefix(
     directory: Path, prefix: str
 ) -> Iterable[dict[str, Any]]:
-    """``prefix_*_passed.jsonl`` 패턴의 필터 통과 레코드만 순회."""
+    """Iterate only filtered records matching the ``prefix_*_passed.jsonl`` pattern."""
     if not directory.exists():
         return
     for path in sorted(directory.glob(f"{prefix}_*.jsonl")):
@@ -66,11 +66,21 @@ def _iter_filtered_records_by_prefix(
                     yield example
 
 
-def _load_dpo_by_source(directory: str | Path) -> tuple[list[DPOExample], list[DPOExample]]:
-    """``data/dpo_filtered/`` 에서 register / on_policy 페어를 분리해서 로딩."""
+def _load_dpo_by_source(
+    directory: str | Path,
+) -> tuple[list[DPOExample], list[DPOExample], list[DPOExample]]:
+    """Load register, on_policy, and sentinel pairs separately from
+    ``data/dpo_filtered/``.
+
+    The sentinel pool covers both offline (strip-marker) and on-policy
+    (regen) sentinel pairs emitted by ``sentinel_pairs.py``; they share
+    the ``sentinel_<level>.jsonl`` filename and are distinguished only
+    by id prefix (``dpo_sentinel_offline_`` vs ``dpo_sentinel_onpolicy_``).
+    """
     d = Path(directory)
     register: list[DPOExample] = []
     on_policy: list[DPOExample] = []
+    sentinel: list[DPOExample] = []
     for rec in _iter_filtered_records_by_prefix(d, "register"):
         try:
             register.append(DPOExample.model_validate(rec))
@@ -81,52 +91,115 @@ def _load_dpo_by_source(directory: str | Path) -> tuple[list[DPOExample], list[D
             on_policy.append(DPOExample.model_validate(rec))
         except Exception as exc:  # noqa: BLE001
             logger.warning("dpo loader: dropping malformed on_policy record: %s", exc)
-    return register, on_policy
+    for rec in _iter_filtered_records_by_prefix(d, "sentinel"):
+        try:
+            sentinel.append(DPOExample.model_validate(rec))
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("dpo loader: dropping malformed sentinel record: %s", exc)
+    return register, on_policy, sentinel
 
 
 def load_dpo_examples(directory: str | Path) -> list[DPOExample]:
-    """후방 호환용: register + on_policy 를 무가공으로 합쳐서 반환."""
-    register, on_policy = _load_dpo_by_source(directory)
-    return register + on_policy
+    """Backward-compatible helper: return all three pools concatenated."""
+    register, on_policy, sentinel = _load_dpo_by_source(directory)
+    return register + on_policy + sentinel
 
 
 def _mix_dpo_pools(
     register: list[DPOExample],
     on_policy: list[DPOExample],
+    sentinel: list[DPOExample],
     mix_ratio_register: float,
     mix_ratio_on_policy: float,
+    mix_ratio_sentinel: float,
     seed: int,
+    use_all_data: bool = True,
 ) -> list[DPOExample]:
-    """register / on_policy 두 풀을 mix ratio 에 맞춰 잘라 합칩니다.
+    """Combine the register, on_policy, and sentinel pools.
 
-    더 풍부한 쪽이 학습을 독점하지 않도록 작은 쪽 기준으로 큰 쪽을 trim.
-    한쪽이 비어 있으면 mix ratio 와 무관하게 다른 한쪽을 그대로 사용합니다.
+    Default behavior (``use_all_data=True``): skip the ratio-based
+    trim entirely and return ``register + on_policy + sentinel``
+    unchanged. The mix ratios are still required (sanity-checked, must
+    sum > 0) but have no size effect — they exist so a ratio-aware
+    trim is available without changing config schema if the operator
+    flips ``use_all_data=False``.
+
+    When ``use_all_data=False``: scale every pool so its share of the
+    combined dataset matches its target ratio. The smallest pool that
+    cannot reach its target via shrinking the others sets the overall
+    size; larger pools are subsampled to fit. The sentinel pool is
+    typically the smallest (it has at most one pair per filtered
+    ``persistent_*`` record), so a low ``mix_ratio_sentinel`` is
+    expected — e.g. 0.05–0.10 — so the trimmer does not crater the
+    other pools to match it.
     """
     rng = random.Random(seed)
     rng.shuffle(register)
     rng.shuffle(on_policy)
-
-    if not register or not on_policy:
-        return register + on_policy
-    if mix_ratio_register + mix_ratio_on_policy <= 0:
-        raise ValueError("dpo mix ratios sum to zero")
-    total = mix_ratio_register + mix_ratio_on_policy
-    r_target = mix_ratio_register / total
-    p_target = mix_ratio_on_policy / total
+    rng.shuffle(sentinel)
 
     r_count = len(register)
     p_count = len(on_policy)
-    if (r_count / max(1, p_count)) > r_target / p_target:
-        keep_r = int(p_count * r_target / p_target)
-        register = register[:keep_r]
-    elif (p_count / max(1, r_count)) > p_target / r_target:
-        keep_p = int(r_count * p_target / r_target)
-        on_policy = on_policy[:keep_p]
+    s_count = len(sentinel)
+    total_pre = r_count + p_count + s_count
+
+    targets = {
+        "register": mix_ratio_register,
+        "on_policy": mix_ratio_on_policy,
+        "sentinel": mix_ratio_sentinel,
+    }
+    if sum(targets.values()) <= 0:
+        raise ValueError("dpo mix ratios sum to zero")
+
+    if use_all_data:
+        logger.info(
+            "dpo mix: use_all_data=True -- skipping ratio trim, "
+            "keeping all %d register + %d on_policy + %d sentinel examples "
+            "(natural ratio %.1f%% / %.1f%% / %.1f%%)",
+            r_count, p_count, s_count,
+            100.0 * r_count / max(1, total_pre),
+            100.0 * p_count / max(1, total_pre),
+            100.0 * s_count / max(1, total_pre),
+        )
+        return register + on_policy + sentinel
+
+    # Ratio-trim mode: scale each pool so its share matches its target.
+    # The smallest "binding" pool (where current / target is minimum) sets
+    # the overall scale; the others are trimmed down to match.
+    pools = {"register": register, "on_policy": on_policy, "sentinel": sentinel}
+    counts = {k: len(v) for k, v in pools.items()}
+    total_target = sum(targets.values())
+    norm_targets = {k: t / total_target for k, t in targets.items()}
+
+    # Each non-empty pool implies a feasible total: counts[k] / norm_targets[k].
+    feasible_totals = [
+        counts[k] / norm_targets[k]
+        for k in pools
+        if norm_targets[k] > 0 and counts[k] > 0
+    ]
+    if not feasible_totals:
+        return []
+    target_total = min(feasible_totals)
+    keeps = {k: int(target_total * norm_targets[k]) for k in pools}
+
+    for k in pools:
+        if keeps[k] < counts[k]:
+            dropped = counts[k] - keeps[k]
+            pools[k] = pools[k][: keeps[k]]
+            if dropped > 0:
+                logger.warning(
+                    "dpo mix: trimmed %d %s examples (%d -> %d) to match "
+                    "ratio %.2f. Set dpo.data.use_all_data=true to disable.",
+                    dropped, k, counts[k], keeps[k], norm_targets[k],
+                )
+
     logger.info(
-        "dpo mix: register=%d (from %d)  on_policy=%d (from %d)  ratio=%.2f/%.2f",
-        len(register), r_count, len(on_policy), p_count, r_target, p_target,
+        "dpo mix: register=%d on_policy=%d sentinel=%d  "
+        "targets=%.2f/%.2f/%.2f",
+        len(pools["register"]), len(pools["on_policy"]), len(pools["sentinel"]),
+        norm_targets["register"], norm_targets["on_policy"], norm_targets["sentinel"],
     )
-    return register + on_policy
+    return pools["register"] + pools["on_policy"] + pools["sentinel"]
 
 
 def _stratified_split(
@@ -162,13 +235,16 @@ def _render_dpo_row(
     if tok is None:
         raise RuntimeError("DPO requires a tokenizer on the ChatFormatter")
 
-    # Build the chat messages with the authoritative system prompt and
+    # Build the chat messages with the SCENARIO-AWARE system prompt and
     # /no_think tag on the first user turn (DPO pairs come from
-    # conversation-mode SFT examples). System prompt is rendered for the
-    # DPO example's locale so each pair trains with the right country
-    # grounding.
-    system_content = formatter._render_deployment_system_prompt(
-        ex.metadata.cefr_level, locale_name=ex.metadata.locale
+    # conversation-mode SFT examples). The scenario template includes
+    # topic / subtopics / user_role / model_role from metadata so the model
+    # sees the same prompt at DPO training as at SFT training and at
+    # deploy -- otherwise DPO would train against a generic "patient
+    # tutor" frame even though the chosen/rejected contrast is about
+    # staying on the scenario topic.
+    system_content = formatter._render_scenario_deployment_system_prompt(
+        ex.metadata
     )
     messages: list[dict[str, str]] = [{"role": "system", "content": system_content}]
     first_user_seen = False
@@ -259,17 +335,20 @@ def run_dpo(config_path: str | Path = "config/training.yaml") -> str:
 
     # ---- data --------------------------------------------------------
     data_cfg = dpo_cfg["data"]
-    register, on_policy = _load_dpo_by_source(data_cfg["dpo_filtered_dir"])
+    register, on_policy, sentinel = _load_dpo_by_source(data_cfg["dpo_filtered_dir"])
     logger.info(
-        "loaded DPO: %d register + %d on_policy examples (pre-mix)",
-        len(register), len(on_policy),
+        "loaded DPO: %d register + %d on_policy + %d sentinel examples (pre-mix)",
+        len(register), len(on_policy), len(sentinel),
     )
     examples = _mix_dpo_pools(
         register=register,
         on_policy=on_policy,
-        mix_ratio_register=float(data_cfg.get("mix_ratio_register", 0.70)),
-        mix_ratio_on_policy=float(data_cfg.get("mix_ratio_on_policy", 0.30)),
+        sentinel=sentinel,
+        mix_ratio_register=float(data_cfg.get("mix_ratio_register", 0.65)),
+        mix_ratio_on_policy=float(data_cfg.get("mix_ratio_on_policy", 0.25)),
+        mix_ratio_sentinel=float(data_cfg.get("mix_ratio_sentinel", 0.10)),
         seed=data_cfg["shuffle_seed"],
+        use_all_data=bool(data_cfg.get("use_all_data", True)),
     )
     logger.info("DPO post-mix total: %d examples", len(examples))
     train_examples, val_examples = _stratified_split(

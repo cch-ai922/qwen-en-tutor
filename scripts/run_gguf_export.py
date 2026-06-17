@@ -49,6 +49,10 @@ import sys
 from pathlib import Path
 from typing import Any
 
+# Offline-by-default for the merge step (transformers loads base+adapter).
+os.environ.setdefault("HF_HUB_OFFLINE", "1")
+os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
+
 import yaml
 
 DEFAULT_TRAINING_YAML = Path("config/training.yaml")
@@ -92,6 +96,8 @@ def _build_argparser() -> argparse.ArgumentParser:
                    help="Keep the intermediate merged-safetensors dir after conversion.")
     p.add_argument("--skip-merge", action="store_true",
                    help="Assume --merged-dir already contains a merged model; skip step 1.")
+    p.add_argument("--force-merge", action="store_true",
+                   help="Re-merge even if --merged-dir already looks complete.")
     p.add_argument("--skip-convert", action="store_true",
                    help="Skip the HF-to-GGUF conversion (useful when only re-quantizing).")
     p.add_argument("--verbose", action="store_true")
@@ -115,6 +121,7 @@ def _resolve(args: argparse.Namespace, cfg: dict[str, Any]) -> dict[str, Any]:
         "llama_cpp_repo": args.llama_cpp_repo or ge.get("llama_cpp_repo", "vendor/llama.cpp"),
         "llama_quantize_bin": args.llama_quantize_bin or ge.get("llama_quantize_bin"),
         "skip_merge": args.skip_merge,
+        "force_merge": args.force_merge,
         "skip_convert": args.skip_convert,
     }
     if not out["base_model"]:
@@ -128,17 +135,53 @@ def _resolve(args: argparse.Namespace, cfg: dict[str, Any]) -> dict[str, Any]:
 
 
 def _find_convert_script(llama_cpp_repo: Path) -> Path:
-    """Locate llama.cpp's convert_hf_to_gguf.py inside the checkout."""
-    candidates = [
-        llama_cpp_repo / "convert_hf_to_gguf.py",
-        llama_cpp_repo / "convert-hf-to-gguf.py",  # older name
-    ]
-    for c in candidates:
-        if c.exists():
-            return c
+    """Locate llama.cpp's convert_hf_to_gguf.py inside the checkout.
+
+    Searches the repo root first, then common subdirectories (people often
+    clone into a wrapper folder), and finally recurses up to 3 levels deep
+    as a last resort. Both the new (``convert_hf_to_gguf.py``) and old
+    (``convert-hf-to-gguf.py``) script names are accepted.
+    """
+    if not llama_cpp_repo.exists():
+        raise SystemExit(
+            f"ERROR: --llama-cpp-repo path does not exist: {llama_cpp_repo}"
+        )
+
+    names = ("convert_hf_to_gguf.py", "convert-hf-to-gguf.py")
+    # 1) Top-level check.
+    for name in names:
+        p = llama_cpp_repo / name
+        if p.exists():
+            return p
+    # 2) Common nested layouts.
+    nested_dirs = ("llama.cpp", "src", "tools", "scripts", "python")
+    for sub in nested_dirs:
+        for name in names:
+            p = llama_cpp_repo / sub / name
+            if p.exists():
+                return p
+    # 3) Last resort: shallow recursive walk (depth <= 3).
+    for name in names:
+        for hit in llama_cpp_repo.rglob(name):
+            depth = len(hit.relative_to(llama_cpp_repo).parts)
+            if depth <= 4:  # parts include the filename, so dir-depth <= 3
+                return hit
+
+    # Failed -- dump what's actually in the repo root for diagnostics.
+    try:
+        entries = sorted(
+            p.name + ("/" if p.is_dir() else "")
+            for p in llama_cpp_repo.iterdir()
+        )
+        listing = "\n  ".join(entries[:40])
+    except OSError as exc:
+        listing = f"(could not list directory: {exc})"
     raise SystemExit(
-        f"ERROR: convert_hf_to_gguf.py not found under {llama_cpp_repo}. "
-        f"Clone llama.cpp there or pass --llama-cpp-repo."
+        f"ERROR: convert_hf_to_gguf.py not found under {llama_cpp_repo}.\n"
+        f"Looked in the root, common subdirs ({', '.join(nested_dirs)}), "
+        f"and recursed up to 3 levels.\n"
+        f"Directory contents:\n  {listing}\n"
+        f"If the script lives deeper, pass --llama-cpp-repo pointing at its parent dir."
     )
 
 
@@ -171,15 +214,34 @@ def _find_quantize_bin(explicit: str | None) -> Path:
 # ---------------------------------------------------------------------------
 
 
+def _merged_dir_looks_complete(merged_dir: Path) -> bool:
+    """Heuristic: merged_dir is usable if it has config.json + at least one safetensors shard."""
+    if not merged_dir.exists() or not merged_dir.is_dir():
+        return False
+    has_config = (merged_dir / "config.json").exists()
+    has_weights = any(merged_dir.glob("*.safetensors"))
+    return has_config and has_weights
+
+
 def step_merge(opts: dict[str, Any]) -> Path:
     merged_dir = Path(opts["merged_dir"]).resolve()
     if opts["skip_merge"]:
-        if not merged_dir.exists():
+        if not _merged_dir_looks_complete(merged_dir):
             raise SystemExit(
-                f"--skip-merge passed but {merged_dir} doesn't exist. "
-                f"Run without --skip-merge first."
+                f"--skip-merge passed but {merged_dir} doesn't look like a complete "
+                f"merged model (need config.json + *.safetensors). "
+                f"Run scripts/run_merge.py first."
             )
-        logger.info("[step 1/3] skipping merge; using existing %s", merged_dir)
+        logger.info("[step 1/3] skipping merge (--skip-merge); using existing %s", merged_dir)
+        return merged_dir
+
+    # Auto-skip: if the merged dir already looks complete, reuse it unless --force-merge.
+    if _merged_dir_looks_complete(merged_dir) and not opts["force_merge"]:
+        logger.info(
+            "[step 1/3] %s already contains a merged model; reusing it. "
+            "Pass --force-merge to redo.",
+            merged_dir,
+        )
         return merged_dir
 
     from qwen_tutor.training.merge import merge_lora
@@ -257,8 +319,12 @@ def step_quantize(opts: dict[str, Any], src_gguf: Path) -> Path | None:
     return out_gguf
 
 
-def step_cleanup(opts: dict[str, Any], merged_dir: Path) -> None:
-    if opts["keep_merged"] or opts["skip_merge"]:
+def step_cleanup(opts: dict[str, Any], merged_dir: Path, merged_was_reused: bool) -> None:
+    # Don't delete if:
+    #  - user wants to keep it (--keep-merged)
+    #  - user is iterating and provided it themselves (--skip-merge)
+    #  - we auto-reused an existing dir (deleting would force re-merge next run)
+    if opts["keep_merged"] or opts["skip_merge"] or merged_was_reused:
         return
     logger.info("removing intermediate merged dir %s (keep_merged=false)", merged_dir)
     shutil.rmtree(merged_dir, ignore_errors=True)
@@ -281,10 +347,17 @@ def main() -> int:
     if not Path(opts["adapter_path"]).exists() and not opts["skip_merge"]:
         raise SystemExit(f"ERROR: adapter not found: {opts['adapter_path']}")
 
+    # Track whether step_merge actually re-ran or just reused an existing dir,
+    # so cleanup knows not to delete a dir the user is iterating against.
+    merged_dir_resolved = Path(opts["merged_dir"]).resolve()
+    merged_was_reused = (
+        opts["skip_merge"]
+        or (_merged_dir_looks_complete(merged_dir_resolved) and not opts["force_merge"])
+    )
     merged_dir = step_merge(opts)
     f16_gguf = step_convert(opts, merged_dir)
     quant_gguf = step_quantize(opts, f16_gguf)
-    step_cleanup(opts, merged_dir)
+    step_cleanup(opts, merged_dir, merged_was_reused)
 
     print("\n=== GGUF export complete ===")
     print(f"  base GGUF        : {f16_gguf}")

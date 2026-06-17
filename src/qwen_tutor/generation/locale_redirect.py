@@ -28,7 +28,7 @@ from typing import Any
 from pydantic import ValidationError
 
 from qwen_tutor.generation._prompt_select import (
-    render_deployment_system_prompt,
+    render_scenario_deployment_system_prompt,
     render_level_spec,
     render_prompt,
     validate_prompt_has_locale_instruction,
@@ -51,7 +51,8 @@ DEFAULT_SEEDS_DIR = Path("data/seeds")
 DEFAULT_OUTPUT_DIR = Path("data/sft_raw")
 DEFAULT_FAILURES_PATH = Path("data/locale_redirect_failures.jsonl")
 
-# 어떤 종류의 locale 위반을 학습자가 흘리는지. cycle 로 시드 간 변화를 줍니다.
+# Which kind of locale violation the learner will casually make. Cycle
+# through seed selections for variety.
 LOCALE_TRIGGER_KINDS: tuple[str, ...] = ("food", "place", "brand", "person")
 
 
@@ -138,8 +139,9 @@ async def _generate_one(
         user_role=seed.user_role,
         model_role=seed.model_role,
         cefr_level=seed.cefr_level,
-        scenario_type="redirect",  # banned_terms 필터가 user turn skip 하도록
+        scenario_type="redirect",  # so banned_terms filter skips user turns
         locale=locale,
+        category=seed.category,
         generation={
             **generation_meta_base,
             "locale_trigger": trigger,
@@ -149,8 +151,15 @@ async def _generate_one(
     return SFTExample(
         id=_locale_redirect_id(seed_id, trigger, variant),
         metadata=metadata,
-        system_prompt=render_deployment_system_prompt(
-            seed.cefr_level, locale_name=locale
+        system_prompt=render_scenario_deployment_system_prompt(
+            cefr_level=seed.cefr_level,
+            locale_name=locale,
+            topic=seed.topic,
+            subtopics=seed.subtopics,
+            user_role_name=seed.user_role.name,
+            user_role_description=seed.user_role.description,
+            model_role_name=seed.model_role.name,
+            model_role_description=seed.model_role.description,
         ),
         messages=messages,
     )
@@ -172,9 +181,11 @@ async def generate_batch(
 ) -> dict[str, int]:
     """Generate locale-redirect dialogues for a fraction of seeds.
 
-    ``locale_redirect_fraction`` = 시드 중 locale-redirect 변형을 만들 비율.
-    ``dialogues_per_seed`` >= 2 면 같은 (seed, trigger) 조합으로 그만큼 변종을
-    생성. ``trigger`` 는 (seed, variant) 쌍 전체에 대해 cyclic 으로 배정.
+    ``locale_redirect_fraction`` is the fraction of seeds to turn into
+    locale-redirect variants.
+    If ``dialogues_per_seed`` >= 2, the same ``(seed, trigger)`` combination
+    is generated multiple times as variants. ``trigger`` is assigned cyclically
+    across the full ``(seed, variant)`` sequence.
 
     Returns ``{level: n_written}`` for this run.
     """

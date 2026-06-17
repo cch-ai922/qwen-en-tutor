@@ -36,7 +36,9 @@ from collections.abc import Iterable
 from pathlib import Path
 from typing import Any, Protocol, get_args
 
-from qwen_tutor.generation.prompts import render_deployment_system_prompt
+from qwen_tutor.generation.prompts import (
+    render_scenario_deployment_system_prompt,
+)
 from qwen_tutor.generation.teacher import TeacherClient, build_teacher_from_config
 from qwen_tutor.schemas import (
     DPOExample,
@@ -52,6 +54,7 @@ from qwen_tutor.utils.runner import (
     gather_with_concurrency,
     load_existing_ids,
 )
+from qwen_tutor.utils.thinking import with_thinking_directive
 
 logger = logging.getLogger(__name__)
 
@@ -88,33 +91,30 @@ class TargetModelClient(Protocol):
 # ---------------------------------------------------------------------------
 
 
-# Raw judge prompt with locale placeholders. The dynamic placeholders
-# ``{cefr_level}`` / ``{context}`` / ``{candidate_a}`` / ``{candidate_b}``
-# stay as .format() placeholders that callers fill per call.
+# Judge prompt — instructions ONLY. The per-call data (CEFR level, dialogue
+# context, the two candidate assistant turns) arrives in the USER message
+# constructed by ``_format_judge_user_message``. Splitting like this avoids
+# the small-model confusion we hit in eval_gen (model wastes its <think>
+# budget hunting for the data when system=everything / user=empty).
 _JUDGE_PROMPT_RAW = (
     "You are judging two candidate assistant turns for an English-tutor\n"
-    "conversation with {country_adjective} {learner_description}\n"
-    "at CEFR level {cefr_level}. The candidates were produced for the same\n"
-    "prompt context; one is from a strong reference model, the other from a\n"
-    "model currently being trained. You do not know which is which - judge\n"
-    "purely on output quality.\n"
+    "conversation with {country_adjective} {learner_description}. The two\n"
+    "candidates were produced for the same prompt context; one is from a\n"
+    "strong reference model, the other from a model currently being trained.\n"
+    "You do not know which is which - judge purely on output quality.\n"
     "\n"
-    "Dialogue context (up to the turn under judgment):\n"
-    "{context}\n"
+    "The input — target CEFR level, the dialogue context, and the two\n"
+    "candidate assistant turns — is delivered as the USER message\n"
+    "immediately following these instructions.\n"
     "\n"
-    "Candidate A:\n"
-    "{candidate_a}\n"
-    "\n"
-    "Candidate B:\n"
-    "{candidate_b}\n"
-    "\n"
-    "Evaluate against ALL of these criteria simultaneously:\n"
+    "Evaluate the two candidates against ALL of these criteria simultaneously:\n"
     "\n"
     "  - locale: {country_adjective}-grounded (names, places, foods,\n"
     "    transit, currency, cultural items). "
     "{avoid_cultures_phrase} defaults are a major demerit.\n"
     "  - cefr_register: vocabulary, sentence length, grammar appropriate for\n"
-    "    {cefr_level}. Over-shoot and under-shoot are both demerits.\n"
+    "    the target CEFR level shown in the USER message. Over-shoot and\n"
+    "    under-shoot are both demerits.\n"
     "  - naturalness: conversational, register-appropriate. Textbook-stiff\n"
     "    phrasing is a demerit.\n"
     "  - pedagogy: engages the learner, asks follow-ups, gently recasts at\n"
@@ -136,20 +136,23 @@ _JUDGE_PROMPT_RAW = (
     "  off_topic             | drifts out of scenario, touches banned topics\n"
     "  language_violation    | tutor leaves English (translates to L1 or code-switches)\n"
     "  persona_break         | tutor leaks AI / chatbot scaffolding, breaks role\n"
+    "  cave_on_persistence   | engages with substance after the user persists (was meant to refuse)\n"
+    "  verbatim_repeat       | uses a generic boilerplate refusal that ignores the specific scenario\n"
+    "  lecture_on_persistence| stiff cold formal refusal citing 'guidelines' / 'policy' / 'my role'\n"
     "\n"
     "Output STRICT JSON only, no fences, no prose:\n"
     "\n"
-    '{{"winner": "A" | "B" | "tie",\n'
+    '{"winner": "A" | "B" | "tie",\n'
     '  "margin": 1 | 2 | 3,\n'
     '  "reason_axis": "<one of the eight axis labels above>",\n'
-    '  "note": "<one short sentence>"}}\n'
+    '  "note": "<one short sentence>"}\n'
 )
 
 
 def _render_judge_prompt(locale_name: str | None = None) -> str:
-    """Substitute locale placeholders for the given locale; leave the
-    per-call placeholders (``{cefr_level}`` / ``{context}`` /
-    ``{candidate_a}`` / ``{candidate_b}``) for the caller's .format().
+    """Substitute locale placeholders for the given locale. No per-call
+    placeholders remain — the dynamic data goes in the USER message via
+    ``_format_judge_user_message``.
     """
     from qwen_tutor.locale import get_locale
 
@@ -160,6 +163,28 @@ def _render_judge_prompt(locale_name: str | None = None) -> str:
         .replace("{learner_description}", loc.learner_description)
         .replace("{avoid_cultures_phrase}", loc.avoid_cultures_phrase)
         .replace("{avoided_topics_sentence}", loc.avoided_topics_sentence)
+    )
+
+
+def _format_judge_user_message(
+    cefr_level: str, context: str, candidate_a: str, candidate_b: str
+) -> str:
+    """Build the USER message that pairs with the judge system prompt.
+
+    Mirrors the (instructions, data) split used in eval_gen so small judge
+    models don't waste their <think> budget hunting for inputs.
+    """
+    return (
+        f"Target CEFR level: {cefr_level}\n"
+        f"\n"
+        f"Dialogue context (up to the turn under judgment):\n"
+        f"{context}\n"
+        f"\n"
+        f"Candidate A:\n"
+        f"{candidate_a}\n"
+        f"\n"
+        f"Candidate B:\n"
+        f"{candidate_b}"
     )
 
 
@@ -182,11 +207,32 @@ def _pick_assistant_turn_index(sft: SFTExample) -> int:
     Hash-based so a re-run picks the same turn for the same SFT id.
     Skips the very first assistant turn (which is usually a greeting
     that's hard to differentiate) when more than one is available.
+
+    For ``persistent_*`` dialogues, also excludes the sentinel-bearing
+    turn (recorded as ``generation["sentinel_turn"]``). The sentinel
+    turn has a separate DPO pool (``sentinel_pairs.py``) where the
+    chosen/rejected contrast is the literal ``[SESSION_END: <axis>]``
+    marker rather than the judge-evaluated register quality on which
+    this module operates. Mixing the two contrasts inside a single
+    judge-mediated pair would muddy the signal: the judge does not score
+    sentinel emission, only response quality. The 3 earlier refusal
+    turns of a persistent dialogue are still eligible here and carry
+    the register signal we want to reinforce.
     """
     idxs = [i for i, m in enumerate(sft.messages) if m.role == "assistant"]
     if not idxs:
         raise ValueError("SFT example has no assistant turn")
+    sentinel_turn = None
+    gen = sft.metadata.generation
+    if isinstance(gen, dict):
+        st = gen.get("sentinel_turn")
+        if isinstance(st, int):
+            sentinel_turn = st
     candidates = idxs[1:] if len(idxs) > 1 else idxs
+    if sentinel_turn is not None:
+        filtered = [i for i in candidates if i != sentinel_turn]
+        if filtered:
+            candidates = filtered
     h = int(hashlib.sha256(sft.id.encode("utf-8")).hexdigest()[:8], 16)
     return candidates[h % len(candidates)]
 
@@ -234,10 +280,33 @@ def _parse_judge_verdict(raw: str) -> dict[str, Any] | None:
 def _iter_filtered_sft(
     sft_filtered_dir: Path, cefr_levels: list[str]
 ) -> list[tuple[str, SFTExample]]:
-    """Walk passed-only outputs from the filter pipeline."""
+    """Walk passed-only outputs from the filter pipeline.
+
+    Reads every SFT prefix the filter writes — not just ``normal`` and
+    ``redirect`` — so on-policy DPO sees the full range of natural
+    assistant register that the policy needs to prefer over spoiled
+    register. The 4 ``persistent_*`` streams are included because each
+    contains 4-5 natural refusal turns whose register matters at deploy;
+    ``_pick_assistant_turn_index`` excludes the sentinel-bearing turn
+    so we never reinforce a position-bound sentinel emission.
+    """
     out: list[tuple[str, SFTExample]] = []
+    prefixes = (
+        "normal",
+        "redirect",
+        "locale_redirect",
+        "pedagogy_redirect",
+        "language_redirect",
+        "persona_redirect",
+        "topic_redirect",
+        "role_swap_redirect",
+        "persistent_off_topic",
+        "persistent_language_violation",
+        "persistent_persona_break",
+        "persistent_role_swap",
+    )
     for level in cefr_levels:
-        for prefix in ("normal", "redirect"):
+        for prefix in prefixes:
             path = sft_filtered_dir / f"{prefix}_{level}_passed.jsonl"
             if not path.exists():
                 continue
@@ -273,7 +342,6 @@ async def _generate_one_pair(
     sft: SFTExample,
     target: TargetModelClient,
     judge: TeacherClient,
-    deployment_system_prompt_template: str,
     *,
     min_margin: int,
     target_max_tokens: int,
@@ -293,20 +361,20 @@ async def _generate_one_pair(
 
     teacher_turn = sft.messages[turn_idx]
     prefix_messages = sft.messages[:turn_idx]
+    locale_name = sft.metadata.locale
     # Per-SFT-example locale: pick the right deployment system prompt for
     # this example's country so the policy regenerates with the correct
     # grounding.
-    locale_name = sft.metadata.locale
-    if locale_name:
-        from qwen_tutor.generation.prompts import render_deployment_system_prompt
-
-        system_prompt = render_deployment_system_prompt(
-            sft.metadata.cefr_level, locale_name=locale_name
-        )
-    else:
-        system_prompt = deployment_system_prompt_template.format(
-            cefr_level=sft.metadata.cefr_level
-        )
+    system_prompt = render_scenario_deployment_system_prompt(
+        cefr_level=sft.metadata.cefr_level,
+        locale_name=locale_name,
+        topic=sft.metadata.topic,
+        subtopics=sft.metadata.subtopics,
+        user_role_name=sft.metadata.user_role.name,
+        user_role_description=sft.metadata.user_role.description,
+        model_role_name=sft.metadata.model_role.name,
+        model_role_description=sft.metadata.model_role.description,
+    )
 
     # Have the policy regenerate the assistant turn given the same prefix.
     try:
@@ -334,8 +402,14 @@ async def _generate_one_pair(
     cand_b = policy_text if teacher_is_a else teacher_turn.content
 
     # Per-locale judge prompt — judge weighs "is this {country}-grounded?"
-    # against the example's locale, not against a baked-in default.
-    prompt = _render_judge_prompt(locale_name).format(
+    # against the example's locale, not against a baked-in default. System
+    # carries instructions only; the dynamic data (CEFR, context, candidates)
+    # goes in the USER message so the judge model doesn't waste its <think>
+    # budget hunting for inputs (same fix applied to eval_gen).
+    system_prompt_judge = with_thinking_directive(
+        _render_judge_prompt(locale_name), role="judge"
+    )
+    judge_user_message = _format_judge_user_message(
         cefr_level=sft.metadata.cefr_level,
         context=_format_context(prefix_messages),
         candidate_a=cand_a,
@@ -343,8 +417,8 @@ async def _generate_one_pair(
     )
     try:
         raw = await judge.generate(
-            system=prompt,
-            messages=[],
+            system=system_prompt_judge,
+            messages=[Message(role="user", content=judge_user_message)],
             cacheable_prefix=None,
             max_tokens=judge_max_tokens,
             temperature=judge_temperature,
@@ -400,6 +474,8 @@ async def _generate_one_pair(
         model_role=sft.metadata.model_role,
         cefr_level=sft.metadata.cefr_level,
         scenario_type=sft.metadata.scenario_type,
+        locale=sft.metadata.locale,
+        category=sft.metadata.category,
         generation={
             **generation_meta_base,
             "source_sft_id": sft.id,
@@ -432,7 +508,6 @@ async def _generate_one_pair(
 
 async def generate_batch(
     target: TargetModelClient,
-    deployment_system_prompt_template: str,
     *,
     cefr_levels: list[str] | None = None,
     sft_filtered_dir: str | Path = DEFAULT_SFT_FILTERED_DIR,
@@ -446,7 +521,7 @@ async def generate_batch(
     concurrency: int = 4,
     target_max_tokens: int = 320,
     target_temperature: float = 0.7,
-    judge_max_tokens: int = 400,
+    judge_max_tokens: int = 2048,
     judge_temperature: float = 0.0,
 ) -> dict[str, int]:
     """Generate on-policy DPO pairs from the current policy.
@@ -495,7 +570,6 @@ async def generate_batch(
                 sft=ex,
                 target=target,
                 judge=judge,
-                deployment_system_prompt_template=deployment_system_prompt_template,
                 min_margin=min_margin,
                 target_max_tokens=target_max_tokens,
                 target_temperature=target_temperature,

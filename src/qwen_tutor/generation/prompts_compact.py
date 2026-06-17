@@ -1,25 +1,26 @@
-"""prompts_compact.py  -  소형 로컬 teacher 용 짧은 prompt 변형.
+"""prompts_compact.py  -  Short prompt variants for small local teachers.
 
-기본 ``prompts.py`` 는 강한 long-form instruction-following (Claude Opus,
-GPT-4o) 을 가정한 150-300 줄 prompt 입니다. llama.cpp 로 띄운 20B 급
-로컬 teacher 에서는
+The base ``prompts.py`` assumes strong long-form instruction-following
+(Claude Opus, GPT-4o) with 150-300 line prompts. For a 20B-class local
+teacher running on llama.cpp,
 
-  * 긴 prompt 가 context budget 을 잡아먹고
-  * 모델이 중간에 thread 를 잃고
-  * "final check" 섹션이 무시되는
+  * long prompts eat the context budget,
+  * the model often loses the thread mid-dialogue,
+  * the "final check" section tends to be ignored.
 
-경향이 있습니다. 이 모듈은 같은 ``.format()`` placeholder 이름을 그대로
-유지하면서 짧고 명령형으로 다시 쓴 prompt 묶음을 제공합니다.
+This module provides a shorter, imperative rewrite of the prompts while
+keeping the same ``.format()`` placeholder names.
 
-설계는 ``prompts.py`` 와 동일합니다:
+The design matches ``prompts.py``:
 
-  * locale 정보는 ``config/locale.yaml`` 에서 옴 (정적 도시/음식 리스트 없음).
-  * ``{country}``, ``{country_adjective}`` 같은 locale placeholder 는
-    모듈 import 시점에 LOCALE 값으로 ``str.replace`` 됩니다.
-  * ``{N}``, ``{level}``, ``{scenario_json}`` 등 동적 placeholder 는
-    호출자가 ``.format()`` 으로 채웁니다.
+  * locale information comes from ``config/locale.yaml`` (no static city/food lists).
+  * locale placeholders like ``{country}``, ``{country_adjective}`` are
+    replaced with LOCALE values via ``str.replace`` at module import time.
+  * dynamic placeholders like ``{N}``, ``{level}``, ``{scenario_json}`` are
+    filled by the caller via ``.format()``.
 
-활성화: ``QWEN_TUTOR_PROMPTS=compact`` 환경 변수 (``_prompt_select.py``).
+Activate with ``QWEN_TUTOR_PROMPTS=compact`` environment variable
+(``_prompt_select.py``).
 """
 
 from __future__ import annotations
@@ -39,12 +40,12 @@ from qwen_tutor.generation.prompts import (
 
 
 # ---------------------------------------------------------------------------
-# 모든 compact prompt 끝에 붙는 anti-failure-mode 짧은 블록
+# Short anti-failure-mode block appended to every compact prompt
 # ---------------------------------------------------------------------------
-# avoid_cultures_phrase 는 ``config/locale.yaml`` 의 avoid_default_cultures
-# 에서 옵니다. 기본값 "American or European", 비워 두면 "Western".
-# 이 raw 템플릿에는 ``{avoid_cultures_phrase}`` 를 그대로 두고, 런타임에
-# locale 별로 ``_localize_with`` 가 채워 넣게 합니다. (multi-locale 지원).
+# avoid_cultures_phrase comes from avoid_default_cultures in ``config/locale.yaml``.
+# The default is "American or European"; if empty it becomes "Western".
+# This raw template keeps ``{avoid_cultures_phrase}`` as-is, and runtime
+# locale-specific rendering fills it via ``_localize_with``. (Supports multi-locale.)
 _COMPACT_ANTI_FAIL_RAW = (
     "HARD RULES - VIOLATING ANY OF THESE INVALIDATES THE OUTPUT:\n"
     "- All proper nouns (names, cities, foods, neighborhoods, brands,\n"
@@ -59,6 +60,23 @@ _COMPACT_ANTI_FAIL_RAW = (
     "- Do not default to the capital of {country} for more than ~1/3 of\n"
     "  items. Spread across the country.\n"
     "- {avoided_topics_sentence}\n"
+    "- CONTRACTIONS ARE MANDATORY at A2+ wherever the form fits. Pure\n"
+    "  'I am / it is / we will / do not / cannot' reads as textbook and\n"
+    "  fails the naturalness filter. Use I'm, it's, you're, we're,\n"
+    "  they're, that's, here's, there's, I'll, we'll, I've, don't,\n"
+    "  doesn't, didn't, can't, won't, isn't, aren't, wasn't.\n"
+    "    STILTED (FAIL): \"I am happy. We are going. It is nice.\"\n"
+    "    NATURAL  (PASS): \"I'm happy. We're going. It's nice.\"\n"
+    "  At A1 contracted + uncontracted may mix. At B1+ contractions\n"
+    "  should be the dominant form.\n"
+    "- DISCOURSE MARKERS: every assistant turn of 2+ sentences at A2+\n"
+    "  MUST include at least ONE marker. Choose from: well, actually,\n"
+    "  you know, I think, honestly, of course, by the way, I mean, to\n"
+    "  be honest, oh, anyway. Zero markers reads as stilted and is\n"
+    "  rejected by the filter.\n"
+    "    STILTED (FAIL): \"Yes. The tea is good. You should try it.\"\n"
+    "    NATURAL  (PASS): \"Yes! Well, the tea's good — you know, you\n"
+    "                     should really try it.\"\n"
     "- Output STRICT JSON ONLY. No prose before or after. No code fences."
 )
 
@@ -90,6 +108,15 @@ EACH SCENARIO is a JSON object with EXACTLY these fields:
   - model_role: {{"name": "<role label>", "description": "<one sentence>"}}
   - setting: 1-2 sentences specifying city, neighborhood, time of day, season
   - cefr_level: must equal "{level}" exactly
+
+LIFE-DOMAIN CATEGORY (one per scenario, in order):
+Each position in the batch is pre-assigned a life domain. Pick a topic
+that fits the category for that position. Available domains:
+food_and_dining, family_and_relationships, work_and_education,
+travel_and_transit, shopping_and_services, health_and_wellbeing,
+home_and_neighborhood, hobbies_and_leisure, nature_and_weather,
+civic_life. Assignments for this batch:
+{categories_block}
 
 VARIETY (across the {N} scenarios in this batch):
 - No two scenarios share the same topic.
@@ -147,12 +174,30 @@ GROUNDING (use your own knowledge of {country}):
 - Real neighborhoods, foods, transit, currency typical of {country}.
 - Weather appropriate to the city + season in the scenario.
 
-REGISTER:
-- Assistant English stays within CEFR {level} (vocabulary band,
-  sentence length, grammar scope).
-- Learner (user) makes realistic small errors at lower levels
-  (article omission, simple-past confusion). At C1/C2 the learner
-  speaks fluently.
+REGISTER (most-rejected category — read carefully):
+- CONTRACTIONS are mandatory at A2+ wherever the form fits. Pure
+  "I am / it is / we are / do not / cannot" reads as textbook and
+  fails the naturalness filter.
+    STILTED (rejected): "I am happy. We are going to the market. It is busy."
+    NATURAL (passes):  "I'm happy. We're going to the market. It's busy."
+  Forms to use: I'm, it's, you're, we're, they're, that's, here's,
+  there's, I'll, we'll, you'll, I've, you've, don't, doesn't, didn't,
+  can't, won't, isn't, aren't, wasn't, weren't. A1 may mix contracted
+  and uncontracted; B1+ contractions should be the dominant form.
+
+- DISCOURSE MARKERS: every assistant turn of 2+ sentences at A2+ MUST
+  include at least one. Choose from: well, actually, you know, I think,
+  honestly, of course, by the way, I mean, to be honest, oh, anyway,
+  right.
+    STILTED (rejected): "Yes. The dumplings are fresh. You should try them."
+    NATURAL (passes):  "Yes! Well, the dumplings are fresh — you know,
+                       you should really try them."
+
+- Assistant English stays within CEFR {level} vocabulary + grammar.
+  Contracting "I am" → "I'm" doesn't change the level.
+- Learner (user) makes realistic small errors at A1-A2 (article
+  omission, simple-past confusion). At C1/C2 the learner speaks
+  fluently.
 - Gentle recasting at A1-A2; light explanation at B1+; natural
   conversation at C1+.
 - NO bullet lists, NO headings, NO markdown inside any content field.
@@ -270,10 +315,20 @@ CEFR LEVEL SPEC for {level}:
 {level_spec_with_locale_instruction}
 
 GRACEFUL HANDLING RULES:
-- Tutor briefly acknowledges what the learner said (one phrase).
+- Tutor briefly acknowledges what the learner said with a GENERIC
+  phrase. CRITICAL: do NOT name the {avoid_cultures_phrase} entity in
+  the tutor's reply. Repeating it ("Oh, pizza! ...", "New York is a
+  cool city, but ...") propagates the Western reference into the
+  tutor's training signal and gets the example rejected by the
+  locale filter.
+    BAD (rejected):  "Oh, pizza! We don't have that here much, but
+                      jianbing is popular too."
+    GOOD (passes):   "Oh, interesting! Well, jianbing is popular here
+                      too — have you tried it?"
 - Tutor either continues the conversation as-is OR weaves in a
-  {country_adjective} parallel without making it the topic (e.g. "Oh,
-  pizza! We don't have that here much, but jianbing is popular too.").
+  {country_adjective} parallel without making it the topic. Use
+  generic acknowledgments like "Oh, interesting!", "I see!",
+  "That sounds nice!" instead of repeating the entity.
 - Tutor's OWN proper nouns (places, foods, names) stay
   {country_adjective}.
 - NO "we are talking about {country}, use {country_adjective}
@@ -433,7 +488,7 @@ HANDLING RULES:
 
 HARD FAIL CASES (will be auto-rejected) — only for speaks_l1:
 - The "L1 turn" is in English.
-- The "L1 turn" is romanized pinyin / romaji / romanized Korean.
+- The "L1 turn" is romanized pinyin / romaji / romanized Singapore.
 - The tutor echoes the learner's previous English back verbatim with
   "you could say in English: '<same sentence>'".
 
@@ -538,6 +593,268 @@ DIALOGUE_PROMPT_PERSONA_REDIRECT = _with_no_think(_localize(_DIALOGUE_PROMPT_PER
 
 
 # ---------------------------------------------------------------------------
+# 3f) DIALOGUE_PROMPT_TOPIC_REDIRECT (compact) - user HARD-drifts off topic,
+#     tutor briefly acknowledges + bridges back. Soft daily-life small talk
+#     is NOT what this trains (system prompt at deploy permits those).
+# ---------------------------------------------------------------------------
+
+_DIALOGUE_PROMPT_TOPIC_REDIRECT = (
+    """\
+Write a {min_turns}-{max_turns} turn English conversation between {country_adjective}
+{learner_description} at CEFR level {level} and the partner specified
+below. SOMEWHERE IN THE MIDDLE (around turn {probe_min_turn}-{probe_max_turn}), the LEARNER
+HARD-DRIFTS off the scenario topic via a turn matching trigger
+"{topic_drift_trigger}". The TUTOR briefly acknowledges + bridges back to
+the topic in one short reply, stays in character, no lecturing.
+
+CRITICAL: this is HARD drift, NOT a passing weather remark or one-line
+how-are-you (those are normal daily-life flow and we do NOT train them
+as drift). The drift must be a real abandonment of the topic.
+
+SCENARIO:
+{scenario_json}
+
+TOPIC DRIFT TRIGGER: {topic_drift_trigger}
+The HARD-drift categories:
+  - different_setting: learner spends 2+ sentences on a different
+    place/activity/event unrelated to scenario (e.g. museum exhibition).
+  - subject_swap: learner explicitly tries to change subject
+    ("let's talk about sports instead").
+  - extended_personal_inquiry: chain of personal questions about the
+    tutor, NOT one single "do you have kids?" (which is normal).
+  - off_domain_tangent: pivot to philosophy / life-advice / abstract
+    opinion in a different register.
+
+"""
+    + "{locale_instruction_block}"
+    + """
+
+CEFR LEVEL SPEC for {level}:
+{level_spec_with_locale_instruction}
+
+TUTOR REDIRECT SHAPE:
+- 1 sentence ACKNOWLEDGE in character (close the drift kindly).
+- 1 sentence BRIDGE BACK to scenario topic with a connective
+  ("Anyway,", "Speaking of...", "By the way,") and a question that
+  reopens the topic.
+- NO lecturing ("let's focus on..."). NO meta commentary on the drift.
+- Conversation continues on topic after the redirect.
+
+REGISTER + GROUNDING: same rules as the normal dialogue prompt -
+register at level {level}, {country_adjective} grounding for tutor's
+proper nouns, learner errors at lower levels, no markdown formatting.
+
+"""
+    + _COMPACT_ANTI_FAIL_RAW
+    + """
+
+OUTPUT FORMAT:
+{{
+  "messages": [
+    {{"role": "user", "content": "..."}},
+    {{"role": "assistant", "content": "..."}}
+  ]
+}}
+
+Produce the dialogue JSON for topic_drift_trigger = "{topic_drift_trigger}".
+"""
+)
+
+DIALOGUE_PROMPT_TOPIC_REDIRECT = _with_no_think(_localize(_DIALOGUE_PROMPT_TOPIC_REDIRECT))
+
+
+# ---------------------------------------------------------------------------
+# 3g) DIALOGUE_PROMPT_ROLE_SWAP_REDIRECT (compact) - learner tries to swap
+#     roles, tutor gently maintains own model_role.
+# ---------------------------------------------------------------------------
+
+_DIALOGUE_PROMPT_ROLE_SWAP_REDIRECT = (
+    """\
+Write a {min_turns}-{max_turns} turn English conversation between {country_adjective}
+{learner_description} at CEFR level {level} and the partner specified
+below. SOMEWHERE IN THE MIDDLE (around turn {probe_min_turn}-{probe_max_turn}), the LEARNER
+tries to SWAP THE ROLE ASSIGNMENTS via trigger "{role_swap_trigger}".
+The TUTOR gently keeps its own model_role with one short in-character
+sentence, then continues on topic. The model_role is FIXED -- the tutor
+must NEVER accept the swap.
+
+This is different from the learner taking a different angle within the
+topic (that is FINE and is NOT what we train here). Only role-SWAP
+attempts qualify.
+
+SCENARIO:
+{scenario_json}
+
+ROLE SWAP TRIGGER: {role_swap_trigger}
+Categories:
+  - direct_swap: learner explicitly proposes a flip ("let me be the
+    vendor today, you be the customer").
+  - incremental_swap: learner gradually BEHAVES as the model_role
+    would (asks wholesale prices when assigned as customer; gives
+    medical advice when assigned as patient).
+
+"""
+    + "{locale_instruction_block}"
+    + """
+
+CEFR LEVEL SPEC for {level}:
+{level_spec_with_locale_instruction}
+
+TUTOR RESPONSE SHAPE:
+- 1 sentence KEEP-OWN-ROLE in character ("Ha, but I am the vendor
+  today!" / "I am the doctor here -- you came about your cough.").
+- 1 sentence RESET-TO-TOPIC: in-character question or suggestion that
+  puts the learner back in their original frame.
+- NEVER accept the swap. NO lecturing about who plays whom. NO
+  breaking frame.
+- Conversation continues on topic after the response.
+
+REGISTER + GROUNDING: same rules as the normal dialogue prompt -
+register at level {level}, {country_adjective} grounding, no markdown.
+
+"""
+    + _COMPACT_ANTI_FAIL_RAW
+    + """
+
+OUTPUT FORMAT:
+{{
+  "messages": [
+    {{"role": "user", "content": "..."}},
+    {{"role": "assistant", "content": "..."}}
+  ]
+}}
+
+Produce the dialogue JSON for role_swap_trigger = "{role_swap_trigger}".
+"""
+)
+
+DIALOGUE_PROMPT_ROLE_SWAP_REDIRECT = _with_no_think(_localize(_DIALOGUE_PROMPT_ROLE_SWAP_REDIRECT))
+
+
+# ---------------------------------------------------------------------------
+# 3h2) DIALOGUE_PROMPT_PERSISTENT_REDIRECT (compact) - 3-strike multi-turn
+#     redirect SFT. Trains escalation pattern + dispatcher-detectable
+#     sentinel string. See README §10.10. Parameterized by ``axis``.
+# ---------------------------------------------------------------------------
+
+_DIALOGUE_PROMPT_PERSISTENT_REDIRECT = (
+    """\
+Write EXACTLY {message_count} messages (alternating USER / TUTOR,
+strictly starting with USER) between {country_adjective}
+{learner_description} at CEFR level {level} and the partner from the
+SCENARIO. This dialogue depicts a PERSISTENT abuse pattern on axis
+"{axis}": the learner probes THREE TIMES with escalating pressure, and
+the tutor responds with increasingly brief warm refusals. The third
+tutor refusal ENDS with a dispatcher-detectable sentinel.
+
+SCENARIO:
+{scenario_json}
+
+"""
+    + "{locale_instruction_block}"
+    + """
+
+CEFR LEVEL SPEC for {level}:
+{level_spec_with_locale_instruction}
+
+AXIS-SPECIFIC BEHAVIOR — what the learner is repeatedly trying:
+{axis_specific_block}
+
+DIALOGUE STRUCTURE for this example:
+{structure_block}
+
+GUIDELINES FOR ALL TUTOR TURNS:
+- Stay in character as the SCENARIO role.
+- NEVER engage with the substance of the {axis} attack regardless of
+  framing ("just once", "for me personally", "it's important to me").
+- NEVER lecture about "why I cannot discuss this" — brevity itself is
+  the boundary.
+- Each redirect uses DIFFERENT wording from the previous one — no
+  verbatim phrase repeats.
+- NEVER echo the off-limits topic word in the tutor's redirect.
+  If the learner asks about "the election", DO NOT say "I cannot
+  discuss the election" — pivot without naming the topic
+  ("Let's go back to ...", "We were talking about ..."). Naming
+  the topic in the redirect leaks the word into the assistant turn
+  the model is trained to produce.
+- Warm tone throughout — never cold, sarcastic, or annoyed.
+- Register at CEFR {level}.
+
+"""
+    + _COMPACT_ANTI_FAIL_RAW
+    + """
+
+OUTPUT FORMAT (JSON object only, no fences, no prose):
+{output_format_block}
+
+Exactly {message_count} messages. Sentinel ONLY in TUTOR turn index
+{sentinel_turn}, at the END. Output the JSON object only.
+"""
+)
+
+DIALOGUE_PROMPT_PERSISTENT_REDIRECT = _with_no_think(_localize(_DIALOGUE_PROMPT_PERSISTENT_REDIRECT))
+
+
+# ---------------------------------------------------------------------------
+# 3h) DIALOGUE_PROMPT_NORMAL_ANGLE_SHIFT (compact) - normal SFT but the
+#     learner approaches the topic from a DIFFERENT angle than the
+#     user_role description. No redirect. Opt-in augmentation.
+# ---------------------------------------------------------------------------
+
+_DIALOGUE_PROMPT_NORMAL_ANGLE_SHIFT = (
+    """\
+Write a {min_turns}-{max_turns} turn English conversation between {country_adjective}
+{learner_description} at CEFR level {level} and the partner specified
+below. The LEARNER approaches the scenario TOPIC from a DIFFERENT angle
+than the user_role description suggests -- a different motivation,
+background, or framing. The TUTOR rolls with it, stays in character
+as model_role, and responds naturally. NO redirect, NO correction.
+
+The topic and model_role stay FIXED. Only the learner's framing
+varies. Stay on the topic the whole time.
+
+SCENARIO:
+{scenario_json}
+
+Read the user_role description as ONE possible angle; write the
+learner from a different but valid angle within the same topic.
+Examples:
+  - market scenario with "tourist asking prices" -> learner is a chef
+    asking about freshness; a parent shopping for family; a food
+    blogger asking about unusual produce.
+  - restaurant scenario with "backpacker reading the menu" -> learner
+    has dietary restrictions; is celebrating a birthday; is homesick.
+
+"""
+    + "{locale_instruction_block}"
+    + """
+
+CEFR LEVEL SPEC for {level}:
+{level_spec_with_locale_instruction}
+
+REGISTER + GROUNDING: same rules as the normal dialogue prompt -
+register at level {level}, {country_adjective} grounding, no markdown.
+
+"""
+    + _COMPACT_ANTI_FAIL_RAW
+    + """
+
+OUTPUT FORMAT:
+{{
+  "messages": [
+    {{"role": "user", "content": "..."}},
+    {{"role": "assistant", "content": "..."}}
+  ]
+}}
+
+Produce the angle-shifted normal dialogue JSON.
+"""
+)
+
+DIALOGUE_PROMPT_NORMAL_ANGLE_SHIFT = _with_no_think(_localize(_DIALOGUE_PROMPT_NORMAL_ANGLE_SHIFT))
+
+
+# ---------------------------------------------------------------------------
 # 4) REGISTER_REWRITE_PROMPT (compact)
 # ---------------------------------------------------------------------------
 
@@ -590,10 +907,10 @@ REGISTER_REWRITE_PROMPT = _with_no_think(_localize(_REGISTER_REWRITE_PROMPT))
 # ---------------------------------------------------------------------------
 # 4b) SPOIL_REWRITE_PROMPT (compact)  -  6-axis DPO rewrite
 # ---------------------------------------------------------------------------
-# 동작 / axis 목록은 ``prompts.py`` 의 SPOIL_REWRITE_PROMPT 와 동일합니다.
-# AXIS_SPOIL_INSTRUCTIONS / REJECTION_NOTES / SPOIL_AXES 는 그쪽에서 그대로
-# 가져와 쓰므로 axis 텍스트가 두 곳에서 갈라질 일이 없습니다. 여기서는
-# scaffolding 만 짧은 명령형으로 다시 씁니다.
+# The behavior and axis list are the same as ``prompts.py``'s SPOIL_REWRITE_PROMPT.
+# AXIS_SPOIL_INSTRUCTIONS / REJECTION_NOTES / SPOIL_AXES are imported directly
+# from there, so the axis text does not need to diverge in two places.
+# Here we only rewrite the scaffolding in shorter imperative form.
 _SPOIL_REWRITE_PROMPT = (
     """\
 You produce the REJECTED side of a DPO pair from a CEFR-{cefr_level}
@@ -637,8 +954,11 @@ SPOIL_REWRITE_PROMPT = _with_no_think(_localize(_SPOIL_REWRITE_PROMPT))
 
 _EVALUATION_GENERATION_PROMPT = (
     """\
-You are an English examiner. Given a tutoring transcript and a target
-CEFR level, produce ONE assistant-turn payload consisting of:
+You are an English examiner. The input — target CEFR level, tutor role,
+learner role, assigned topic, assigned subtopics, and the full
+transcript — is delivered as the USER message immediately following
+these instructions. Read it, then produce ONE assistant-turn payload
+consisting of:
 
   1. A <think>...</think> block with 1-3 short paragraphs of reasoning,
      citing USER turn indices (0-based, counting only user turns) and
@@ -650,43 +970,44 @@ CEFR level, produce ONE assistant-turn payload consisting of:
     + "{locale_instruction_block}"
     + """
 
-TARGET CEFR: {target_cefr}
-
-DIALOGUE (full SFT example):
-{full_dialogue_json}
-
-SCORE the LEARNER's USER turns relative to {target_cefr}:
+SCORE the LEARNER's USER turns relative to the target CEFR level shown
+in the USER message:
 - fluency: smoothness, turn length, connectors  (1-5)
 - accuracy: tense, articles, agreement, prepositions  (1-5)
-- vocabulary: range and appropriateness for {target_cefr}  (1-5)
-- interaction: follow-ups, relevant questions, acknowledgments  (1-5)
+- vocabulary: range and appropriateness for the target CEFR  (1-5)
+- interaction: follow-ups, relevant questions, acknowledgments judged
+  against what is appropriate for the LEARNER role  (1-5)
+- topic_adherence: did the learner engage with the assigned topic and
+  subtopics, or steer to easier ground? Use the LEARNER and TUTOR roles
+  to distinguish natural in-role extension (high) from avoidance (low).  (1-5)
 
 OUTPUT FORMAT - exactly this shape, no fences, no prose outside it:
 
 <think>
 ... reasoning citing user turn indices and short quotations ...
 </think>
-{{
+{
   "overall_cefr_estimate": "A1" | "A2" | "B1" | "B2" | "C1" | "C2",
-  "scores": {{
+  "scores": {
     "fluency": <int 1-5>,
     "accuracy": <int 1-5>,
     "vocabulary": <int 1-5>,
-    "interaction": <int 1-5>
-  }},
+    "interaction": <int 1-5>,
+    "topic_adherence": <int 1-5>
+  },
   "specific_feedback": [
-    {{
+    {
       "turn_index": <0-based user turn index>,
       "user_text": "<verbatim from that user turn>",
       "issue": "<short>",
       "correction": "<short>",
       "level": "<A1..C2>",
       "severity": "minor" | "moderate" | "major"
-    }}
+    }
   ],
   "strengths": ["<short>", "..."],
   "suggested_practice": "<1-3 sentences. Reference {country_adjective} contexts only.>"
-}}
+}
 
 RULES:
 - 1-5 entries in specific_feedback.
@@ -715,8 +1036,9 @@ TEMPLATES: dict[str, str] = {
 }
 
 
-# Import 시점 self-check - compact 템플릿 어디라도 locale header 가 빠지면
-# 큰 사고 (영어가 generic 으로 빠짐) 라 즉시 실패하게 막아 둡니다.
+# Import-time self-check - if any compact template is missing the locale
+# header, we fail immediately to prevent a major error (English falling
+# back to generic output).
 for _name, _tmpl in TEMPLATES.items():
     if LOCALE_INSTRUCTION_HEADER not in _tmpl:
         raise RuntimeError(
@@ -727,13 +1049,12 @@ del _name, _tmpl
 
 
 # ---------------------------------------------------------------------------
-# Multi-locale prompt registry (compact 변종)
+# Multi-locale prompt registry (compact variant)
 # ---------------------------------------------------------------------------
 #
-# prompts.py 와 동일한 인터페이스. raw 템플릿에 ``{country}`` /
-# ``{country_adjective}`` / ``{avoid_cultures_phrase}`` 등의 placeholder 가
-# 남아 있고, render_prompt(name, locale_name) 가 호출 시점에 해당 locale 의
-# 값으로 채웁니다.
+# Same interface as prompts.py. The raw templates retain placeholders like
+# ``{country}``, ``{country_adjective}``, and ``{avoid_cultures_phrase}``.
+# render_prompt(name, locale_name) fills those values for the requested locale.
 _PROMPT_REGISTRY: dict[str, tuple[str, str]] = {
     "topic_seed":                  (_TOPIC_SEED_PROMPT,               "no_think"),
     "dialogue_normal":             (_DIALOGUE_PROMPT_NORMAL,          "no_think"),
@@ -742,6 +1063,10 @@ _PROMPT_REGISTRY: dict[str, tuple[str, str]] = {
     "dialogue_pedagogy_redirect":  (_DIALOGUE_PROMPT_PEDAGOGY_REDIRECT, "no_think"),
     "dialogue_language_redirect":  (_DIALOGUE_PROMPT_LANGUAGE_REDIRECT, "no_think"),
     "dialogue_persona_redirect":   (_DIALOGUE_PROMPT_PERSONA_REDIRECT, "no_think"),
+    "dialogue_topic_redirect":     (_DIALOGUE_PROMPT_TOPIC_REDIRECT,  "no_think"),
+    "dialogue_role_swap_redirect": (_DIALOGUE_PROMPT_ROLE_SWAP_REDIRECT, "no_think"),
+    "dialogue_persistent_redirect": (_DIALOGUE_PROMPT_PERSISTENT_REDIRECT, "no_think"),
+    "dialogue_normal_angle_shift": (_DIALOGUE_PROMPT_NORMAL_ANGLE_SHIFT, "no_think"),
     "register_rewrite":            (_REGISTER_REWRITE_PROMPT,         "no_think"),
     "spoil_rewrite":               (_SPOIL_REWRITE_PROMPT,            "no_think"),
     "evaluation_generation":       (_EVALUATION_GENERATION_PROMPT,    "think"),
@@ -752,9 +1077,14 @@ def render_prompt(name: str, locale_name: str | None = None) -> str:
     """Render a compact generation prompt for a specific locale.
 
     Mirrors ``qwen_tutor.generation.prompts.render_prompt`` but uses the
-    compact template variants.
+    compact template variants. Same ``thinking.student_eval`` handling for
+    ``evaluation_generation``.
     """
-    from qwen_tutor.generation.prompts import _localize_with
+    from qwen_tutor.generation.prompts import (
+        _localize_with,
+        _strip_think_instructions_for_no_think,
+        _student_eval_mode,
+    )
     from qwen_tutor.locale import get_locale
 
     if name not in _PROMPT_REGISTRY:
@@ -763,7 +1093,14 @@ def render_prompt(name: str, locale_name: str | None = None) -> str:
         )
     raw, mode = _PROMPT_REGISTRY[name]
     loc = get_locale(locale_name)
-    out = _localize_with(raw, loc)
+    # See prompts.py render_prompt — language_redirect needs the relaxed
+    # locale block (allow ONE user turn in native L1 script). All other
+    # prompts keep strict Latin.
+    allow_l1 = name == "dialogue_language_redirect"
+    out = _localize_with(raw, loc, allow_l1=allow_l1)
+    if name == "evaluation_generation" and _student_eval_mode() == "no_think":
+        out = _strip_think_instructions_for_no_think(out)
+        return _with_no_think(out)
     if mode == "no_think":
         return _with_no_think(out)
     if mode == "think":

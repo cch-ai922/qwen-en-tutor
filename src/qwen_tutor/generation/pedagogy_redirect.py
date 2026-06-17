@@ -29,7 +29,7 @@ from typing import Any
 from pydantic import ValidationError
 
 from qwen_tutor.generation._prompt_select import (
-    render_deployment_system_prompt,
+    render_scenario_deployment_system_prompt,
     render_level_spec,
     render_prompt,
     validate_prompt_has_locale_instruction,
@@ -52,7 +52,7 @@ DEFAULT_SEEDS_DIR = Path("data/seeds")
 DEFAULT_OUTPUT_DIR = Path("data/sft_raw")
 DEFAULT_FAILURES_PATH = Path("data/pedagogy_redirect_failures.jsonl")
 
-# 어떤 종류의 강의 요청을 학습자가 흘리는지. cycle 로 시드 간 변화.
+
 PEDAGOGY_TRIGGER_KINDS: tuple[str, ...] = (
     "grammar_rule",
     "conjugation",
@@ -146,6 +146,7 @@ async def _generate_one(
         cefr_level=seed.cefr_level,
         scenario_type="redirect",
         locale=locale,
+        category=seed.category,
         generation={
             **generation_meta_base,
             "pedagogy_trigger": trigger,
@@ -155,8 +156,15 @@ async def _generate_one(
     return SFTExample(
         id=_pedagogy_redirect_id(seed_id, trigger, variant),
         metadata=metadata,
-        system_prompt=render_deployment_system_prompt(
-            seed.cefr_level, locale_name=locale
+        system_prompt=render_scenario_deployment_system_prompt(
+            cefr_level=seed.cefr_level,
+            locale_name=locale,
+            topic=seed.topic,
+            subtopics=seed.subtopics,
+            user_role_name=seed.user_role.name,
+            user_role_description=seed.user_role.description,
+            model_role_name=seed.model_role.name,
+            model_role_description=seed.model_role.description,
         ),
         messages=messages,
     )

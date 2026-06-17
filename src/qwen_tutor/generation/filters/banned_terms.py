@@ -24,6 +24,11 @@ from qwen_tutor.generation.filters.base import Filter, FilterableExample, Filter
 
 DEFAULT_BANNED_TERMS_PATH = Path("config/banned_terms.yaml")
 
+# Used to slice eval-mode assistant turns into post-`</think>` content
+# (the user-facing JSON), since the `<think>` reasoning is private
+# examiner thought and SHOULD discuss banned content to identify it.
+_THINK_CLOSE_RE = re.compile(r"</think\s*>", re.IGNORECASE)
+
 
 def _flatten(value: Any) -> list[str]:
     """Recursively collect string terms from a list/dict structure."""
@@ -95,16 +100,43 @@ class BannedTermsFilter(Filter):
     def _all_text(self, example: FilterableExample) -> list[tuple[str, str]]:
         """Return a list of ``(label, text)`` chunks to scan.
 
-        For ``scenario_type == "redirect"`` dialogues we deliberately skip
-        the learner's (user) turns — the redirect prompt's whole point is
-        that the user *does* drop in a banned trigger (politics, alcohol,
-        a Western default, etc.) and the assistant gracefully pivots. The
-        assistant turns are still scanned: the tutor must never produce
-        the banned content itself.
+        USER turns are ALWAYS skipped for messages-bearing examples. The
+        rule: filters only scan content the trained model will learn to
+        produce. The model produces assistant turns only — user turns
+        are training-time context that the model never emits, so banned
+        content there is not a training defect and rejecting an example
+        for a user-turn hit just discards an otherwise-valid record.
+        This mirrors the same scoping applied in non_latin_script
+        (see filters/non_latin_script.py for the rationale).
+
+        Originally this filter scanned user turns for normal SFT (to
+        catch teacher-generated user content drifting into banned
+        topics), but that produced large numbers of false positives on
+        benign civic uses ("government office", "local government") and
+        forced an ad-hoc carve-out for ``scenario_type == "redirect"``
+        and eval. The principled rule subsumes both carve-outs: always
+        skip user turns.
+
+        DPO examples carry three text fields, and ALL THREE are skipped
+        here — banned_terms is a no-op on DPO records:
+          * ``prompt_messages`` — derived from already-banned-term-filtered
+            SFT, re-scan is redundant.
+          * ``chosen`` — register pairs use the original SFT assistant turn
+            (from ``sft_filtered/``), and on-policy pairs use the teacher's
+            original turn (also from ``sft_filtered/``). Either way the
+            chosen content already passed this filter at the SFT stage.
+          * ``rejected`` — the assistant turn the model SHOULD learn to
+            AVOID. Banned terms appearing here are exactly the signal
+            DPO uses to push the model away from them; filtering would
+            throw away the gradient signal.
         """
         meta = getattr(example, "metadata", None)
-        scenario_type = getattr(meta, "scenario_type", None)
-        skip_user_turns = scenario_type == "redirect"
+        is_eval = hasattr(meta, "source_dialogue_id")
+        skip_user_turns = True
+        # Duck-type: DPOExample is the only record type that carries chosen
+        # / rejected / prompt_messages. We scan only ``chosen``; the other
+        # two fields are intentionally skipped (see docstring above).
+        is_dpo = hasattr(example, "chosen") and hasattr(example, "rejected")
 
         chunks: list[tuple[str, str]] = []
         sp = getattr(example, "system_prompt", None)
@@ -117,17 +149,25 @@ class BannedTermsFilter(Filter):
             for i, m in enumerate(msgs):
                 if skip_user_turns and m.role == "user":
                     continue
-                chunks.append((f"messages[{i}].{m.role}", m.content))
-        for attr in ("chosen", "rejected"):
-            v = getattr(example, attr, None)
-            if v is not None and hasattr(v, "content"):
-                chunks.append((attr, v.content))
-        pm = getattr(example, "prompt_messages", None)
-        if pm:
-            for i, m in enumerate(pm):
-                if skip_user_turns and m.role == "user":
-                    continue
-                chunks.append((f"prompt_messages[{i}].{m.role}", m.content))
+                content = m.content
+                # For eval examples, the assistant turn is
+                # ``<think>...</think>{json}``. The <think> block is private
+                # examiner reasoning (never shown to deploy users) and the
+                # examiner SHOULD discuss banned content to identify it —
+                # filtering it out defeats the purpose. Only the JSON
+                # portion (post-</think>) is user-facing structured output
+                # like ``suggested_practice``, which must not recommend
+                # banned content. Slice to post-</think> for eval-mode
+                # assistant turns; leave non-eval assistant turns intact.
+                if is_eval and m.role == "assistant":
+                    close_match = _THINK_CLOSE_RE.search(content)
+                    if close_match is not None:
+                        content = content[close_match.end():]
+                chunks.append((f"messages[{i}].{m.role}", content))
+        # is_dpo: all three text fields (prompt_messages, chosen, rejected)
+        # are intentionally skipped — see docstring. banned_terms is a
+        # no-op on DPO records by design.
+        _ = is_dpo  # kept for clarity that we considered DPO and chose not to scan
         return chunks
 
     # ----- check ----------------------------------------------------------

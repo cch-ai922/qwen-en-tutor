@@ -29,7 +29,7 @@ from qwen_tutor.generation._prompt_select import (
     validate_prompt_has_locale_instruction,
 )
 from qwen_tutor.generation.teacher import TeacherClient, build_teacher_from_config
-from qwen_tutor.schemas import ScenarioSeed
+from qwen_tutor.schemas import CATEGORIES, ScenarioSeed
 from qwen_tutor.utils.runner import (
     append_failure,
     append_jsonl,
@@ -48,24 +48,26 @@ CITY_OVERREP_THRESHOLD = 0.30
 NAME_OVERREP_THRESHOLD = 0.15
 
 
-# within-batch 도시 분포 점검은 country-specific 정적 리스트도, 외부 NER 도
-# 사용하지 않습니다. seed prompt 가 "setting" 의 첫머리에 도시명을 두도록
-# 강하게 지시하므로, 그냥 정규식으로 setting 문자열의 처음에 나오는 대문자
-# 단어 (또는 multi-word 대문자 phrase) 를 도시명으로 추출합니다.
+# The within-batch city distribution check does not use a country-specific
+# static list or external NER. Since the seed prompt strongly instructs
+# placing the city name at the start of the "setting" field, this simply
+# extracts the first capitalized word or multi-word capitalized phrase from
+# the setting string.
 #
-# 한계: "Today the weather is..." 같은 sentence-initial common word 가
-# false positive 가 될 수 있어 짧은 stopword 셋을 거릅니다. 본격적 다양성
-# 체크는 ``diversity.py`` 가 한 번 더 (역시 정규식 기반) 수행하므로, 여기서
-# 놓치는 케이스는 그쪽이 잡아 줍니다.
+# Limitation: sentence-initial common words like "Today the weather is..."
+# can produce false positives, so a short stopword set is filtered out.
+# A more complete diversity check runs again in ``diversity.py`` (also regex-
+# based), so cases missed here are caught later.
 
+# Find the first multi-word capitalized phrase such as:
 # "Shibuya crossing in Tokyo" → "Tokyo" / "Xuhui District, Shanghai" →
-# "Xuhui District" 식으로 첫 multi-word 대문자 phrase 를 찾습니다.
+# "Xuhui District".
 _CITY_RE = re.compile(
     r"\b([A-Z][a-zA-Z'\-]{2,}(?:[\s\-][A-Z][a-zA-Z'\-]+){0,3})\b"
 )
 
-# sentence-initial common-word false positive 제거용 stopword 셋. 추가는
-# 자유롭게.
+# Stopwords used to remove sentence-initial common-word false positives.
+# Additions are welcome.
 _CITY_STOPWORDS: frozenset[str] = frozenset(
     s.lower()
     for s in (
@@ -78,10 +80,11 @@ _CITY_STOPWORDS: frozenset[str] = frozenset(
 
 
 def _extract_city(setting: str) -> str | None:
-    """setting 문자열에서 도시명으로 보이는 첫 대문자 phrase 를 반환.
+    """Return the first capitalized phrase from a setting string that looks like a city.
 
-    찾지 못하거나 stopword 만 잡히면 ``None`` (diversity 카운트에서 빠짐).
-    한계는 위 docstring 참고.
+    Returns ``None`` if no match is found or only stopwords are matched
+    (it is then excluded from the diversity count). See the comment above
+    for limitations.
     """
     for m in _CITY_RE.finditer(setting):
         candidate = m.group(1).strip()
@@ -92,7 +95,22 @@ def _extract_city(setting: str) -> str | None:
     return None
 
 
-def _parse_seed_batch(raw: str, level: str, locale: str) -> list[ScenarioSeed]:
+def _format_categories_block(categories: list[str]) -> str:
+    """Render the per-scenario category assignment as a numbered list.
+
+    The teacher is asked to honor these category tags when picking the
+    topic for each scenario. The category value is stamped on the parsed
+    output regardless (so the disk record always matches the request).
+    """
+    if not categories:
+        return ""
+    lines = [f"  {i + 1}. {c}" for i, c in enumerate(categories)]
+    return "\n".join(lines)
+
+
+def _parse_seed_batch(
+    raw: str, level: str, locale: str, categories: list[str] | None = None
+) -> list[ScenarioSeed]:
     data = extract_first_json(raw)
     if isinstance(data, dict):
         # Some models occasionally wrap the array in an outer object.
@@ -103,13 +121,18 @@ def _parse_seed_batch(raw: str, level: str, locale: str) -> list[ScenarioSeed]:
     if not isinstance(data, list):
         raise ValueError(f"expected JSON array, got {type(data).__name__}")
     out: list[ScenarioSeed] = []
-    for item in data:
+    for i, item in enumerate(data):
         if not isinstance(item, dict):
             continue
-        # Pin the CEFR level and locale to what we asked for — some models echo
-        # a different value back, and locale isn't visible to the teacher at
-        # all (it's metadata we stamp on the output).
-        item = {**item, "cefr_level": level, "locale": locale}
+        # Pin the CEFR level, locale, and category from the request — some
+        # models echo a different value back. Category in particular is
+        # stamped per-position so the on-disk record always matches the
+        # quota-balancer's assignment, even if the teacher picked a
+        # different one in the JSON.
+        stamp: dict[str, Any] = {"cefr_level": level, "locale": locale}
+        if categories and i < len(categories):
+            stamp["category"] = categories[i]
+        item = {**item, **stamp}
         try:
             out.append(ScenarioSeed.model_validate(item))
         except ValidationError as exc:
@@ -126,6 +149,7 @@ async def _call_teacher_for_batch(
     avoid_items: list[str] | None,
     max_tokens: int,
     temperature: float,
+    categories: list[str],
 ) -> list[ScenarioSeed]:
     from qwen_tutor.generation._prompt_select import render_prompt
 
@@ -135,6 +159,7 @@ async def _call_teacher_for_batch(
         N=batch_size,
         level=level,
         level_spec_with_locale_instruction=level_spec,
+        categories_block=_format_categories_block(categories),
     )
     if avoid_items:
         prompt = (
@@ -152,7 +177,7 @@ async def _call_teacher_for_batch(
         max_tokens=max_tokens,
         temperature=temperature,
     )
-    return _parse_seed_batch(raw, level, locale)
+    return _parse_seed_batch(raw, level, locale, categories=categories)
 
 
 def _read_existing_seeds(
@@ -206,20 +231,62 @@ async def _generate_for_level(
     output_path: Path,
     failures_path: Path,
     warnings_path: Path,
+    category_quota: dict[str, int] | None = None,
 ) -> int:
+    """Generate seeds for a single (level, locale).
+
+    When ``category_quota`` is provided, ``n_target`` is ignored and the
+    function generates exactly ``sum(category_quota.values())`` new seeds
+    with the requested per-category counts. Used by the top-up stage to
+    target deficit categories after filtering. The assignments are
+    shuffled deterministically so each batch sees a mix of categories
+    rather than 5-in-a-row of the same one.
+    """
     existing_ids, existing_topics = _read_existing_seeds(
         output_path, target_locale=locale
     )
-    remaining = max(0, n_target - len(existing_ids))
-    if remaining == 0:
-        logger.info(
-            "[seeds:%s/%s] already at %d/%d, skipping",
-            level, locale, len(existing_ids), n_target,
-        )
-        return 0
+    if category_quota is not None:
+        remaining = sum(max(0, c) for c in category_quota.values())
+        if remaining == 0:
+            logger.info(
+                "[seeds:%s/%s] top-up quota empty, skipping",
+                level, locale,
+            )
+            return 0
+    else:
+        remaining = max(0, n_target - len(existing_ids))
+        if remaining == 0:
+            logger.info(
+                "[seeds:%s/%s] already at %d/%d, skipping",
+                level, locale, len(existing_ids), n_target,
+            )
+            return 0
 
     level_spec = render_level_spec(level, locale_name=locale)
     n_batches = (remaining + per_call - 1) // per_call
+
+    # Round-robin category assignment across the full quota. The start offset
+    # is derived from existing on-disk count so resumed runs continue cycling
+    # from where they left off instead of always starting at category 0.
+    # When ``category_quota`` overrides this, build the list explicitly from
+    # the deficits and shuffle so batches contain a mix.
+    start_offset = len(existing_ids)
+    if category_quota is not None:
+        import random as _random
+        all_assignments = []
+        for cat, n in category_quota.items():
+            if n > 0:
+                all_assignments.extend([cat] * n)
+        # Deterministic shuffle keyed on (level, locale) so reruns of the
+        # same top-up request hand the same assignments to the teacher.
+        _random.Random(f"topup:{level}:{locale}").shuffle(all_assignments)
+    else:
+        all_assignments = [
+            CATEGORIES[(start_offset + k) % len(CATEGORIES)] for k in range(remaining)
+        ]
+
+    def _slice_for_batch(idx: int) -> list[str]:
+        return all_assignments[idx * per_call : (idx + 1) * per_call]
 
     async def _one_batch(idx: int) -> list[ScenarioSeed]:
         try:
@@ -227,6 +294,7 @@ async def _generate_for_level(
                 teacher, level, locale, per_call, level_spec,
                 avoid_items=None,
                 max_tokens=max_tokens, temperature=temperature,
+                categories=_slice_for_batch(idx),
             )
         except Exception as exc:  # noqa: BLE001
             append_failure(
@@ -295,12 +363,21 @@ async def _generate_for_level(
             regen_batches = (len(affected) + per_call - 1) // per_call
             avoid = overrep_cities + overrep_names
 
+            # Continue the round-robin from where the main loop left off so
+            # regenerated seeds stay close to the original category balance.
+            regen_offset = start_offset + len(all_assignments)
+            regen_total = regen_batches * per_call
+            regen_assignments = [
+                CATEGORIES[(regen_offset + k) % len(CATEGORIES)] for k in range(regen_total)
+            ]
+
             async def _regen(idx: int) -> list[ScenarioSeed]:
                 try:
                     return await _call_teacher_for_batch(
                         teacher, level, locale, per_call, level_spec,
                         avoid_items=avoid,
                         max_tokens=max_tokens, temperature=temperature,
+                        categories=regen_assignments[idx * per_call : (idx + 1) * per_call],
                     )
                 except Exception as exc:  # noqa: BLE001
                     append_failure(
@@ -329,6 +406,7 @@ async def _generate_for_level(
 
     written = 0
     quota = n_target - len(existing_ids)
+    written_categories: Counter[str] = Counter()
     for seed in candidates[:quota]:
         seed_id = uuid.uuid4().hex[:12]
         # ScenarioSeed.model_dump() includes ``locale`` (set by _parse_seed_batch)
@@ -337,7 +415,13 @@ async def _generate_for_level(
         # isn't shadowed by None.
         record = {"id": seed_id, **seed.model_dump(exclude={"id"})}
         append_jsonl(output_path, record)
+        written_categories[seed.category] += 1
         written += 1
+    if written:
+        logger.info(
+            "[seeds:%s/%s] category distribution this run: %s",
+            level, locale, dict(written_categories.most_common()),
+        )
     return written
 
 
@@ -354,12 +438,14 @@ async def generate_batch(
     warnings_path: str | Path = DEFAULT_WARNINGS_PATH,
     teacher: TeacherClient | None = None,
     locales: list[str] | None = None,
+    category_quotas: dict[tuple[str, str], dict[str, int]] | None = None,
 ) -> dict[str, int]:
     """Generate scenario seeds for each (CEFR level, locale) pair.
 
-    ``locales`` 가 ``None`` 이거나 빈 리스트면 ``config/locale.yaml`` 의
-    ``default_locale`` 하나로 동작 (single-locale 호환). 여러 locale 을 적으면
-    각 (level, locale) 조합에 대해 ``n_per_level`` 개의 시드를 만듭니다.
+    If ``locales`` is ``None`` or empty, this runs with the single default
+    locale from ``config/locale.yaml`` (single-locale compatible mode).
+    If multiple locales are provided, it generates ``n_per_level`` seeds for
+    each (level, locale) combination.
 
     Returns ``{f"{level}/{locale}": n_written_this_run}``. Existing seeds in
     each per-level file are preserved and contribute to the per-(level,locale)
@@ -377,6 +463,7 @@ async def generate_batch(
     for level in cefr_levels:
         out_path = output_dir / f"{level}.jsonl"
         for locale in locales:
+            quota = (category_quotas or {}).get((level, locale))
             written = await _generate_for_level(
                 teacher=teacher,
                 level=level,
@@ -389,6 +476,7 @@ async def generate_batch(
                 output_path=out_path,
                 failures_path=Path(failures_path),
                 warnings_path=Path(warnings_path),
+                category_quota=quota,
             )
             results[f"{level}/{locale}"] = written
     return results

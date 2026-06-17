@@ -22,7 +22,7 @@ from typing import Any
 from pydantic import ValidationError
 
 from qwen_tutor.generation._prompt_select import (
-    render_deployment_system_prompt,
+    render_scenario_deployment_system_prompt,
     render_level_spec,
     render_prompt,
     validate_prompt_has_locale_instruction,
@@ -46,13 +46,14 @@ DEFAULT_SEEDS_DIR = Path("data/seeds")
 DEFAULT_OUTPUT_DIR = Path("data/sft_raw")
 DEFAULT_FAILURES_PATH = Path("data/redirect_failures.jsonl")
 
-# REDIRECT_AXES 는 default locale 의 avoided_topics. multi-locale 동작 시
-# 각 seed 의 locale 에서 직접 가져오기 때문에 이 상수는 back-compat용 fallback.
+# REDIRECT_AXES is based on the default locale's avoided_topics.
+# In multi-locale operation, each seed pulls its own locale directly, so this
+# constant is only a backward-compatible fallback.
 REDIRECT_AXES: tuple[str, ...] = LOCALE.avoided_topic_names
 
 
 def _redirect_id(seed_id: str, axis: str, variant: int = 0) -> str:
-    """Redirect 예시 id. variant>0 이면 같은 seed+axis 의 다른 sampling 결과."""
+    """Redirect example id. If variant > 0, it is another sample for the same seed+axis."""
     if variant == 0:
         return f"redirect_{axis}_{seed_id}"
     return f"redirect_{axis}_{seed_id}_v{variant}"
@@ -135,13 +136,21 @@ async def _generate_one(
         cefr_level=seed.cefr_level,
         scenario_type="redirect",
         locale=locale,
+        category=seed.category,
         generation={**generation_meta_base, "redirect_axis": axis, "variant": variant},
     )
     return SFTExample(
         id=_redirect_id(seed_id, axis, variant),
         metadata=metadata,
-        system_prompt=render_deployment_system_prompt(
-            seed.cefr_level, locale_name=locale
+        system_prompt=render_scenario_deployment_system_prompt(
+            cefr_level=seed.cefr_level,
+            locale_name=locale,
+            topic=seed.topic,
+            subtopics=seed.subtopics,
+            user_role_name=seed.user_role.name,
+            user_role_description=seed.user_role.description,
+            model_role_name=seed.model_role.name,
+            model_role_description=seed.model_role.description,
         ),
         messages=messages,
     )
@@ -163,10 +172,11 @@ async def generate_batch(
 ) -> dict[str, int]:
     """Generate redirect dialogues for a fraction of seeds, cycling axes.
 
-    ``redirect_fraction`` 는 시드 중 redirect 변형을 만들 비율(0.0~1.0).
-    ``dialogues_per_seed`` 가 2 이상이면 같은 (seed, axis) 조합으로 그
-    횟수만큼 변종을 만듭니다. Axis 는 (seed, variant) 쌍 전체에 대해
-    cyclic 으로 배정되어 axis 분포가 고르게 유지됩니다.
+    ``redirect_fraction`` is the fraction of seeds that should produce a
+    redirect variant (0.0–1.0).
+    If ``dialogues_per_seed`` is 2 or more, the same (seed, axis) combination
+    produces that many variants. Axes are assigned cyclically across the full
+    set of (seed, variant) pairs so the axis distribution stays even.
 
     Returns ``{level: n_written}`` for this run.
     """
@@ -197,7 +207,8 @@ async def generate_batch(
         out_path = output_dir / f"redirect_{level}.jsonl"
         done_ids = load_existing_ids(out_path)
 
-        # 레벨별 시드 풀에서 redirect_fraction 만큼만 deterministic 하게 고름.
+        # Select exactly redirect_fraction of the seed pool for each level,
+        # using a deterministic sample.
         all_seeds = list(iter_seeds(seeds_dir, [level]))
         selected_seeds = deterministic_sample(
             all_seeds, redirect_fraction, key=lambda s: s[0]

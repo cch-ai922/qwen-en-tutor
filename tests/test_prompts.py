@@ -41,10 +41,12 @@ def test_validate_passes_when_header_present():
 
 
 def test_validate_raises_when_header_missing():
-    # The header text comes from LOCALE (defaults to "IRAN LOCALE INSTRUCTION:"
-    # when locale.yaml has country="Iran"). The error message echoes
-    # LOCALE_INSTRUCTION_HEADER verbatim.
-    with pytest.raises(ValueError, match="LOCALE INSTRUCTION"):
+    # The header text comes from LOCALE.locale_instruction_header — currently
+    # rendered as "[locale-rules:<country>]" (e.g. "[locale-rules:china]").
+    # The error message echoes the header verbatim, so we match on the stable
+    # code-marker prefix here so the test stays correct regardless of which
+    # locale config/locale.yaml is pointing at.
+    with pytest.raises(ValueError, match=r"\[locale-rules:"):
         validate_prompt_has_locale_instruction("some prompt without the header")
 
 
@@ -106,6 +108,7 @@ def test_topic_seed_prompt_renders():
         N=5,
         level="B1",
         level_spec_with_locale_instruction=render_level_spec("B1"),
+        categories_block="  1. food_and_dining\n  2. family_and_relationships",
     )
     validate_prompt_has_locale_instruction(rendered)
     assert "generate 5 distinct scenarios" in rendered.lower()
@@ -172,10 +175,20 @@ def test_evaluation_generation_prompt_renders():
     rendered = EVALUATION_GENERATION_PROMPT.format(
         full_dialogue_json=json.dumps(dialogue, ensure_ascii=False),
         target_cefr="A2",
+        topic="weekend plans in Isfahan",
+        subtopics_block="- food\n- transport\n- sightseeing",
+        model_role_name="Hassan",
+        model_role_description="a friendly Isfahan tour guide",
+        user_role_description="an A2 Iranian learner curious about her city",
     )
     validate_prompt_has_locale_instruction(rendered)
     assert "<think>" in rendered
     assert "EvaluationOutput" in rendered or "overall_cefr_estimate" in rendered
+    assert "topic_adherence" in rendered
+    assert "weekend plans in Isfahan" in rendered
+    assert "Hassan" in rendered
+    assert "friendly Isfahan tour guide" in rendered
+    assert "A2 Iranian learner curious about her city" in rendered
 
 
 # ---------------------------------------------------------------------------
@@ -194,6 +207,7 @@ def test_validate_catches_template_with_stripped_locale_block():
     rendered = sabotaged.format(
         N=3,
         level="A1",
+        categories_block="",
     )
     with pytest.raises(ValueError):
         validate_prompt_has_locale_instruction(rendered)

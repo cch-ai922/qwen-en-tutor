@@ -32,27 +32,30 @@ logger = logging.getLogger(__name__)
 # Food vocabulary
 # ---------------------------------------------------------------------------
 #
-# 음식 이름은 spaCy 가 entity 로 잡지 못해 (FOOD 라벨 없음) 직접 lowercase
-# 매칭으로 카운트합니다. 이 vocab 은 country-specific 이므로 정적 리스트를
-# 모듈에 두지 않고 ``config/locale.yaml`` 의 ``food_terms`` 필드에서
-# 가져옵니다. 비워 두면 음식 카운트는 단순히 0 으로 잡히며, 다양성 리포트
-# 의 PERSON / GPE 부분 (spaCy NER 기반) 은 영향 없이 정상 동작합니다.
+# Food names are not captured by spaCy as entities (no FOOD label), so they are
+# counted by matching lowercase terms directly. Because this vocab is
+# country-specific, it is not stored as a static list in the module; instead it
+# is loaded from the ``food_terms`` field in ``config/locale.yaml``. If left
+# empty, food counts will simply remain 0, and the PERSON / GPE sections of the
+# diversity report (spaCy NER-based) will still work normally.
 #
-# locale.yaml 에 ``food_terms`` 를 채워 두면 그 country 의 대표 음식들이
-# diversity 리포트의 top_foods 섹션에 집계됩니다. 추가로 ``avoid_food_terms``
-# 를 채우면 teacher 가 Western 등 잘못된 default 로 새는 음식 단어도 함께
-# 카운트되어 "안 좋은 신호" 를 일찍 잡을 수 있습니다.
+# If ``food_terms`` is populated in locale.yaml, that locale's representative
+# foods are included in the diversity report's top_foods section. If
+# ``avoid_food_terms`` is also provided, teacher-generated food terms leaking
+# into the wrong default cuisine (e.g. Western items) will also be counted, so
+# the tracker can surface a bad signal earlier.
 
 from qwen_tutor.locale import LOCALES as _LOCALES_DV
 
-# 호환성: 기존 import 가 IRANIAN_FOOD_TERMS / WESTERN_FOOD_TERMS / DEFAULT_FOOD_TERMS
-# 를 참조해도 깨지지 않도록 비어 있는 tuple 로 노출 (locale.yaml 가 source).
+# Compatibility: expose empty tuples so old imports of
+# IRANIAN_FOOD_TERMS / WESTERN_FOOD_TERMS / DEFAULT_FOOD_TERMS do not break
+# (locale.yaml is the source of truth).
 IRANIAN_FOOD_TERMS: tuple[str, ...] = ()
 WESTERN_FOOD_TERMS: tuple[str, ...] = ()
 
-# 다중 locale: 모든 locale 의 food_terms + avoid_food_terms 의 합집합을
-# diversity 카운트 대상으로 둡니다. 한 locale 의 대표 음식이 다른 locale
-# 의 conversation 에 흘러들면 그것도 다양성 리포트에 잡힙니다.
+# Multi-locale: include the union of all locales' food_terms and avoid_food_terms
+# as diversity counting targets. If a locale's representative food appears in a
+# different locale's conversation, it will still be captured in the diversity report.
 _seen_terms: set[str] = set()
 _combined: list[str] = []
 for _loc in _LOCALES_DV.values():
@@ -87,9 +90,11 @@ class DiversityReport:
     total_person_mentions: int = 0
     total_gpe_mentions: int = 0
     total_food_mentions: int = 0
+    total_category_examples: int = 0
     top_names: list[FreqEntry] = field(default_factory=list)
     top_cities: list[FreqEntry] = field(default_factory=list)
     top_foods: list[FreqEntry] = field(default_factory=list)
+    top_categories: list[FreqEntry] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict:
@@ -98,9 +103,11 @@ class DiversityReport:
             "total_person_mentions": self.total_person_mentions,
             "total_gpe_mentions": self.total_gpe_mentions,
             "total_food_mentions": self.total_food_mentions,
+            "total_category_examples": self.total_category_examples,
             "top_names": [e.to_dict() for e in self.top_names],
             "top_cities": [e.to_dict() for e in self.top_cities],
             "top_foods": [e.to_dict() for e in self.top_foods],
+            "top_categories": [e.to_dict() for e in self.top_categories],
             "warnings": list(self.warnings),
         }
 
@@ -110,11 +117,13 @@ class DiversityReport:
             f"  PERSON entities: {self.total_person_mentions}",
             f"  GPE entities:    {self.total_gpe_mentions}",
             f"  food mentions:   {self.total_food_mentions}",
+            f"  category-tagged: {self.total_category_examples}",
         ]
         for label, entries in (
             ("Top names (PERSON)", self.top_names),
             ("Top cities (GPE)", self.top_cities),
             ("Top foods", self.top_foods),
+            ("Categories", self.top_categories),
         ):
             lines.append("")
             lines.append(label + ":")
@@ -135,39 +144,40 @@ class DiversityReport:
 # Tracker
 # ---------------------------------------------------------------------------
 #
-# 외부 NER(spaCy) 의존을 없애고 정규식 기반으로 고유명사를 추출합니다.
-# romanized 한국어/중국어/일본어 이름도 NER 학습 도메인 밖이라 spaCy 가
-# 잘 못 잡았던 점을 해결합니다.
+# Avoid external NER (spaCy) dependency by extracting proper nouns with regex.
+# This also addresses spaCy failures on romanized Singapore/Chinese/Japanese names
+# that fall outside the typical NER training domain.
 #
-# 단점: PERSON 과 GPE 를 정확히 구분할 수 없습니다. 휴리스틱으로 single-word
-# 후보 (단어 1개) 는 PERSON, multi-word 후보는 GPE 로 분류합니다. 완벽하진
-# 않지만 다양성 리포트의 "어떤 이름/지명이 너무 자주 등장하는가" 라는
-# 단일 목적에 충분합니다.
+# Drawback: it cannot perfectly distinguish PERSON from GPE. We use a heuristic
+# that classifies single-word candidates as PERSON and multi-word candidates as
+# GPE. It is not perfect, but it is sufficient for the single purpose of the
+# diversity report: identifying which names/places appear too frequently.
 
-# 대문자로 시작하는 단어 1-4개의 연속 (people/place 이름 패턴).
+# One to four consecutive capitalized words (people/place name pattern).
 # Multi-word capitalized phrase: "Naqsh-e Jahan Square", "Times Square",
 # "Lin Mei", "Tehran", ...
 _PROPER_NOUN_RE = re.compile(
     r"\b([A-Z][a-zA-Z'\-]{1,}(?:[\s\-][A-Z][a-zA-Z'\-]+){0,3})\b"
 )
 
-# Sentence-initial 흔히 대문자로 시작하는 일반어, false positive 제거용.
+# Common sentence-initial words that often start with a capital letter,
+# used to filter false positives.
 _PROPER_STOPWORDS: frozenset[str] = frozenset(
     s.lower()
     for s in (
-        # 요일 / 월
+        # days / months
         "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday",
         "Sunday", "January", "February", "March", "April", "May", "June",
         "July", "August", "September", "October", "November", "December",
-        # 시간 / 계절
+        # times / seasons
         "Today", "Tomorrow", "Yesterday", "Tonight", "Morning", "Afternoon",
         "Evening", "Night", "Spring", "Summer", "Autumn", "Fall", "Winter",
-        # 관사 / 대명사 / 자주 쓰는 sentence-initial
+        # articles / pronouns / frequently used sentence-initial words
         "The", "A", "An", "I", "You", "He", "She", "We", "They", "It",
         "This", "That", "These", "Those", "My", "Your", "His", "Her", "Our",
         "Their", "Some", "Any", "No", "Yes", "Oh", "Well", "OK", "Okay",
         "Sure", "Hi", "Hello", "Hey", "Bye", "Thanks", "Thank",
-        # 자주 등장하는 함수어
+        # commonly occurring function words
         "When", "Where", "Why", "How", "What", "Who", "Which", "If", "Or",
         "And", "But", "So", "Then", "There", "Here",
     )
@@ -175,7 +185,7 @@ _PROPER_STOPWORDS: frozenset[str] = frozenset(
 
 
 def _is_likely_proper_noun(candidate: str) -> bool:
-    """sentence-initial common word 같은 false positive 를 거릅니다."""
+    """Filter out false positives like common sentence-initial words."""
     if len(candidate) < 3:
         return False
     first_word = candidate.split()[0].lower()
@@ -183,11 +193,12 @@ def _is_likely_proper_noun(candidate: str) -> bool:
 
 
 def _classify_proper_noun(candidate: str) -> str:
-    """간단한 휴리스틱: 단어 수로 PERSON/GPE 를 추정.
+    """Simple heuristic: estimate PERSON/GPE by word count.
 
-    1 단어 - PERSON (이름)
-    2+ 단어 - GPE (도시/구역명, "Lin Mei" 같은 multi-word 한국/중국 이름이
-              GPE 로 잘못 잡힐 수 있지만 diversity 카운트 목적엔 충분).
+    1 word - PERSON (name)
+    2+ words - GPE (city/place name; multi-word Singapore/Chinese names like
+              "Lin Mei" may be misclassified as GPE, but this is sufficient
+              for diversity counting purposes).
     """
     return "PERSON" if len(candidate.split()) == 1 else "GPE"
 
@@ -198,7 +209,7 @@ class DiversityTracker:
     def __init__(
         self,
         food_terms: Iterable[str] | None = None,
-        **_legacy: object,  # 호환성: 옛 spacy_model kwarg 무시
+        **_legacy: object,  # Compatibility: ignore old spacy_model kwarg
     ) -> None:
         self.food_terms = tuple(food_terms) if food_terms else DEFAULT_FOOD_TERMS
         # Sort food terms by length descending so multi-word matches win
@@ -210,6 +221,10 @@ class DiversityTracker:
         self.persons: Counter[str] = Counter()
         self.gpes: Counter[str] = Counter()
         self.foods: Counter[str] = Counter()
+        # Per-life-domain example count, populated via ``track_category``.
+        # Independent of the proper-noun / food scans because categories
+        # come from metadata, not from the assistant text.
+        self.categories: Counter[str] = Counter()
 
     # ----- scanning -------------------------------------------------------
 
@@ -247,6 +262,17 @@ class DiversityTracker:
                     consumed.append((idx, end))
                 start = end
 
+    def track_category(self, category: str | None) -> None:
+        """Bump the per-life-domain example count.
+
+        Callers pass ``example.metadata.category`` for each scanned
+        example. Empty/None values are silently skipped so legacy data
+        without the field doesn't pollute the report.
+        """
+        if not category:
+            return
+        self.categories[category] += 1
+
     def scan_messages(self, messages: Iterable[dict]) -> None:
         """Scan an iterable of ``{"role": ..., "content": ...}`` messages.
 
@@ -283,14 +309,18 @@ class DiversityTracker:
             total_person_mentions=sum(self.persons.values()),
             total_gpe_mentions=sum(self.gpes.values()),
             total_food_mentions=sum(self.foods.values()),
+            total_category_examples=sum(self.categories.values()),
             top_names=self._top(self.persons, top_names),
             top_cities=self._top(self.gpes, top_cities),
             top_foods=self._top(self.foods, top_foods),
+            # Show all categories — typically only ~10 so no truncation.
+            top_categories=self._top(self.categories, len(self.categories) or 1),
         )
         for label, entries in (
             ("name", rpt.top_names),
             ("city", rpt.top_cities),
             ("food", rpt.top_foods),
+            ("category", rpt.top_categories),
         ):
             if entries and entries[0].share > warn_threshold:
                 rpt.warnings.append(

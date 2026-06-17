@@ -19,7 +19,7 @@ from pathlib import Path
 
 from qwen_tutor.generation.filters.base import Filter, FilterableExample, FilterResult
 from qwen_tutor.generation.teacher import TeacherClient
-from qwen_tutor.schemas import SFTExample
+from qwen_tutor.schemas import Message, SFTExample
 from qwen_tutor.utils.runner import extract_first_json
 
 logger = logging.getLogger(__name__)
@@ -28,14 +28,16 @@ DEFAULT_SAMPLE_RATE = 0.05
 DEFAULT_MIN_SCORE = 3.0
 
 
-# Raw judge prompt with {country_adjective} + {learner_description}
-# placeholders that get filled per-example via ``_render_judge_prompt``.
-# {target_cefr} / {transcript} stay as dynamic .format() placeholders.
+# Judge prompt — instructions ONLY. Dynamic data (target CEFR + transcript)
+# arrives in the USER message constructed in ``NaturalnessLLMJudge.check``.
 _JUDGE_PROMPT_RAW = (
     "You are reviewing an English-language conversation between a "
     "{country_adjective}\n"
     "{learner_description} (the \"user\") and an English tutor (the\n"
-    "\"assistant\"). The target CEFR level for this conversation is {target_cefr}.\n"
+    "\"assistant\").\n"
+    "\n"
+    "The input — target CEFR level and the full transcript — is delivered\n"
+    "as the USER message immediately following these instructions.\n"
     "\n"
     "Rate how natural the ASSISTANT's English sounds - does it read like a\n"
     "real conversation partner, or like a textbook robot? Score from 1 to 5:\n"
@@ -48,18 +50,15 @@ _JUDGE_PROMPT_RAW = (
     "\n"
     "Also note in one short sentence what most influenced your score.\n"
     "\n"
-    "Transcript:\n"
-    "{transcript}\n"
-    "\n"
     "Output STRICT JSON ONLY, no markdown fences:\n"
     "\n"
-    '{{"score": <int 1-5>, "note": "<one short sentence>"}}\n'
+    '{"score": <int 1-5>, "note": "<one short sentence>"}\n'
 )
 
 
 def _render_judge_prompt(locale_name: str | None = None) -> str:
-    """Substitute the locale placeholders for the given locale; leave
-    ``{target_cefr}`` / ``{transcript}`` as dynamic .format() placeholders.
+    """Substitute locale placeholders for the given locale; no per-call
+    placeholders remain — dynamic data goes in the USER message at call time.
     """
     from qwen_tutor.locale import get_locale
 
@@ -120,14 +119,17 @@ class NaturalnessLLMJudge(Filter):
 
         transcript = _render_transcript(example)
         locale_name = getattr(example.metadata, "locale", None)
-        prompt = _render_judge_prompt(locale_name).format(
-            target_cefr=example.metadata.cefr_level,
-            transcript=transcript,
+        system_prompt = _render_judge_prompt(locale_name)
+        user_message = (
+            f"Target CEFR level: {example.metadata.cefr_level}\n"
+            f"\n"
+            f"Transcript:\n"
+            f"{transcript}"
         )
         try:
             raw = await self.judge.generate(
-                system=prompt,
-                messages=[],
+                system=system_prompt,
+                messages=[Message(role="user", content=user_message)],
                 cacheable_prefix=None,
                 max_tokens=self.max_tokens,
                 temperature=self.temperature,

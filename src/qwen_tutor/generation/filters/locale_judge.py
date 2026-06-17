@@ -1,24 +1,26 @@
 """Locale LLM-judge filter.
 
-대상 국가는 ``config/locale.yaml`` 의 country / country_adjective 에서 옵니다.
-정규식으로 assistant turn 에서 대문자 고유명사 후보를 뽑고 cheap judge 모델
-에게 각 entity 가 ``in_locale`` / ``ambiguous`` / ``out_of_locale`` 중 어느
-쪽인지 묻습니다. 결과는 SQLite 캐시에 저장되어 같은 entity 는 다시 묻지
-않습니다.
+The target country is read from ``config/locale.yaml``'s country /
+country_adjective fields. A regex pulls capitalized proper-noun candidates
+out of each assistant turn and a cheap judge model labels each entity as
+one of ``in_locale`` / ``ambiguous`` / ``out_of_locale``. Verdicts are
+cached in SQLite so the same entity is never re-judged.
 
 score = ``(n_in_locale + AMBIGUOUS_WEIGHT * n_ambiguous) / n_total``
 
-실패 조건:
-  * score < min_score (기본 0.5), OR
-  * 단 하나라도 ``out_of_locale`` 로 판정된 entity 가 있는 경우.
+Failure conditions:
+  * score < min_score (default 0.5), OR
+  * any entity is judged ``out_of_locale``.
 
-기본값(min_score=0.5, AMBIGUOUS_WEIGHT=0.7)은 A2 같은 저레벨 대화에서
-specific city/neighborhood 가 적고 대부분 ambiguous 로 잡히는 현실을
-반영합니다. ``out_of_locale`` 검출은 weight 와 무관하게 항상 즉시 fail 처리
-되므로, threshold 를 낮춰도 진짜 off-locale 대화는 통과하지 않습니다.
+Default values (min_score=0.5, AMBIGUOUS_WEIGHT=0.7) reflect the reality
+that low-level conversations like A2 contain few specific cities or
+neighborhoods and the judge labels most candidates as ambiguous. An
+``out_of_locale`` hit fails the example immediately regardless of weight,
+so lowering the threshold never lets a genuinely off-locale dialogue
+through.
 
-기계적 필터를 모두 통과한 예시에 대해서만 호출되도록 파이프라인 뒤쪽에
-배치합니다.
+Placed late in the pipeline so it only runs on examples that already
+passed every mechanical filter.
 """
 
 from __future__ import annotations
@@ -38,6 +40,7 @@ from qwen_tutor.generation.teacher import TeacherClient
 from qwen_tutor.locale import LOCALE
 from qwen_tutor.schemas import Message
 from qwen_tutor.utils.runner import extract_first_json
+from qwen_tutor.utils.thinking import with_thinking_directive
 
 logger = logging.getLogger(__name__)
 
@@ -53,8 +56,11 @@ VALID_VERDICTS = {"in_locale", "ambiguous", "out_of_locale"}
 _JUDGE_PROMPT_HEADER_RAW = (
     "You classify proper nouns by cultural origin for a dataset of English\n"
     "dialogues whose intended audience is {country_adjective}\n"
-    "{learner_description}. For each entity in the list below,\n"
-    "output one verdict from this set:\n\n"
+    "{learner_description}.\n"
+    "\n"
+    "The input — a list of entities to classify — is delivered as the\n"
+    "USER message immediately following these instructions. For each\n"
+    "entity in that list, output one verdict from this set:\n\n"
     "  - \"in_locale\": clearly a {country_adjective} person name,\n"
     "    {country_adjective} place, {country_adjective}\n"
     "    neighborhood, {country_adjective} food or dish,\n"
@@ -88,15 +94,25 @@ def _render_judge_header(locale_name: str | None = None) -> str:
 JUDGE_PROMPT_HEADER = _render_judge_header()
 
 
-# 외부 NER(spaCy) 의존을 없애고 정규식 기반으로 고유명사를 추출합니다.
-# 추출된 후보는 그대로 LLM judge 에게 보내져 in_locale / ambiguous /
-# out_of_locale 로 분류되므로, false positive 도 judge 가 ambiguous 로
-# 처리해 줍니다 (그리고 SQLite cache 로 한 번만 묻습니다).
+# Regex-based proper-noun extraction so we don't depend on an external NER
+# (spaCy). The candidates are sent directly to the LLM judge, which classifies
+# each as in_locale / ambiguous / out_of_locale; false positives get labeled
+# ambiguous by the judge (and the SQLite cache means each entity is only
+# asked once).
 _PROPER_NOUN_RE = re.compile(
     r"\b([A-Z][a-zA-Z'\-]{1,}(?:[\s\-][A-Z][a-zA-Z'\-]+){0,3})\b"
 )
 
-# sentence-initial common-word false positive 제거용.
+# For eval examples the assistant turn is ``<think>...</think>{json}``. The
+# <think> block is private examiner reasoning that the trained student will
+# never emit at deploy time — only the post-</think> JSON is the user-facing
+# output that needs scanning. ``banned_terms`` and ``non_latin_script`` already
+# slice to post-</think> for eval; ``locale_judge`` was missed, which caused
+# the model's literal mentions of "JSON" / "American" / "European" inside its
+# <think> reasoning to be flagged as out_of_locale entities.
+_THINK_CLOSE_RE = re.compile(r"</think\s*>", re.IGNORECASE)
+
+# Used to drop sentence-initial common-word false positives.
 _PROPER_STOPWORDS: frozenset[str] = frozenset(
     s.lower()
     for s in (
@@ -113,6 +129,147 @@ _PROPER_STOPWORDS: frozenset[str] = frozenset(
         "And", "But", "So", "Then", "There", "Here",
     )
 )
+
+
+# Language names. References like "let's keep this in English" or "say it
+# in Mandarin" are meta-discussion about which language to use, NOT
+# Western-default cultural leaks. The proper-noun regex picks language
+# names up because they're capitalized; the judge then wrongly tags
+# "English" as out_of_locale for a China-locale scenario. Skip exact
+# matches at extraction. Multi-word phrases like "English breakfast"
+# still flow through to the judge — only the bare language name is
+# exempt.
+_LANGUAGE_NAMES: frozenset[str] = frozenset(
+    s.lower()
+    for s in (
+        "English", "Mandarin", "Cantonese", "Chinese", "Japanese",
+        "Korean", "Italian", "Spanish", "French", "German", "Russian",
+        "Arabic", "Portuguese", "Hindi", "Bengali", "Vietnamese",
+        "Thai", "Indonesian", "Malay", "Tagalog", "Turkish", "Hebrew",
+        "Persian", "Farsi", "Polish", "Dutch", "Greek", "Swedish",
+        "Norwegian", "Danish", "Finnish", "Czech", "Hungarian",
+        "Romanian", "Ukrainian", "Latin",
+    )
+)
+
+# Compound language-policy phrases: "English-only", "Mandarin-only",
+# "English-first", etc. The proper-noun regex captures these as one
+# entity; treat the entire phrase as meta-discussion (same class as
+# bare language names above) rather than an out-of-locale entity.
+_LANGUAGE_POLICY_PHRASE_RE = re.compile(
+    r"^(?:" + "|".join(re.escape(n) for n in (
+        "English", "Mandarin", "Cantonese", "Chinese", "Japanese",
+        "Korean", "Italian", "Spanish", "French", "German", "Russian",
+    )) + r")[\-\s](?:only|first|speaking|native|fluent)$",
+    re.IGNORECASE,
+)
+
+
+# Common English words that frequently appear capitalized at the start
+# of a sentence and get caught by the proper-noun regex. The judge model
+# then wrongly tags them as out_of_locale (proper-noun heuristic doesn't
+# distinguish "Precision is the opposite..." from "Precision Inc."). These
+# are locale-agnostic — they're not proper nouns in any locale.
+_COMMON_SENTENCE_INITIAL_WORDS: frozenset[str] = frozenset(
+    s.lower() for s in (
+        # adverbs / interjections that frequently open sentences
+        "Absolutely", "Actually", "Always", "Alright", "Anyway", "Anyhow",
+        "Basically", "Certainly", "Clearly", "Currently", "Earlier",
+        "Eventually", "Everywhere", "Exactly", "Finally", "Frankly",
+        "Generally", "Hands-on", "Honestly", "Indeed", "Lastly",
+        "Later", "Likely", "Maybe", "Naturally", "Normally",
+        "Obviously", "Perhaps", "Personally", "Possibly", "Probably",
+        "Quickly", "Rarely", "Really", "Recently", "Seriously",
+        "Slowly", "Somewhere", "Suddenly", "Surely", "Typically",
+        "Ultimately", "Unfortunately", "Usually", "Yeah",
+        # common nouns that get sentence-initial caps
+        "Precision", "Quality", "Service", "Experience", "Comfort",
+        "Tradition", "Culture", "Style", "Flavor", "Texture",
+        "Balance", "Harmony", "Rhythm", "Practice",
+        # Universal tech / acronyms — not locale-specific
+        "Wi-Fi", "Wifi", "WiFi", "SMS", "GPS", "URL", "API", "PDF",
+        "CBD", "ATM", "PIN", "QR", "VR", "AR",
+        # Meta-cultural label: "Western" appears in our own avoid-defaults
+        # discussion ("avoid Western references") in tutor turns. Real
+        # Western-cultural leaks like "Western breakfast" or "Western movie"
+        # are caught as multi-word entities by the judge, since the
+        # proper-noun regex captures multi-word phrases.
+        "Western",
+        # English modal / auxiliary verbs frequently open sentences
+        # ("Will your grandfather come?", "May I ask..."). They overlap
+        # with Western person names (Will/William, May, Mark) and the
+        # judge mis-tags them as out-of-locale name leakage.
+        "Will", "May", "Might", "Could", "Would", "Should", "Shall",
+        # English connectors / common nouns frequently capitalized at
+        # sentence start ("Plus, you can also...", "Line 7 is faster.",
+        # "Coffee is popular here."). Dominant FP source in the 9B run.
+        "Plus", "Line", "Coffee",
+        # Universal software / tools — present in every locale's modern
+        # daily life. Judge sometimes flags as Western brand.
+        "Python", "Photoshop", "Google", "Google Maps", "Zoom", "CapCut",
+    )
+)
+
+
+# Per-locale allowlist of KNOWN-IN-LOCALE entities. The judge model
+# (especially 4B-class) sometimes wrongly tags genuine locale entities
+# as out_of_locale — e.g. "WeChat", "Alipay", "Yunnan",
+# "Mid-Autumn Festival" for China. These rejections are 100%
+# false-positive: they ARE in locale. Skipping at extraction prevents
+# both the cache poison and the wasted judge call.
+#
+# Add an entity here when you've confirmed (manually) it's genuinely in
+# locale and the judge keeps mis-labeling it. NEVER add entities you
+# aren't sure about — false-allowlisting a Western-default entity
+# defeats the whole locale_judge.
+_KNOWN_IN_LOCALE: dict[str, frozenset[str]] = {
+    "china": frozenset(
+        s.lower() for s in (
+            # Chinese tech / apps / brands
+            "WeChat", "WeChat Channels", "WeChat ID", "Alipay", "Weibo",
+            "Tmall", "Taobao", "Tencent", "Huawei", "Baidu", "Douyin",
+            "Xiaomi", "SF Express", "Sina", "DiDi", "Meituan", "Pinduoduo",
+            # Major cities and provinces
+            "Beijing", "Shanghai", "Guangzhou", "Shenzhen", "Chengdu",
+            "Hangzhou", "Xiamen", "Suzhou", "Nanjing", "Tianjin",
+            "Chongqing", "Wuhan", "Changsha", "Qingdao", "Dalian",
+            "Kunming", "Harbin", "Shenyang", "Lhasa", "Sanya",
+            "Xi'an", "Zhengzhou", "Jinan", "Hefei", "Lanzhou",
+            "Yunnan", "Sichuan", "Guangdong", "Fujian", "Zhejiang",
+            "Jiangsu", "Anhui", "Hunan", "Hubei", "Shandong",
+            "Henan", "Hebei", "Shanxi", "Shaanxi", "Gansu",
+            "Tibet", "Xinjiang", "Inner Mongolia", "Liaoning", "Jilin",
+            # Cultural / historical
+            "Mid-Autumn Festival", "Spring Festival", "Lunar New Year",
+            "Dragon Boat Festival", "Chongyang Festival", "Qingming",
+            "Qingming Festival",
+            "Tang Dynasty", "Song Dynasty", "Ming Dynasty",
+            "Qing Dynasty", "Han Dynasty", "Sui Dynasty", "Yuan Dynasty",
+            "Tang", "Song", "Ming", "Qing", "Han", "Sui", "Yuan",
+            "Great Wall", "Forbidden City", "Summer Palace",
+            "Terracotta Warriors", "Stone Buddha Cave",
+            # Universities
+            "Tsinghua University", "Peking University", "Fudan University",
+            "Tongji University", "Southeast University", "West Lake University",
+            # Geography / landmarks
+            "Yangtze", "Yangtze River", "Yellow River", "Pearl River",
+            "Suzhou Creek", "Canton Tower", "Taikoo Li",
+            "West District", "West Gate", "West Hill", "Wanda Square",
+            "Wulin Park", "Hongshan Park", "Jinli Ancient Street",
+            # Added 2026-06-08 after dominant FPs in 9B run:
+            "West Lake", "West Street", "Muslim Quarter", "Drum Tower",
+            "Green Lake Park", "Wanda Plaza", "Old Street", "People's Park",
+            "Blue Moon Valley",
+            # Universities (dominant FPs in 9B run):
+            "Northwest University", "Southwest University",
+            # Cultural practices (commonly spelled both ways)
+            "Tai Chi", "Taichi", "Qigong", "Wushu", "Mahjong",
+            "Hanfu", "Cheongsam", "Qipao", "Jianzhi",
+        )
+    ),
+    "japan": frozenset(),  # add as needed
+    "italy": frozenset(),  # add as needed
+}
 
 
 # ---------------------------------------------------------------------------
@@ -253,7 +410,7 @@ class LocaleLLMJudge(Filter):
         max_entities_per_call: int = 40,
         max_tokens: int = 800,
         temperature: float = 0.0,
-        **_legacy: object,  # 호환성: 옛 spacy_model kwarg 무시
+        **_legacy: object,  # compatibility: ignore the legacy spacy_model kwarg
     ) -> None:
         if not 0.0 <= ambiguous_weight <= 1.0:
             raise ValueError(
@@ -269,14 +426,40 @@ class LocaleLLMJudge(Filter):
 
     # ----- entity extraction ---------------------------------------------
 
-    def _extract_entities(self, example: FilterableExample) -> list[str]:
-        """assistant turn 에서 대문자 phrase (사람/지명/브랜드 후보) 를 정규식
-        으로 뽑습니다. 분류는 LLM judge 가 합니다 - 이 단계는 cheap filter.
+    def _extract_entities(
+        self, example: FilterableExample, locale_name: str = "",
+    ) -> list[str]:
+        """Extract capitalized phrases (people / place / brand candidates) from
+        assistant turns with a regex. Classification is left to the LLM judge -
+        this step is a cheap filter.
+
+        ``locale_name`` is consulted to skip entities that are known to be
+        in-locale (``_KNOWN_IN_LOCALE``). This avoids judge false-positives
+        on entities like ``WeChat`` / ``Yunnan`` / ``Mid-Autumn Festival``
+        for China that the 4B judge mis-classifies as out_of_locale.
+
+        For eval examples the assistant turn is ``<think>...</think>{json}``.
+        The <think> block is private reasoning the trained student would never
+        emit at deploy time, so we slice to post-</think> before scanning.
+        Matches the same scoping that ``banned_terms`` and ``non_latin_script``
+        already apply to eval records.
         """
+        md = getattr(example, "metadata", None)
+        is_eval = md is not None and hasattr(md, "source_dialogue_id")
         msgs = getattr(example, "messages", None) or []
-        texts = [m.content for m in msgs if m.role == "assistant"]
+        texts: list[str] = []
+        for m in msgs:
+            if m.role != "assistant":
+                continue
+            content = m.content
+            if is_eval:
+                close_match = _THINK_CLOSE_RE.search(content)
+                if close_match is not None:
+                    content = content[close_match.end():]
+            texts.append(content)
         if not texts:
             return []
+        known_in_locale = _KNOWN_IN_LOCALE.get(locale_name.lower(), frozenset())
         seen: dict[str, str] = {}
         for text in texts:
             if not text:
@@ -288,12 +471,31 @@ class LocaleLLMJudge(Filter):
                 first_word = cleaned.split()[0].lower()
                 if first_word in _PROPER_STOPWORDS:
                     continue
-                # "the Tajrish" 같은 leading 관사 제거.
+                # Strip a leading article like "the Tajrish".
                 cleaned = re.sub(
                     r"^(?:the|a|an)\s+", "", cleaned, flags=re.IGNORECASE
                 ).strip()
-                if cleaned:
-                    seen.setdefault(cleaned.lower(), cleaned)
+                if not cleaned:
+                    continue
+                cleaned_lc = cleaned.lower()
+                # Bare language name: meta-discussion, not a Western-default
+                # leak. Skip exact matches only — "English breakfast" still
+                # gets judged.
+                if cleaned_lc in _LANGUAGE_NAMES:
+                    continue
+                # Compound language-policy phrase ("English-only",
+                # "Mandarin-first", "Korean-speaking"). Same class as bare
+                # language names — meta-discussion, not a cultural entity.
+                if _LANGUAGE_POLICY_PHRASE_RE.match(cleaned):
+                    continue
+                # Common English word at sentence start ("Precision is...",
+                # "Absolutely!"): not a proper noun.
+                if cleaned_lc in _COMMON_SENTENCE_INITIAL_WORDS:
+                    continue
+                # Known in-locale entity for this scenario's locale.
+                if cleaned_lc in known_in_locale:
+                    continue
+                seen.setdefault(cleaned_lc, cleaned)
         return list(seen.values())
 
     # ----- judge call ----------------------------------------------------
@@ -307,16 +509,20 @@ class LocaleLLMJudge(Filter):
         model classifies entities against that country's expectations.
         """
         verdicts: dict[str, str] = {}
-        header = _render_judge_header(locale_name)
+        # System carries instructions only; the per-chunk entity list goes in
+        # the USER message. cacheable_prefix=system_prompt lets llama.cpp
+        # cache the (large) instruction block once and reuse it across chunks.
+        system_prompt = with_thinking_directive(
+            _render_judge_header(locale_name), role="judge"
+        )
         for start in range(0, len(entities), self.max_entities_per_call):
             chunk = entities[start : start + self.max_entities_per_call]
-            payload = "\n".join(f"  - {e}" for e in chunk)
-            prompt = header + "\nEntities:\n" + payload + "\n"
+            user_message = "Entities:\n" + "\n".join(f"  - {e}" for e in chunk)
             try:
                 raw = await self.judge.generate(
-                    system=prompt,
-                    messages=[],
-                    cacheable_prefix=header,
+                    system=system_prompt,
+                    messages=[Message(role="user", content=user_message)],
+                    cacheable_prefix=system_prompt,
                     max_tokens=self.max_tokens,
                     temperature=self.temperature,
                 )
@@ -352,7 +558,12 @@ class LocaleLLMJudge(Filter):
     # ----- main check ----------------------------------------------------
 
     async def check(self, example: FilterableExample) -> FilterResult:
-        entities = self._extract_entities(example)
+        # Read the example's locale so cache lookup + judge prompt + verdict
+        # storage are all scoped to that locale. Existing single-locale data
+        # has metadata.locale defaulted to "china" via the schema, so the
+        # behavior on legacy data is unchanged.
+        locale_name = getattr(getattr(example, "metadata", None), "locale", "") or ""
+        entities = self._extract_entities(example, locale_name=locale_name)
         if not entities:
             return FilterResult(
                 passed=True,
@@ -360,12 +571,6 @@ class LocaleLLMJudge(Filter):
                 reason="no proper-noun entities in assistant turns",
                 metadata={"n_entities": 0},
             )
-
-        # Read the example's locale so cache lookup + judge prompt + verdict
-        # storage are all scoped to that locale. Existing single-locale data
-        # has metadata.locale defaulted to "china" via the schema, so the
-        # behavior on legacy data is unchanged.
-        locale_name = getattr(getattr(example, "metadata", None), "locale", "") or ""
 
         cached = self.cache.get_many(entities, locale=locale_name)
         missing = [e for e in entities if e.lower() not in cached]

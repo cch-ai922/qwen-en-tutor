@@ -10,6 +10,16 @@ Examples:
     # Override CEFR level and locale
     python -m scripts.run_deploy --cefr B1 --locale japan
 
+    # Hand-crafted single-file scenario
+    python -m scripts.run_deploy --scenario-file scenarios/china_market_a2.json
+
+    # Deploy a training seed directly — no conversion step.
+    # CEFR / locale auto-default to the seed's cefr_level / locale.
+    python -m scripts.run_deploy --seed-jsonl data/seeds/A2.jsonl --seed-id 26a7d984b0a6
+
+    # Pick by row index instead of id
+    python -m scripts.run_deploy --seed-jsonl data/seeds/A2.jsonl --seed-index 7
+
     # Use the SFT adapter (skip DPO output)
     python -m scripts.run_deploy --adapter outputs/sft
 
@@ -21,8 +31,16 @@ from __future__ import annotations
 
 import argparse
 import logging
+import os
 import sys
 from pathlib import Path
+
+# Offline-by-default: keep transformers and the Hub off the network so the
+# deployed tutor runs purely from local adapter + vendor/models. Must be set
+# before any transformers/peft import. Users can override by exporting these
+# vars explicitly before launching the script.
+os.environ.setdefault("HF_HUB_OFFLINE", "1")
+os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
 
 import yaml
 
@@ -43,15 +61,38 @@ def main() -> int:
                         help="Path to base model. Default: base_model.model_id from training.yaml.")
     parser.add_argument("--adapter", type=str, default="outputs/dpo",
                         help="Path to LoRA adapter directory. Default: outputs/dpo.")
-    parser.add_argument("--cefr", type=str, default="A2",
-                        choices=["A1", "A2", "B1", "B2", "C1", "C2"])
-    parser.add_argument("--locale", type=str, default="china",
-                        help="Locale name (must exist in config/locale.yaml).")
+    parser.add_argument("--cefr", type=str, default=None,
+                        choices=["A1", "A2", "B1", "B2", "C1", "C2"],
+                        help="CEFR target register. If omitted and a seed is loaded "
+                             "via --seed-jsonl / --scenario-file, defaults to the "
+                             "seed's cefr_level. Otherwise falls back to A2.")
+    parser.add_argument("--locale", type=str, default=None,
+                        help="Locale name (must exist in config/locale.yaml). If "
+                             "omitted and a seed is loaded, defaults to the seed's "
+                             "locale. Otherwise falls back to china.")
     parser.add_argument("--no-4bit", action="store_true", help="Disable 4-bit quantization.")
     parser.add_argument("--no-safety", action="store_true",
                         help="Disable BannedTermsFilter (debug only).")
     parser.add_argument("--banned-terms", type=str, default=None,
                         help="Override banned-terms YAML path. Default: config/banned_terms_deploy.yaml.")
+    parser.add_argument("--scenario-file", type=str, default=None,
+                        help="Path to a single-object scenario JSON (topic + subtopics + "
+                             "user_role + model_role). Accepts both the hand-crafted "
+                             "scenarios/*.json shape AND a single-object seed dump. "
+                             "Strongly recommended -- the model was trained with these fields "
+                             "in the system prompt. Without one, the runtime falls back to a "
+                             "generic prompt and logs a warning.")
+    parser.add_argument("--seed-jsonl", type=str, default=None,
+                        help="Path to a training seeds JSONL file (data/seeds/<level>.jsonl). "
+                             "One row is loaded as the scenario; CEFR / locale auto-default to "
+                             "the seed's cefr_level / locale. Mutually exclusive with "
+                             "--scenario-file.")
+    parser.add_argument("--seed-id", type=str, default=None,
+                        help="When loading from --seed-jsonl, pick the row with this 'id' "
+                             "(preferred for reproducibility). Mutually exclusive with --seed-index.")
+    parser.add_argument("--seed-index", type=int, default=0,
+                        help="When loading from --seed-jsonl without --seed-id, pick the Nth "
+                             "(0-indexed) non-blank row. Default: 0 (first row).")
     parser.add_argument("--max-new-tokens", type=int, default=512)
     parser.add_argument("--temperature", type=float, default=0.7)
     parser.add_argument("--top-p", type=float, default=0.95)
@@ -83,24 +124,87 @@ def main() -> int:
     print(f"Loading {base_model} + adapter {args.adapter} ...", flush=True)
 
     # Import lazily so --help is fast.
-    from qwen_tutor.deploy.tutor import TutorRuntime
+    from qwen_tutor.deploy.tutor import Scenario, TutorRuntime
+
+    if args.scenario_file and args.seed_jsonl:
+        print(
+            "ERROR: --scenario-file and --seed-jsonl are mutually exclusive.",
+            file=sys.stderr,
+        )
+        return 2
+    if args.seed_id and args.seed_index != 0:
+        print(
+            "ERROR: --seed-id and --seed-index are mutually exclusive.",
+            file=sys.stderr,
+        )
+        return 2
+
+    scenario = None
+    if args.scenario_file:
+        scenario_path = Path(args.scenario_file)
+        if not scenario_path.exists():
+            print(f"ERROR: scenario file not found: {scenario_path}", file=sys.stderr)
+            return 2
+        try:
+            scenario = Scenario.from_json_file(scenario_path)
+        except Exception as exc:  # noqa: BLE001
+            print(
+                f"ERROR: failed to load scenario {scenario_path}: "
+                f"{type(exc).__name__}: {exc}",
+                file=sys.stderr,
+            )
+            return 2
+    elif args.seed_jsonl:
+        try:
+            scenario = Scenario.from_seed_jsonl(
+                args.seed_jsonl,
+                seed_id=args.seed_id,
+                seed_index=args.seed_index,
+            )
+        except (FileNotFoundError, ValueError) as exc:
+            print(f"ERROR: failed to load seed: {exc}", file=sys.stderr)
+            return 2
+
+    # Resolve CEFR and locale. Priority: explicit CLI > seed metadata > fallback.
+    cefr = args.cefr
+    locale = args.locale
+    if scenario is not None:
+        if cefr is None and scenario.metadata.get("cefr_level"):
+            cefr = scenario.metadata["cefr_level"]
+        if locale is None and scenario.metadata.get("locale"):
+            locale = scenario.metadata["locale"]
+    if cefr is None:
+        cefr = "A2"
+    if locale is None:
+        locale = "china"
 
     tutor = TutorRuntime(
         base_model_path=base_model,
         adapter_path=args.adapter,
-        cefr_level=args.cefr,
-        locale=args.locale,
+        cefr_level=cefr,
+        locale=locale,
         use_4bit=not args.no_4bit,
         max_new_tokens=args.max_new_tokens,
         temperature=args.temperature,
         top_p=args.top_p,
         enable_safety_filter=not args.no_safety,
         banned_terms_path=args.banned_terms,
+        scenario=scenario,
     )
 
+    if scenario is not None:
+        seed_id = scenario.metadata.get("id")
+        seed_suffix = f" [seed_id={seed_id}]" if seed_id else ""
+        scenario_line = (
+            f"scenario={scenario.model_role_name!r} talking with "
+            f"{scenario.user_role_name!r} about {scenario.topic!r}{seed_suffix}"
+        )
+    else:
+        scenario_line = "scenario=NONE (model running outside trained distribution)"
     print(
-        f"\nReady. CEFR={args.cefr} locale={args.locale} "
+        f"\nReady. CEFR={cefr} locale={locale} "
         f"safety={'on' if not args.no_safety else 'OFF'}\n"
+        f"{scenario_line}\n"
         f"Type your message. Commands: /reset, /eval [target_cefr], /quit\n",
         flush=True,
     )

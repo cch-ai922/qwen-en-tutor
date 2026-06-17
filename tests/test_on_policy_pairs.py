@@ -107,11 +107,6 @@ def _make_sft(ex_id: str = "sft-001", level: str = "A2") -> SFTExample:
     )
 
 
-DEPLOYMENT_TEMPLATE = (
-    "You are a patient tutor for an Iranian learner at CEFR level {cefr_level}."
-)
-
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -186,7 +181,6 @@ async def test_pair_kept_when_teacher_wins_clearly(tmp_path):
 
     pair = await _generate_one_pair(
         sft=sft, target=target, judge=judge,
-        deployment_system_prompt_template=DEPLOYMENT_TEMPLATE,
         min_margin=MIN_JUDGE_MARGIN,
         target_max_tokens=64, target_temperature=0.7,
         judge_max_tokens=200, judge_temperature=0.0,
@@ -221,7 +215,6 @@ async def test_pair_skipped_on_tie(tmp_path):
 
     pair = await _generate_one_pair(
         sft=sft, target=target, judge=judge,
-        deployment_system_prompt_template=DEPLOYMENT_TEMPLATE,
         min_margin=MIN_JUDGE_MARGIN,
         target_max_tokens=64, target_temperature=0.7,
         judge_max_tokens=200, judge_temperature=0.0,
@@ -248,7 +241,6 @@ async def test_pair_skipped_when_policy_wins(tmp_path):
 
     pair = await _generate_one_pair(
         sft=sft, target=target, judge=judge,
-        deployment_system_prompt_template=DEPLOYMENT_TEMPLATE,
         min_margin=MIN_JUDGE_MARGIN,
         target_max_tokens=64, target_temperature=0.7,
         judge_max_tokens=200, judge_temperature=0.0,
@@ -277,7 +269,6 @@ async def test_pair_skipped_when_margin_below_threshold(tmp_path):
 
     pair = await _generate_one_pair(
         sft=sft, target=target, judge=judge,
-        deployment_system_prompt_template=DEPLOYMENT_TEMPLATE,
         min_margin=2,
         target_max_tokens=64, target_temperature=0.7,
         judge_max_tokens=200, judge_temperature=0.0,
@@ -297,7 +288,6 @@ async def test_judge_returns_unparseable_records_failure(tmp_path):
 
     pair = await _generate_one_pair(
         sft=sft, target=target, judge=judge,
-        deployment_system_prompt_template=DEPLOYMENT_TEMPLATE,
         min_margin=MIN_JUDGE_MARGIN,
         target_max_tokens=64, target_temperature=0.7,
         judge_max_tokens=200, judge_temperature=0.0,
@@ -339,7 +329,6 @@ async def test_generate_batch_writes_pair_from_filtered_sft(tmp_path):
     audit = tmp_path / "audit.jsonl"
     results = await generate_batch(
         target=target,
-        deployment_system_prompt_template=DEPLOYMENT_TEMPLATE,
         cefr_levels=["A2"],
         sft_filtered_dir=sft_filtered,
         output_dir=out_dir,
@@ -378,7 +367,6 @@ async def test_generate_batch_resumes_from_existing_output(tmp_path):
     judge = MockJudge({"winner": "A", "margin": 3, "reason_axis": "register_unnatural", "note": "x"})
     results = await generate_batch(
         target=target,
-        deployment_system_prompt_template=DEPLOYMENT_TEMPLATE,
         cefr_levels=["A2"],
         sft_filtered_dir=sft_filtered,
         output_dir=out_dir,

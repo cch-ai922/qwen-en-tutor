@@ -90,14 +90,6 @@ class MockQwen3Tokenizer:
 
 
 @pytest.fixture
-def deployment_template() -> str:
-    return (
-        "You are a patient English conversation tutor for Iranian adult "
-        "learners. The learner is at CEFR level {cefr_level}.\n"
-    )
-
-
-@pytest.fixture
 def evaluation_prompt() -> str:
     return "You are an English examiner. Produce <think>...</think> then JSON.\n"
 
@@ -110,12 +102,10 @@ def mock_tokenizer() -> MockQwen3Tokenizer:
 @pytest.fixture
 def formatter(
     mock_tokenizer: MockQwen3Tokenizer,
-    deployment_template: str,
     evaluation_prompt: str,
 ) -> ChatFormatter:
     return ChatFormatter(
         tokenizer=mock_tokenizer,
-        deployment_system_prompt_template=deployment_template,
         evaluation_system_prompt=evaluation_prompt,
         max_seq_length=4096,
     )
@@ -161,7 +151,8 @@ def evaluation_example() -> EvaluationExample:
                 content=(
                     "<think>Learner used 'goed' instead of 'went'.</think>\n"
                     '{"overall_cefr_estimate": "A2", "scores": {"fluency": 3, '
-                    '"accuracy": 2, "vocabulary": 3, "interaction": 3}, '
+                    '"accuracy": 2, "vocabulary": 3, "interaction": 3, '
+                    '"topic_adherence": 4}, '
                     '"specific_feedback": [], "strengths": [], '
                     '"suggested_practice": "drill irregular past forms"}'
                 ),
@@ -180,8 +171,12 @@ def test_sft_uses_deployment_template_not_stored_system_prompt(
 ) -> None:
     chat = formatter.format_sft_example(sft_example)
     assert chat.messages[0]["role"] == "system"
-    assert "CEFR level A2" in chat.messages[0]["content"]
-    assert "STORED PROMPT" not in chat.messages[0]["content"]
+    # Scenario-aware deployment template renders [role]/[topic]/[cefr_level] etc.
+    content = chat.messages[0]["content"]
+    assert "[role]" in content
+    assert "[cefr_level]" in content
+    assert "A2" in content
+    assert "STORED PROMPT" not in content
 
 
 def test_sft_prepends_no_think_to_first_user_turn(
@@ -346,19 +341,8 @@ def test_tokenize_attention_mask_is_all_ones(
 # ---------------------------------------------------------------------------
 
 
-def test_template_missing_cefr_placeholder_raises(
-    mock_tokenizer: MockQwen3Tokenizer, evaluation_prompt: str
-) -> None:
-    with pytest.raises(ValueError, match="{cefr_level}"):
-        ChatFormatter(
-            tokenizer=mock_tokenizer,
-            deployment_system_prompt_template="missing placeholder",
-            evaluation_system_prompt=evaluation_prompt,
-        )
-
-
 def test_validate_special_tokens_missing_raises(
-    deployment_template: str, evaluation_prompt: str
+    evaluation_prompt: str,
 ) -> None:
     class BareTokenizer:
         additional_special_tokens: list[str] = []
@@ -373,7 +357,6 @@ def test_validate_special_tokens_missing_raises(
     with pytest.raises(ValueError, match="missing expected special tokens"):
         ChatFormatter(
             tokenizer=BareTokenizer(),
-            deployment_system_prompt_template=deployment_template,
             evaluation_system_prompt=evaluation_prompt,
         )
 
@@ -400,14 +383,12 @@ def real_qwen3_tokenizer():
 @pytest.mark.slow
 def test_real_qwen3_round_trip(
     real_qwen3_tokenizer,
-    deployment_template: str,
     evaluation_prompt: str,
     sft_example: SFTExample,
     evaluation_example: EvaluationExample,
 ) -> None:
     fmt = ChatFormatter(
         tokenizer=real_qwen3_tokenizer,
-        deployment_system_prompt_template=deployment_template,
         evaluation_system_prompt=evaluation_prompt,
     )
     sft_tok = fmt.format_for_training(sft_example)

@@ -28,10 +28,12 @@ The formatter:
 from __future__ import annotations
 
 import logging
+import re
 from dataclasses import dataclass, field
 from typing import Any, Sequence
 
 from qwen_tutor.schemas import EvaluationExample, Message, SFTExample
+from qwen_tutor.utils.thinking import get_thinking_mode
 
 logger = logging.getLogger(__name__)
 
@@ -40,6 +42,35 @@ THINK_TAG = "/think"
 LOSS_IGNORE_INDEX = -100
 
 CONVERSATION_SCENARIO_TYPES = ("normal", "redirect", "unleveled_natural")
+
+# Strip a single ``<think>...</think>`` block (and any whitespace around it)
+# from the start of an assistant turn. Used when ``thinking.student_eval`` is
+# ``no_think``: the model should learn to emit JSON straight away, so we
+# remove the reasoning preamble from the training-data assistant content
+# before feeding it to the chat template.
+_THINK_BLOCK_RE = re.compile(r"^\s*<think>.*?</think>\s*", re.DOTALL | re.IGNORECASE)
+
+
+def _strip_leading_think_block(content: str) -> str:
+    """Remove a single leading ``<think>...</think>`` block from ``content``.
+
+    If no leading think block is present, returns ``content`` unchanged. Only
+    the FIRST block is stripped — defensively avoids deleting later text that
+    happens to contain the literal characters.
+    """
+    return _THINK_BLOCK_RE.sub("", content, count=1)
+
+
+def _student_eval_thinking_enabled() -> bool:
+    """Return True iff ``thinking.student_eval`` resolves to ``think``.
+
+    Reads from ``config/generation.yaml`` via ``qwen_tutor.utils.thinking``.
+    Cached per-process by that module, so this call is cheap. ``auto`` is
+    treated as ``think`` because the trained CEFR-eval mode is the *de facto*
+    home of the ``<think>`` reasoning block, so the conservative default when
+    the config is silent is to keep thinking on.
+    """
+    return get_thinking_mode("student_eval") != "no_think"
 
 
 def _flatten_token_ids(result: Any) -> list[int]:
@@ -134,33 +165,20 @@ class ChatFormatter:
     def __init__(
         self,
         tokenizer: Any | None,
-        deployment_system_prompt_template: str | None = None,
         evaluation_system_prompt: str | None = None,
         max_seq_length: int = 4096,
     ) -> None:
-        # Single source of truth: when callers don't supply templates,
-        # pull them from ``qwen_tutor.generation.prompts``. That module
-        # already runs them through ``LOCALE.localize()`` which substitutes
-        # {country}, {country_adjective}, {learner_description},
-        # {avoided_topics_sentence}, and {avoid_cultures_phrase} from
-        # config/locale.yaml. Editing locale.yaml is then the only knob
-        # that affects what the trained model hears.
-        if deployment_system_prompt_template is None:
-            from qwen_tutor.generation.prompts import (
-                DEPLOYMENT_SYSTEM_PROMPT_TEMPLATE,
-            )
-            deployment_system_prompt_template = DEPLOYMENT_SYSTEM_PROMPT_TEMPLATE
+        # Single source of truth: when callers don't supply the eval prompt,
+        # pull it from ``qwen_tutor.generation.prompts.render_evaluation_system_prompt``.
+        # That accessor applies the locale substitution AND honors
+        # ``thinking.student_eval`` (stripping <think> instructions when
+        # ``no_think`` is active), keeping training-time eval prompts in
+        # lockstep with deploy-time eval prompts.
         if evaluation_system_prompt is None:
-            from qwen_tutor.generation.prompts import EVALUATION_SYSTEM_PROMPT
+            from qwen_tutor.generation.prompts import render_evaluation_system_prompt
 
-            evaluation_system_prompt = EVALUATION_SYSTEM_PROMPT
-        if "{cefr_level}" not in deployment_system_prompt_template:
-            raise ValueError(
-                "deployment_system_prompt_template must contain a "
-                "{cefr_level} placeholder"
-            )
+            evaluation_system_prompt = render_evaluation_system_prompt()
         self.tokenizer = tokenizer
-        self.deployment_template = deployment_system_prompt_template
         self.evaluation_system_prompt = evaluation_system_prompt
         self.max_seq_length = max_seq_length
         if tokenizer is not None:
@@ -201,24 +219,32 @@ class ChatFormatter:
 
     # ----- conversation / evaluation prep --------------------------------
 
-    def _render_deployment_system_prompt(
-        self, cefr_level: str, locale_name: str | None = None
-    ) -> str:
-        """Render the deployment system prompt for a given CEFR level + locale.
+    def _render_scenario_deployment_system_prompt(self, metadata) -> str:
+        """Render the SCENARIO-AWARE deployment system prompt from metadata.
 
-        When ``locale_name`` is None or matches the default locale, the
-        pre-rendered ``self.deployment_template`` is used (fast path, no
-        re-substitution). Otherwise we delegate to the prompts module which
-        re-renders for the requested locale.
+        Reads ``metadata.topic``, ``metadata.subtopics``, ``metadata.user_role``,
+        ``metadata.model_role`` (all required by the SFT schema), plus
+        ``cefr_level`` and ``locale``, and produces a system prompt that tells
+        the model exactly who it is playing, who the learner is, what topic
+        is on the table, and that it must stay on topic.
+
+        This is the prompt the SFT/DPO trainer feeds the model so the trained
+        distribution matches what TutorRuntime will produce at deploy time
+        when a Scenario is provided. Both paths route through
+        ``render_scenario_deployment_system_prompt`` for identical text.
         """
-        if locale_name is None:
-            return self.deployment_template.format(cefr_level=cefr_level)
-        from qwen_tutor.generation.prompts import render_deployment_system_prompt
-        from qwen_tutor.locale import DEFAULT_LOCALE_NAME
+        from qwen_tutor.generation.prompts import render_scenario_deployment_system_prompt
 
-        if locale_name == DEFAULT_LOCALE_NAME:
-            return self.deployment_template.format(cefr_level=cefr_level)
-        return render_deployment_system_prompt(cefr_level, locale_name=locale_name)
+        return render_scenario_deployment_system_prompt(
+            cefr_level=metadata.cefr_level,
+            locale_name=metadata.locale,
+            topic=metadata.topic,
+            subtopics=list(metadata.subtopics) if metadata.subtopics else None,
+            user_role_name=metadata.user_role.name,
+            user_role_description=metadata.user_role.description,
+            model_role_name=metadata.model_role.name,
+            model_role_description=metadata.model_role.description,
+        )
 
     def _render_evaluation_system_prompt(
         self, locale_name: str | None = None
@@ -246,8 +272,13 @@ class ChatFormatter:
                 f"{example.metadata.scenario_type!r}; expected one of "
                 f"{CONVERSATION_SCENARIO_TYPES}"
             )
-        system_content = self._render_deployment_system_prompt(
-            example.metadata.cefr_level, locale_name=example.metadata.locale
+        # Scenario-aware prompt: include topic / subtopics / user_role /
+        # model_role so the model learns to condition on them. This is the
+        # whole point of the SFT/DPO pipeline -- a generic "patient tutor"
+        # prompt teaches the model nothing about playing a specific role
+        # within a specific scenario.
+        system_content = self._render_scenario_deployment_system_prompt(
+            example.metadata
         )
         messages: list[dict[str, str]] = [{"role": "system", "content": system_content}]
         first_user_seen = False
@@ -273,6 +304,16 @@ class ChatFormatter:
         )
 
     def format_evaluation_example(self, example: EvaluationExample) -> FormattedChat:
+        # Honor ``thinking.student_eval``. When ``no_think``, strip the
+        # leading ``<think>...</think>`` block from every assistant turn so
+        # the model learns to emit JSON straight away, and set
+        # ``enable_thinking=False`` so the chat template doesn't inject a
+        # think opener at inference. When ``think`` (default), preserve the
+        # ``<think>`` exemplar and enable thinking. This is the SINGLE knob
+        # for the trained student's eval-mode shape; changing it requires
+        # retraining because the trained distribution is locked to whichever
+        # shape was seen at SFT time.
+        eval_thinking = _student_eval_thinking_enabled()
         messages: list[dict[str, str]] = [
             {
                 "role": "system",
@@ -285,14 +326,21 @@ class ChatFormatter:
         for m in example.messages:
             if m.role == "system":
                 continue
-            if m.role == "assistant" and "<think>" not in m.content:
-                logger.warning(
-                    "EvaluationExample %s has an assistant turn without <think> "
-                    "block; the model will still learn from it but won't see a "
-                    "thinking exemplar",
-                    example.id,
-                )
-            messages.append({"role": m.role, "content": m.content})
+            content = m.content
+            if m.role == "assistant":
+                if eval_thinking:
+                    if "<think>" not in content:
+                        logger.warning(
+                            "EvaluationExample %s has an assistant turn without "
+                            "<think> block; the model will still learn from it "
+                            "but won't see a thinking exemplar",
+                            example.id,
+                        )
+                else:
+                    # no_think mode: strip the leading reasoning block so the
+                    # model is trained on JSON-only assistant turns.
+                    content = _strip_leading_think_block(content)
+            messages.append({"role": m.role, "content": content})
             had_user = had_user or m.role == "user"
         if not had_user:
             raise ValueError(
@@ -300,7 +348,7 @@ class ChatFormatter:
             )
         return FormattedChat(
             messages=messages,
-            enable_thinking=True,
+            enable_thinking=eval_thinking,
             cefr_level=example.metadata.learner_cefr_target,
             example_type="evaluation",
             source_example_id=example.id,

@@ -91,7 +91,7 @@ def dpo_example(example_metadata: ExampleMetadata) -> DPOExample:
 def evaluation_output() -> EvaluationOutput:
     return EvaluationOutput(
         overall_cefr_estimate="A2",
-        scores=ScoreBreakdown(fluency=3, accuracy=2, vocabulary=3, interaction=3),
+        scores=ScoreBreakdown(fluency=3, accuracy=2, vocabulary=3, interaction=3, topic_adherence=4),
         specific_feedback=[
             TurnFeedback(
                 turn_index=0,
@@ -152,6 +152,29 @@ def test_eval_roundtrip(tmp_path, eval_example: EvaluationExample) -> None:
     EvaluationExample.to_jsonl(path, [eval_example])
     loaded = list(EvaluationExample.from_jsonl(path))
     assert loaded == [eval_example]
+
+
+def test_evaluation_metadata_roundtrip_with_generation(tmp_path, evaluation_output: EvaluationOutput) -> None:
+    metadata = EvaluationMetadata(
+        source_dialogue_id="sft-001",
+        learner_cefr_target="A2",
+        locale="china",
+        scenario_type="redirect",
+        generation={"language_trigger": "speaks_l1"},
+    )
+    example = EvaluationExample(
+        id="eval-002",
+        metadata=metadata,
+        system_prompt="You are an examiner estimating the learner's CEFR level.",
+        messages=[
+            Message(role="user", content="Transcript:\nLearner: 我喜欢学习英语。"),
+            Message(role="assistant", content="<think>Reasoning...</think>..."),
+        ],
+    )
+    path = tmp_path / "eval_generation.jsonl"
+    EvaluationExample.to_jsonl(path, [example])
+    loaded = list(EvaluationExample.from_jsonl(path))
+    assert loaded == [example]
 
 
 def test_evaluation_output_roundtrip(evaluation_output: EvaluationOutput) -> None:
@@ -225,9 +248,13 @@ def test_scenario_seed_valid(user_role: UserRole, model_role: ModelRole) -> None
 
 def test_score_breakdown_range_enforced() -> None:
     with pytest.raises(ValidationError):
-        ScoreBreakdown(fluency=6, accuracy=3, vocabulary=3, interaction=3)
+        ScoreBreakdown(fluency=6, accuracy=3, vocabulary=3, interaction=3, topic_adherence=3)
     with pytest.raises(ValidationError):
-        ScoreBreakdown(fluency=0, accuracy=3, vocabulary=3, interaction=3)
+        ScoreBreakdown(fluency=0, accuracy=3, vocabulary=3, interaction=3, topic_adherence=3)
+    with pytest.raises(ValidationError):
+        ScoreBreakdown(fluency=3, accuracy=3, vocabulary=3, interaction=3, topic_adherence=6)
+    with pytest.raises(ValidationError):
+        ScoreBreakdown(fluency=3, accuracy=3, vocabulary=3, interaction=3, topic_adherence=0)
 
 
 def test_invalid_rejection_axis_rejected(dpo_example: DPOExample) -> None:

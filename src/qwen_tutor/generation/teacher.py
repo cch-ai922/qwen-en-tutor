@@ -430,14 +430,13 @@ def _merge_reasoning_content(message: Any) -> str:
     """Merge ``reasoning_content`` (DeepSeek-R1 / gpt-oss via llama.cpp / vLLM)
     into the visible content as a ``<think>...</think>`` block.
 
-    OpenAI 호환 백엔드 (llama.cpp, vLLM) 가 gpt-oss harmony 응답을
-    돌려줄 때 reasoning 은 ``message.reasoning_content`` 라는 별도
-    필드로 들어옵니다. Qwen3 처럼 ``<think>`` 태그가 content 안에
-    그대로 박혀 있지 않으면 eval 단계에서 reasoning 이 비어 있다고
-    오인되기 때문에 여기서 합쳐 줍니다.
+    OpenAI-compatible backends (llama.cpp, vLLM) return gpt-oss harmony
+    responses with reasoning in a separate ``message.reasoning_content``
+    field. If the prompt does not already embed a ``<think>`` tag in the
+    visible content, the eval stage may mistakenly consider reasoning to be
+    empty, so we merge it here.
 
-    Qwen3 는 reasoning_content 가 없거나 빈 문자열이라 동작이 변하지
-    않습니다.
+    Qwen3 behavior does not change when reasoning_content is absent or empty.
     """
     if isinstance(message, dict):
         content = message.get("content") or ""
@@ -449,8 +448,8 @@ def _merge_reasoning_content(message: Any) -> str:
     if not reasoning:
         return content
     if "<think>" in content and "</think>" in content:
-        # content 가 이미 <think> 블록을 들고 있으면 그대로 둡니다
-        # (이중으로 감싸지 않기 위해).
+        # If content already contains a <think> block, preserve it
+        # (to avoid double wrapping).
         return content
     return f"<think>\n{reasoning}\n</think>\n{content}"
 
@@ -696,6 +695,47 @@ class OpenAITeacher(TeacherClient):
 # ---------------------------------------------------------------------------
 
 
+def _detect_served_model(
+    base_url: str, api_key: str, timeout: float = 3.0,
+) -> str | None:
+    """Query the OpenAI-compatible /models endpoint and return the model
+    name actually being served. Returns ``None`` on any failure (timeout,
+    connection error, malformed response).
+
+    Used to auto-correct ``ProviderConfig.model`` when the YAML points at a
+    self-hosted llama-server / vLLM / LM Studio that ignores the
+    client-supplied model name and serves whatever was loaded. Without this,
+    every generated record has stale ``metadata.generation.model`` that
+    mismatches the actual teacher (e.g. the YAML says ``qwen3.5-4b`` but the
+    server is serving ``Qwen3.5-9B-UD-Q4_K_XL.gguf``).
+    """
+    import urllib.request
+
+    url = base_url.rstrip("/") + "/models"
+    req = urllib.request.Request(url)
+    if api_key:
+        req.add_header("Authorization", f"Bearer {api_key}")
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("_detect_served_model: failed to query %s: %s", url, exc)
+        return None
+    if not isinstance(data, dict):
+        return None
+    # llama-server response:  {"models": [{"name": "...", ...}], ...}
+    # OpenAI / vLLM response: {"data":   [{"id": "...", ...}], ...}
+    for arr_key, name_key in (("models", "name"), ("data", "id")):
+        arr = data.get(arr_key)
+        if isinstance(arr, list) and arr:
+            first = arr[0]
+            if isinstance(first, dict):
+                name = first.get(name_key) or first.get("id") or first.get("model")
+                if isinstance(name, str) and name:
+                    return name
+    return None
+
+
 def build_teacher_from_config(
     generation_yaml: str | Path = "config/generation.yaml",
     role: str = "teacher",
@@ -710,6 +750,20 @@ def build_teacher_from_config(
     )
     usage_logger = UsageLogger(usage_log_path)
     effective_batch_mode = cfg.batch.enabled if batch_mode is None else batch_mode
+
+    # Auto-detect the actually-served model when talking to a local
+    # OpenAI-compatible endpoint. llama-server/vLLM/LM Studio all ignore
+    # the model name in client requests, so the YAML can lie. Override
+    # cfg.model in-place so every downstream record records the truth.
+    # (For real cloud OpenAI/Anthropic, base_url is None and we skip this.)
+    if cfg.provider == "openai" and cfg.base_url:
+        detected = _detect_served_model(cfg.base_url, cfg.api_key)
+        if detected and detected != cfg.model:
+            logger.info(
+                "endpoint %s serves %r (config said %r); using actual served name in metadata",
+                cfg.base_url, detected, cfg.model,
+            )
+            cfg.model = detected
 
     if cfg.provider == "anthropic":
         return AnthropicTeacher(cfg, usage_logger, batch_mode=effective_batch_mode)

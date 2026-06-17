@@ -50,13 +50,14 @@ from qwen_tutor.utils.runner import (
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_SFT_DIR = Path("data/sft_raw")
+DEFAULT_SFT_DIR = Path("data/sft_filtered")
 DEFAULT_OUTPUT_DIR = Path("data/dpo_raw")
 DEFAULT_FAILURES_PATH = Path("data/register_pairs_failures.jsonl")
 
-# Smart axis fallback: 첫 axis 에서 no-op / parse 실패하면 다음 axis 로 한 번씩
-# 회전하며 재시도. 너무 많이 돌리면 teacher token 이 폭증하므로 3 회로 제한.
-# (3 axes × 6개 총 axes 중에서 절반 시도)
+# Smart axis fallback: if the first axis is a no-op or parse fails, retry
+# once with the next axis in rotation. We cap this at three attempts because
+# too many retries would blow up teacher token usage.
+# (3 attempts is half of the 6 total axes.)
 MAX_AXIS_ATTEMPTS = 3
 
 # Per-axis maximum similarity. Reject the rewrite if its char-level
@@ -92,6 +93,11 @@ AXIS_SIMILARITY_LIMITS: dict[str, float] = {
     # restructuring at least one sentence. Anything > 0.88 means the teacher
     # only tagged on a trailing disclaimer without rewriting.
     "persona_break":       0.88,
+    # role_swap_accepted: tutor flips its frame of reference (sells -> buys,
+    # advises -> asks for advice). That's substantial restructuring; > 0.85
+    # means the teacher mostly kept the original turn and just added a
+    # surrender clause.
+    "role_swap_accepted":  0.85,
 }
 # Fallback when an unknown axis is passed in (e.g. future axis additions).
 DEFAULT_SIMILARITY_LIMIT = 0.92
@@ -110,7 +116,10 @@ def _is_near_no_op(rewritten: str, chosen: str, axis: str) -> tuple[bool, float,
 
 
 def _existing_axis_counts(out_path: Path) -> dict[str, int]:
-    """기존에 써둔 pair 들의 axis 카운트. 재개 시 quota balance 의 초기값으로 사용."""
+    """Count the axes of pairs already written to disk.
+
+    Used as the initial quota balance when resuming generation.
+    """
     counts = {ax: 0 for ax in SPOIL_AXES}
     if not out_path.exists():
         return counts
@@ -136,15 +145,15 @@ def _assign_axes_quota_balanced(
 ) -> list[tuple[SFTExample, str]]:
     """Assign one starting axis per SFT to push the batch toward uniform.
 
-    SFT 을 id 순으로 정렬해 순회하며, 각 SFT 에 대해 "현재까지 카운트가 가장
-    낮은 applicable axis" 를 고릅니다. 같은 카운트끼리는 ``axes`` 순서로 결정해
-    결정성을 유지. ``initial_counts`` 는 이미 디스크에 써둔 pair 들의 axis 분포로,
-    재실행 / 재개 시에도 누적 균형을 맞추는 데 씁니다.
+    Walk the SFTs in id order and choose the applicable axis with the lowest
+    count so far. Ties are broken by the order in ``axes`` to keep the result
+    deterministic. ``initial_counts`` reflects the axis distribution of pairs
+    already written to disk, so reruns and resumes stay balanced.
 
-    Returns 는 (sft, assigned_axis) 의 리스트. 실제 생성 단계에서 그 axis 가
-    no-op 으로 실패하면 ``_generate_one`` 의 smart fallback 이 다른 axis 로
-    회전하므로, FINAL axis 는 ``assigned_axis`` 와 다를 수도 있습니다 (그래도
-    분포는 매우 균형 잡힙니다).
+    Returns a list of ``(sft, assigned_axis)`` pairs. The actual axis used in
+    generation may differ if the chosen axis fails as a no-op and
+    ``_generate_one`` rotates to another axis, but the overall distribution
+    stays very balanced.
     """
     counts = {ax: initial_counts.get(ax, 0) for ax in axes}
     axes_order = {ax: i for i, ax in enumerate(axes)}
@@ -153,8 +162,8 @@ def _assign_axes_quota_balanced(
         try:
             turn_idx = _pick_assistant_turn_index(sft)
         except ValueError:
-            # SFT 에 assistant turn 이 없는 비정상 케이스. 기본 첫 axis 로 두고
-            # 실제 실패는 _generate_one 에서 처리.
+            # Abnormal case: the SFT has no assistant turn. Start with the
+            # first axis and let _generate_one handle the actual failure.
             out.append((sft, axes[0]))
             continue
         chosen_text = sft.messages[turn_idx].content
@@ -287,9 +296,23 @@ def _parse_rewrite(raw: str) -> str:
 def _iter_sft_examples(
     sft_dir: Path, levels: list[str]
 ) -> list[tuple[str, SFTExample]]:
-    """Walk all SFT prefixes (normal, redirect, locale_redirect, pedagogy_redirect)
-    for the requested levels. Each is a source of natural assistant turns that
-    DPO can spoil along the 6 rejection axes."""
+    """Walk all SFT prefixes for the requested levels. Each is a source of
+    natural assistant turns that DPO can spoil along the rejection axes.
+
+    Reads from the FILTERED SFT directory (``*_passed.jsonl``) so the
+    ``chosen`` assistant turns we derive from these examples already
+    passed every SFT filter (banned_terms, non_latin_script, etc.).
+    This mirrors what ``on_policy_pairs.py`` does, and means the
+    downstream ``filter_dpo`` stage is largely redundant on
+    ``register_*`` records — the only content we add at this stage
+    is the ``rejected`` (the deliberately-spoiled rewrite), which the
+    DPO filter is configured to skip on purpose.
+
+    The pipeline supports a filter-pipeline wrapper ``{"example": ...,
+    "pipeline": ...}`` from the filter stage as well as raw SFT JSONL,
+    so callers can also point this at ``data/sft_raw/`` directly if
+    they want to operate on unfiltered SFT.
+    """
     out: list[tuple[str, SFTExample]] = []
     for level in levels:
         for prefix in (
@@ -299,12 +322,46 @@ def _iter_sft_examples(
             "pedagogy_redirect",
             "language_redirect",
             "persona_redirect",
+            "topic_redirect",
+            "role_swap_redirect",
+            # 4 persistent 3-strike streams (Option B). The new
+            # cave_on_persistence / verbatim_repeat / lecture_on_persistence
+            # axes (Option C) are particularly meaningful when applied to
+            # the refusal turns in these examples, but they also work on
+            # any other assistant turn — the axis selector cycles by
+            # hash(sft.id) and accepts whichever pair the teacher can spoil.
+            "persistent_off_topic",
+            "persistent_language_violation",
+            "persistent_persona_break",
+            "persistent_role_swap",
         ):
-            path = sft_dir / f"{prefix}_{level}.jsonl"
-            if not path.exists():
+            # Try filtered shape first (``<prefix>_<level>_passed.jsonl``),
+            # fall back to raw shape (``<prefix>_<level>.jsonl``) so this
+            # helper still works if pointed at ``data/sft_raw/``.
+            candidates = [
+                sft_dir / f"{prefix}_{level}_passed.jsonl",
+                sft_dir / f"{prefix}_{level}.jsonl",
+            ]
+            path = next((p for p in candidates if p.exists()), None)
+            if path is None:
                 continue
-            for ex in SFTExample.from_jsonl(path):
-                out.append((level, ex))
+            with path.open("r", encoding="utf-8") as fh:
+                for line in fh:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        rec = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+                    # Unwrap the filter-pipeline ``{"example": ...,
+                    # "pipeline": ...}`` envelope when present.
+                    if isinstance(rec, dict) and isinstance(rec.get("example"), dict):
+                        rec = rec["example"]
+                    try:
+                        out.append((level, SFTExample.model_validate(rec)))
+                    except Exception:  # noqa: BLE001
+                        continue
     return out
 
 
@@ -436,8 +493,24 @@ async def _generate_one(
             attempt_failures.append(f"axis={axis}: {type(exc).__name__}: {exc}")
             continue
 
-        # success — emit a DPOExample on this axis. Propagate locale from the
-        # source SFT so multi-locale data trains with consistent grounding.
+        # success — emit a DPOExample on this axis. Propagate locale and
+        # key SFT generation flags (e.g., language_trigger) from the source
+        # SFT so downstream filters can make the correct exemptions.
+        sft_gen_meta = (getattr(sft.metadata, "generation", None) or {})
+        generation_fields = {
+            **generation_meta_base,
+            "source_sft_id": sft.id,
+            "chosen_turn_index": idx,
+            "spoil_axis": axis,
+            "spoil_direction": direction,
+            "axis_attempt": attempt,
+            "axis_attempts_failed": attempt_failures,
+        }
+        # Propagate language_trigger when present (e.g., speaks_l1), so
+        # script-check filters can exempt user turns appropriately.
+        if isinstance(sft_gen_meta, dict) and "language_trigger" in sft_gen_meta:
+            generation_fields["language_trigger"] = sft_gen_meta["language_trigger"]
+
         metadata = ExampleMetadata(
             topic=sft.metadata.topic,
             subtopics=list(sft.metadata.subtopics),
@@ -446,15 +519,8 @@ async def _generate_one(
             cefr_level=sft.metadata.cefr_level,
             scenario_type=sft.metadata.scenario_type,
             locale=sft.metadata.locale,
-            generation={
-                **generation_meta_base,
-                "source_sft_id": sft.id,
-                "chosen_turn_index": idx,
-                "spoil_axis": axis,
-                "spoil_direction": direction,
-                "axis_attempt": attempt,
-                "axis_attempts_failed": attempt_failures,
-            },
+            category=sft.metadata.category,
+            generation=generation_fields,
         )
         return DPOExample(
             id=_dpo_id(sft.id),
@@ -494,9 +560,10 @@ async def generate_batch(
 ) -> dict[str, int]:
     """Generate one rewrite-based DPO pair per SFT example, cycling axes.
 
-    ``axes`` 는 사용할 spoil 축 목록. 기본 = ``SPOIL_AXES`` 의 6개. 각 SFT
-    예시는 ``hash(sft.id) % len(axes)`` 로 축이 정해집니다. 한 축만 쓰고
-    싶으면 ``axes=("register_unnatural",)`` 처럼 넘기면 됩니다.
+    ``axes`` is the list of spoil axes to use. Defaults to the 6 axes in
+    ``SPOIL_AXES``. Each SFT example is assigned an axis by
+    ``hash(sft.id) % len(axes)``. If you want to use only one axis, pass
+    ``axes=("register_unnatural",)``.
 
     Returns ``{level: n_written}`` for this run.
     """
@@ -529,10 +596,10 @@ async def generate_batch(
             results[level] = 0
             continue
 
-        # Quota-balanced axis assignment. 이미 디스크에 있는 pair 들의 axis
-        # 분포를 초기 카운트로 깔고, 그 위에 pending SFT 마다 "현재 카운트가
-        # 가장 낮은 applicable axis" 를 골라 줍니다. Smart fallback 은 그
-        # axis 가 실패할 때만 발동.
+        # Quota-balanced axis assignment. Start with the axis counts of pairs
+        # already on disk, then choose the applicable axis with the lowest
+        # current count for each pending SFT. Smart fallback only activates if
+        # that axis fails.
         initial_counts = _existing_axis_counts(out_path)
         assignments = _assign_axes_quota_balanced(pending, initial_counts, axes)
         logger.info(

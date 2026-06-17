@@ -1,26 +1,25 @@
-"""locale.py  -  config/locale.yaml 을 읽어 프롬프트/필터/메트릭이 공유하는 상수 제공.
+"""locale.py  -  load config/locale.yaml and provide shared constants for prompts, filters, and metrics.
 
-이 모듈을 import 하는 순간 ``config/locale.yaml`` 을 한 번 로드해서
-``LOCALE`` 싱글톤에 담아 둡니다. 다른 국가로 바꾸려면 yaml 만 수정하고
-Python 을 다시 시작하면 됩니다.
+This module reads ``config/locale.yaml`` once at import time and stores it in the
+``LOCALE`` singleton. To switch countries, update the YAML and restart Python.
 
-다른 모듈은 이 파일이 노출하는 다음 헬퍼만 알면 됩니다.
+Other modules only need to know the following helpers exposed by this file:
 
-    LOCALE.country                  → "Iran"        (e.g. config/locale.yaml 값)
+    LOCALE.country                  → "Iran"        (e.g. value from config/locale.yaml)
     LOCALE.country_adjective        → "Iranian"
     LOCALE.learner_description      → "adult learners of English"
     LOCALE.avoided_topics           → tuple[AvoidedTopic, ...]
-    LOCALE.avoided_topic_names      → tuple[str, ...]   (redirect_axis 후보)
-    LOCALE.locale_instruction_block → 모든 generation 프롬프트 위에 붙는 블록
-    LOCALE.deployment_locale_block  → 배포 system 프롬프트의 한 문단
-    LOCALE.judge_locale_block       → LocaleLLMJudge 가 사용하는 평가 기준
-    LOCALE.format_kwargs            → str.format 에 그대로 unpack 할 수 있는 dict
+    LOCALE.avoided_topic_names      → tuple[str, ...]   (redirect_axis candidates)
+    LOCALE.locale_instruction_block → block prepended to all generation prompts
+    LOCALE.deployment_locale_block  → one paragraph for the deployment system prompt
+    LOCALE.judge_locale_block       → evaluation criteria used by LocaleLLMJudge
+    LOCALE.format_kwargs            → dict that can be unpacked directly into str.format()
 
-설계 노트:
-* 도시/음식/교통 같은 정적 리스트는 두지 않습니다. teacher 모델이 country
-  이름만으로 자기 지식을 충분히 활용할 수 있다고 보고 그쪽에 위임합니다.
-* avoided_topics 가 redirect_axis / banned-topic / judge 기준의 단일
-  source of truth 입니다.
+Design notes:
+* Do not maintain static city/food/transportation lists. We rely on the teacher
+  model to use its knowledge from the country name alone.
+* ``avoided_topics`` is the single source of truth for redirect_axis, banned-topic,
+  and judge criteria.
 """
 
 from __future__ import annotations
@@ -33,7 +32,8 @@ from typing import Any
 
 import yaml
 
-# 환경 변수로 경로 override 가능. (테스트에서 다른 yaml 을 가리키게 할 때 유용)
+# Allow overriding the path via environment variable. Useful in tests when
+# pointing at a different YAML file.
 DEFAULT_LOCALE_PATH = Path(
     os.environ.get("QWEN_TUTOR_LOCALE_CONFIG", "config/locale.yaml")
 )
@@ -41,7 +41,7 @@ DEFAULT_LOCALE_PATH = Path(
 
 @dataclass(frozen=True)
 class AvoidedTopic:
-    """단일 회피 주제."""
+    """A single avoided topic."""
 
     name: str
     pivot_hint: str
@@ -49,22 +49,22 @@ class AvoidedTopic:
 
 @dataclass(frozen=True)
 class LocaleConfig:
-    """locale.yaml 한 파일의 메모리 표현."""
+    """In-memory representation of one locale.yaml file."""
 
     country: str
     country_adjective: str
     learner_description: str
     avoided_topics: tuple[AvoidedTopic, ...]
     avoid_default_cultures: tuple[str, ...] = ()
-    # diversity tracker 가 사용할 음식 어휘. spaCy 가 FOOD entity 를 만들지
-    # 않기 때문에 직접 lowercase 매칭이 필요한 단어들만 둡니다. country 의
-    # 대표 음식 (in-locale) 과 회피용 (out-of-locale) 음식을 분리해 두면
-    # 다양성 리포트의 top_foods 가 어느 쪽에 치우쳐 있는지 보기 좋습니다.
+    # Food vocabulary used by the diversity tracker. spaCy does not reliably
+    # create FOOD entities, so only include words that need direct lowercase
+    # matching. Separating in-locale staple foods from out-of-locale avoidance
+    # foods makes it easier to see which side the top_foods report favors.
     food_terms: tuple[str, ...] = ()
     avoid_food_terms: tuple[str, ...] = ()
 
     # -------------------------------------------------------------------------
-    # 파생 헬퍼
+    # Derived helpers
     # -------------------------------------------------------------------------
 
     @cached_property
@@ -73,12 +73,19 @@ class LocaleConfig:
 
     @cached_property
     def locale_instruction_header(self) -> str:
-        return f"{self.country.upper()} LOCALE INSTRUCTION:"
+        # Code-marker style (lowercase, bracketed, hyphenated) instead of the
+        # older all-caps "CHINA LOCALE INSTRUCTION:" form. Small teachers
+        # (4B Q4) habitually echo all-caps prose headers verbatim into their
+        # <think> reasoning, which then trips the scaffolding_leakage banned-
+        # terms filter and kills the eval example. Code markers don't trigger
+        # the same echo reflex. Filter coverage for the new format lives in
+        # config/banned_terms.yaml -> scaffolding_leakage.
+        return f"[locale-rules:{self.country.lower()}]"
 
     @cached_property
     def avoid_cultures_phrase(self) -> str:
-        """``avoid_default_cultures`` 를 ``"American/European/Japanese"`` 같은 짧은
-        영어 구로 변환. 비어 있으면 fallback 으로 "Western" 을 씁니다.
+        """Convert ``avoid_default_cultures`` into a short English phrase like
+        ``"American/European/Japanese"``. Use "Western" if the list is empty.
         """
         cultures = [c.strip() for c in self.avoid_default_cultures if c.strip()]
         if not cultures:
@@ -91,27 +98,75 @@ class LocaleConfig:
 
     @cached_property
     def locale_instruction_block(self) -> str:
-        """모든 generation 프롬프트 상단에 붙는 locale 지시 블록.
+        """Locale instruction block prepended to all generation prompts.
 
-        구체적인 도시/음식 리스트는 두지 않고 teacher 의 지식에 위임합니다.
-        대신 명확하게 ``{country}`` 의 본토 지식을 활용하고, ``avoid_default_cultures``
-        에 적힌 문화로 떨어지지 말라는 점만 강하게 반복합니다.
+        Strict-Latin variant: forbids any non-Latin script anywhere. This is
+        the default used by every prompt EXCEPT ``dialogue_language_redirect``
+        with ``speaks_l1`` trigger, which needs one user turn in native L1
+        script. See ``locale_instruction_block_allow_l1`` for that exception.
+        """
+        return self._build_locale_instruction_block(strict_latin=True)
+
+    @property
+    def locale_instruction_block_allow_l1(self) -> str:
+        """Variant locale block that ALLOWS one user turn in native L1 script.
+
+        Used only by ``dialogue_language_redirect`` to support the
+        ``speaks_l1`` trigger. Without this carve-out, the strict-Latin
+        paragraph in the default block contradicts the speaks_l1 override
+        inside the language_redirect prompt — the teacher reads the global
+        rule first and ignores the per-prompt override, leaving every
+        speaks_l1 example with no L1 turn (caught by speaks_l1_sanity at
+        100% rejection). With this variant the global rule is relaxed but
+        non-L1 leakage is still tightly bounded to a single user turn by
+        the prompt itself.
+
+        Everything else (authentic proper nouns, avoid Western defaults,
+        city variety, etc.) is unchanged from the strict variant.
+        """
+        return self._build_locale_instruction_block(strict_latin=False)
+
+    def _build_locale_instruction_block(self, strict_latin: bool) -> str:
+        """Shared body of the two locale-block variants.
+
+        Do not enumerate concrete city/food lists; defer to the teacher model's
+        knowledge. Instead, clearly instruct using native knowledge of
+        ``{country}`` and repeatedly warn against falling back to cultures
+        listed in ``avoid_default_cultures``.
         """
         country = self.country
         adj = self.country_adjective
         avoid = self.avoid_cultures_phrase
+        # Strict variant forbids non-Latin everywhere. Relaxed variant allows
+        # ONE user turn in native L1 script (scoped tight by the calling
+        # prompt's own override; this only removes the global ban).
+        if strict_latin:
+            latin_rule = (
+                f"- ALL output must be in English using the Latin alphabet. Render\n"
+                f"  names, places, foods, and cultural items in ROMANIZED form\n"
+                f"  (e.g. \"Li Na\" not \"李娜\"; \"Tanaka\" not \"田中\"; \"Tokyo\" not\n"
+                f"  \"東京\"; \"Kim Min-su\" not \"김민수\"; \"Moscow\" not \"Москва\").\n"
+                f"  Do NOT insert any CJK / Cyrillic / Arabic / Devanagari / other\n"
+                f"  non-Latin characters anywhere — not in role names, not in\n"
+                f"  message content, not in setting descriptions.\n"
+            )
+        else:
+            latin_rule = (
+                f"- The TUTOR's turns must be in English using the Latin alphabet.\n"
+                f"  The LEARNER's English turns must also use Latin script. ONE\n"
+                f"  user turn may be in the {adj} learner's L1 using native\n"
+                f"  script (this is the speaks_l1 case, explicitly required by\n"
+                f"  the prompt body); all OTHER user turns and ALL tutor turns\n"
+                f"  remain Latin-only. Render proper nouns (names, places,\n"
+                f"  foods, brands) in ROMANIZED form in every Latin-script turn\n"
+                f"  (e.g. \"Li Na\" not \"李娜\"; \"Tanaka\" not \"田中\").\n"
+            )
         return (
             f"{self.locale_instruction_header}\n"
             f"- All proper nouns (people, cities, foods, brands, neighborhoods,\n"
             f"  universities, transit lines, holidays) must be authentically {adj}.\n"
             f"  Draw on your own knowledge of {country}.\n"
-            f"- ALL output must be in English using the Latin alphabet. Render\n"
-            f"  names, places, foods, and cultural items in ROMANIZED form\n"
-            f"  (e.g. \"Li Na\" not \"李娜\"; \"Tanaka\" not \"田中\"; \"Tokyo\" not\n"
-            f"  \"東京\"; \"Kim Min-su\" not \"김민수\"; \"Moscow\" not \"Москва\").\n"
-            f"  Do NOT insert any CJK / Cyrillic / Arabic / Devanagari / other\n"
-            f"  non-Latin characters anywhere — not in role names, not in\n"
-            f"  message content, not in setting descriptions.\n"
+            f"{latin_rule}"
             f"- Use a mix of {country}'s cities and smaller towns; do NOT default\n"
             f"  to the capital for every scenario, and vary settings widely.\n"
             f"- Use a mix of common {adj} first names across genders and generations.\n"
@@ -125,7 +180,7 @@ class LocaleConfig:
 
     @cached_property
     def avoided_topics_sentence(self) -> str:
-        """회피 주제를 한 줄 문장으로 - "Stay clear of A, B, and C." 형태."""
+        """Convert avoided topics into a one-line sentence, e.g. "Stay clear of A, B, and C."."""
         names = [self._humanize(t.name) for t in self.avoided_topics]
         if not names:
             return ""
@@ -139,7 +194,7 @@ class LocaleConfig:
 
     @cached_property
     def avoided_topics_block_for_redirect_prompt(self) -> str:
-        """redirect 프롬프트가 어떤 축으로 어떻게 pivot 할지 알려 주는 블록."""
+        """Block explaining how the redirect prompt should pivot along each axis."""
         lines = []
         for t in self.avoided_topics:
             lines.append(f'  - "{t.name}": pivot toward {t.pivot_hint}.')
@@ -154,10 +209,8 @@ class LocaleConfig:
 
     @cached_property
     def deployment_locale_block(self) -> str:
-        """배포 system 프롬프트에서 country/avoided topics 부분 한 문단.
-
-        ``config/training.yaml`` 의 ``deployment_system_prompt_template`` 안에
-        ``{deployment_locale_block}`` 으로 끼워 넣습니다.
+        """One paragraph for the country/avoided-topics section of the
+        deployment system prompt.
         """
         country = self.country
         adj = self.country_adjective
@@ -173,7 +226,7 @@ class LocaleConfig:
 
     @cached_property
     def judge_locale_block(self) -> str:
-        """LocaleLLMJudge 가 사용하는 평가 기준."""
+        """Evaluation criteria used by LocaleLLMJudge."""
         adj = self.country_adjective
         country = self.country
         avoid = self.avoid_cultures_phrase
@@ -190,7 +243,8 @@ class LocaleConfig:
 
     @property
     def format_kwargs(self) -> dict[str, str]:
-        """``template.format(**LOCALE.format_kwargs)`` 한 번에 끝낼 수 있게 묶음."""
+        """Bundle locale values so ``template.format(**LOCALE.format_kwargs)``
+        works in one pass."""
         return {
             "country": self.country,
             "country_adjective": self.country_adjective,
@@ -203,12 +257,12 @@ class LocaleConfig:
         }
 
     def localize(self, template: str) -> str:
-        """``str.replace`` 로 locale placeholder 를 LOCALE 값으로 치환.
+        """Replace locale placeholders with LOCALE values using ``str.replace``.
 
-        ``.format()`` 와 충돌하지 않도록 단순 ``replace`` 를 씁니다. JSON 본문의
-        ``{{`` / ``}}`` escape 는 그대로 보존됩니다. 동적 placeholder 인
-        ``{cefr_level}`` 같은 것은 손대지 않으므로, 사용자는 반환된 문자열을
-        다시 ``.format(cefr_level=...)`` 로 채우면 됩니다.
+        Use simple ``replace`` to avoid conflicts with ``.format()``. JSON
+        literal ``{{`` / ``}}`` escapes are preserved. Dynamic placeholders like
+        ``{cefr_level}`` are left alone, so callers can later call
+        ``.format(cefr_level=...)`` on the returned string.
         """
         return (
             template.replace("{country_adjective}", self.country_adjective)
@@ -222,38 +276,38 @@ class LocaleConfig:
         )
 
     # -------------------------------------------------------------------------
-    # 유틸
+    # Utilities
     # -------------------------------------------------------------------------
 
     @staticmethod
     def _humanize(slug: str) -> str:
-        """snake_case 축 이름을 사람이 읽기 좋은 문구로 변환.
+        """Convert a snake_case slug into a more readable label.
 
         ``"politics"`` → ``"politics"``,  ``"alcohol_dating"`` → ``"alcohol/dating"``,
         ``"partisan_history"`` → ``"partisan history"``.
-        둘 이상의 단어 중 어느 한 쪽이 다른 쪽에 종속되면 공백, 두 주제가
-        대등하게 묶여 있으면 "/" 로 표현해야 자연스럽지만 일률 처리하기
-        어려우므로 그냥 underscore 만 공백으로 바꿉니다. 더 자연스러운
-        영어가 필요하면 ``avoided_topics`` 의 ``name`` 자체를 그렇게 적어
-        주세요 (예: ``alcohol_or_dating``).
+        If one word modifies another, spaces may be more natural; if both words
+        are equal, "/" may be more natural. For simplicity, this helper just
+        replaces underscores with spaces. To get more natural English, write
+        the exact ``name`` in ``avoided_topics`` (for example,
+        ``alcohol_or_dating``).
         """
         return slug.replace("_", " ")
 
 
 # ---------------------------------------------------------------------------
-# 로더
+# Loader
 # ---------------------------------------------------------------------------
 
 
 def _parse_single_locale_block(p: Path, block: dict[str, Any], label: str) -> LocaleConfig:
-    """단일 locale dict 를 LocaleConfig 로 변환. ``label`` 은 에러 메시지용
-    (예: ``locales.china`` 또는 ``<top-level>``)."""
+    """Convert a single locale dict into a LocaleConfig. ``label`` is used for
+    error messages (for example, ``locales.china`` or ``<top-level>``)."""
     country = block.get("country")
     country_adj = block.get("country_adjective")
     learner_desc = block.get("learner_description")
     if not country or not country_adj:
         raise ValueError(
-            f"{p}: {label} 의 'country' 와 'country_adjective' 는 필수입니다."
+            f"{p}: {label}: 'country' and 'country_adjective' are required."
         )
     if not learner_desc:
         learner_desc = "adult learners of English"
@@ -263,17 +317,17 @@ def _parse_single_locale_block(p: Path, block: dict[str, Any], label: str) -> Lo
     for i, t in enumerate(raw_topics):
         if not isinstance(t, dict):
             raise ValueError(
-                f"{p}: {label}.avoided_topics[{i}] 는 dict 여야 합니다 (name, pivot_hint)."
+                f"{p}: {label}.avoided_topics[{i}] must be a dict (name, pivot_hint)."
             )
         name = t.get("name")
         hint = t.get("pivot_hint", "")
         if not name:
-            raise ValueError(f"{p}: {label}.avoided_topics[{i}].name 누락.")
+            raise ValueError(f"{p}: {label}.avoided_topics[{i}].name is missing.")
         topics.append(AvoidedTopic(name=str(name), pivot_hint=str(hint)))
 
     raw_avoid = block.get("avoid_default_cultures") or []
     if not isinstance(raw_avoid, list):
-        raise ValueError(f"{p}: {label}.avoid_default_cultures 는 리스트여야 합니다.")
+        raise ValueError(f"{p}: {label}.avoid_default_cultures must be a list.")
     avoid_cultures = tuple(
         str(c).strip() for c in raw_avoid if isinstance(c, str) and c.strip()
     )
@@ -281,7 +335,7 @@ def _parse_single_locale_block(p: Path, block: dict[str, Any], label: str) -> Lo
     def _strlist(field_name: str) -> tuple[str, ...]:
         raw = block.get(field_name) or []
         if not isinstance(raw, list):
-            raise ValueError(f"{p}: {label}.{field_name} 는 리스트여야 합니다.")
+            raise ValueError(f"{p}: {label}.{field_name} must be a list.")
         return tuple(str(x).strip() for x in raw if isinstance(x, str) and x.strip())
 
     return LocaleConfig(
@@ -298,11 +352,11 @@ def _parse_single_locale_block(p: Path, block: dict[str, Any], label: str) -> Lo
 def load_locales(
     path: str | Path | None = None,
 ) -> tuple[dict[str, LocaleConfig], str]:
-    """``config/locale.yaml`` 을 (locales-by-name, default_name) 으로 변환.
+    """Load ``config/locale.yaml`` and return (locales-by-name, default_name).
 
-    두 가지 YAML 모양을 모두 받습니다:
+    Two YAML shapes are accepted:
 
-      1) Multi-locale (권장):
+      1) Multi-locale (recommended):
          ::
             default_locale: china
             locales:
@@ -310,13 +364,13 @@ def load_locales(
               japan: { country: "Japan", country_adjective: "Japanese", ... }
               italy: { country: "Italy", country_adjective: "Italian", ... }
 
-      2) Single locale (호환):
+      2) Single locale (compatible):
          ::
             country: "China"
             country_adjective: "Chinese"
             ...
 
-    Single 모양은 ``"default"`` 키 하나만 가진 dict 로 wrap 되어 반환됩니다.
+    The single shape is wrapped into a dict containing only the ``"default"`` key.
     """
     p = Path(path) if path else DEFAULT_LOCALE_PATH
     with p.open("r", encoding="utf-8") as fh:
@@ -325,11 +379,11 @@ def load_locales(
     if "locales" in doc and isinstance(doc["locales"], dict):
         raw_locales = doc["locales"]
         if not raw_locales:
-            raise ValueError(f"{p}: 'locales' 가 비어 있습니다.")
+            raise ValueError(f"{p}: 'locales' is empty.")
         out: dict[str, LocaleConfig] = {}
         for name, block in raw_locales.items():
             if not isinstance(block, dict):
-                raise ValueError(f"{p}: locales.{name} 는 dict 여야 합니다.")
+                raise ValueError(f"{p}: locales.{name} must be a dict.")
             out[str(name)] = _parse_single_locale_block(p, block, f"locales.{name}")
         default_name = doc.get("default_locale")
         if default_name is None:
@@ -338,51 +392,49 @@ def load_locales(
             default_name = str(default_name)
             if default_name not in out:
                 raise ValueError(
-                    f"{p}: default_locale='{default_name}' 가 locales 에 없습니다 "
-                    f"(있는 키: {list(out)})."
+                    f"{p}: default_locale='{default_name}' is not defined in locales "
+                    f"(available keys: {list(out)})."
                 )
         return out, default_name
 
-    # Single-locale 호환 경로. 전체 doc 를 하나의 블록으로 처리.
+    # Single-locale compatibility path. Treat the entire document as one block.
     single = _parse_single_locale_block(p, doc, "<top-level>")
     return {"default": single}, "default"
 
 
 def load_locale(path: str | Path | None = None) -> LocaleConfig:
-    """Back-compat: 기본 locale 하나만 돌려주는 단축 헬퍼."""
+    """Back-compat: helper that returns a single default locale."""
     locales, default_name = load_locales(path)
     return locales[default_name]
 
 
 # ---------------------------------------------------------------------------
-# 모듈-load-time 싱글톤
+# Module load-time singleton
 # ---------------------------------------------------------------------------
 
-# Import 시점에 yaml 을 한 번 읽어 둡니다. 깨졌다면 import 도 실패
-# (silent default 보다 빠른 fail-fast 가 안전).
+# Read the YAML once at import time. If the file is broken, import fails too.
+# This fail-fast behavior is safer than silently falling back to defaults.
 LOCALES: dict[str, LocaleConfig]
 DEFAULT_LOCALE_NAME: str
 LOCALES, DEFAULT_LOCALE_NAME = load_locales()
 
-# ``LOCALE`` 은 기본 locale 을 가리키는 back-compat alias. 코드를 점진적으로
-# multi-locale 로 옮기는 동안 기존 호출 ``LOCALE.country`` 등은 그대로 동작.
+# ``LOCALE`` is a back-compat alias for the default locale. Existing calls
+# like ``LOCALE.country`` continue to work while migrating code to multi-locale.
 LOCALE: LocaleConfig = LOCALES[DEFAULT_LOCALE_NAME]
 
 
 def get_locale(name: str | None = None) -> LocaleConfig:
-    """이름으로 locale 을 가져옵니다. ``name`` 이 ``None`` 이거나 빈 문자열이면
-    기본 locale 을 돌려줍니다.
-    """
+    """Get a locale by name. If ``name`` is ``None`` or empty, return the default locale."""
     if not name:
         return LOCALE
     if name not in LOCALES:
         raise KeyError(
-            f"unknown locale '{name}'. config/locale.yaml 에 정의된 locale: "
+            f"unknown locale '{name}'. locales defined in config/locale.yaml: "
             f"{list(LOCALES)}"
         )
     return LOCALES[name]
 
 
 def list_locales() -> tuple[str, ...]:
-    """등록된 locale 이름 목록 (안정적인 정렬 순서)."""
+    """Return the registered locale names in a stable order."""
     return tuple(LOCALES.keys())

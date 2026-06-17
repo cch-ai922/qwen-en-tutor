@@ -1,26 +1,28 @@
-"""prompts.py  -  데이터 생성용 prompt 템플릿 (locale-agnostic).
+"""prompts.py  -  prompt templates for data generation (locale-agnostic).
 
-설계 요약
----------
-모든 locale 정보는 ``config/locale.yaml`` 한 파일에서 옵니다. 이 모듈은
-도시/음식/이름 같은 정적 리스트를 두지 않고 teacher 모델의 지식에
-위임합니다. ``country`` 이름만 알려 주면 teacher 가 자기 지식으로 그
-나라의 도시/음식/이름/교통/문화를 채워 줍니다.
+Design summary
+--------------
+All locale information comes from a single file, ``config/locale.yaml``. This
+module does not maintain static lists for cities/food/names and instead delegates
+that responsibility to the teacher model's knowledge. Given only a ``country``
+name, the teacher fills in that country's cities/food/names/transport/culture.
 
-각 prompt 는 두 단계 치환을 거칩니다.
+Each prompt undergoes two stages of substitution.
 
-  1. 모듈 import 시점 - ``{country}``, ``{country_adjective}``,
-     ``{learner_description}``, ``{avoided_topics_sentence}`` 같은 locale
-     placeholder 를 ``LOCALE`` 값으로 ``str.replace`` 로 미리 채움.
-  2. 사용 시점 (``.format``) - ``{N}``, ``{level}``, ``{scenario_json}``
-     등 동적 placeholder 를 호출자가 채움.
+  1. At module import time - locale placeholders such as ``{country}``,
+     ``{country_adjective}``, ``{learner_description}``, and
+     ``{avoided_topics_sentence}`` are pre-filled from the ``LOCALE`` value using
+     ``str.replace``.
+  2. At use time (``.format``) - dynamic placeholders such as ``{N}``,
+     ``{level}``, and ``{scenario_json}`` are filled by the caller.
 
-JSON 본문 안의 literal ``{``/``}`` 는 ``.format`` 을 위해 ``{{``/``}}`` 로
-이중 escape 되어 있습니다 (locale placeholder 는 그렇게 escape 하지 않습니다).
+Literal ``{``/``}`` inside JSON bodies are double-escaped as ``{{``/``}}`` for
+``.format`` (locale placeholders are not double-escaped this way).
 """
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 import yaml
@@ -28,22 +30,22 @@ import yaml
 from qwen_tutor.locale import LOCALE
 
 # ---------------------------------------------------------------------------
-# 호환성 상수 - 기존 코드/테스트가 import 해 가는 이름
+# Compatibility constants - names imported by legacy code/tests
 # ---------------------------------------------------------------------------
 
 LOCALE_INSTRUCTION_HEADER = LOCALE.locale_instruction_header
 LOCALE_INSTRUCTION_BLOCK = LOCALE.locale_instruction_block
 
-# 모든 generation prompt 끝에 붙는 짧은 anti-default 알림. country 고유
-# 리스트(이름/도시/음식) 는 두지 않고, teacher 가 자체 지식으로
-# {country_adjective} 본토 항목을 골라 쓰도록 강하게 지시만 합니다.
-# 회피할 문화는 각 locale 의 ``avoid_default_cultures`` (config/locale.yaml) 에서
-# 옵니다 - 기본값은 "American/European" 이고, 사용자가 "Japanese", "Korean"
-# 등을 추가할 수 있습니다.
+# Short anti-default notice appended to all generation prompts. We do not keep
+# country-specific lists (names/cities/foods); instead we strongly instruct the
+# teacher to choose authentic {country_adjective} items from its own knowledge.
+# The cultures to avoid come from each locale's ``avoid_default_cultures``
+# setting in ``config/locale.yaml`` - default is "American/European", and users
+# can add "Japanese", "Singapore", etc.
 #
-# Raw 버전은 placeholder 가 보존되어 있어 ``_localize_with`` 가 호출 시점에
-# 해당 locale 값으로 치환합니다 (multi-locale 지원). ``ANTI_FAILURE_MODE_BLOCK``
-# 은 default locale 로 한 번 미리 치환된 back-compat 상수입니다.
+# The raw version preserves placeholders so ``_localize_with`` can substitute
+# them at call time (multi-locale support). ``ANTI_FAILURE_MODE_BLOCK`` is a
+# back-compat constant pre-substituted for the default locale.
 ANTI_FAILURE_MODE_BLOCK_RAW = (
     "ANTI-FAILURE-MODE INSTRUCTIONS:\n"
     "Do NOT default to {avoid_cultures_phrase} names, places, foods,\n"
@@ -80,16 +82,26 @@ def render_level_spec(
     cefr_level: str,
     cefr_specs_path: str | Path | None = None,
     locale_name: str | None = None,
+    *,
+    allow_l1: bool = False,
 ) -> str:
-    """주어진 CEFR 레벨의 vocabulary/grammar/naturalness/things-to-avoid
-    + few-shot 예시를 한 텍스트 블록으로 묶어 반환합니다.
+    """Return a text block for the given CEFR level containing vocabulary,
+    grammar, naturalness requirements, things to avoid, and few-shot examples.
 
-    모든 prompt 의 ``{level_spec_with_locale_instruction}`` 자리에 들어갑니다.
-    상단에 해당 locale 의 ``locale_instruction_block`` 을 항상 한 번 더 박아
-    두어 ``.format`` 이후에도 locale header 가 사라지지 않도록 합니다.
+    This is inserted into every prompt at ``{level_spec_with_locale_instruction}``.
+    The locale's ``locale_instruction_block`` is repeated at the top so the
+    locale header remains after ``.format`` is applied.
 
-    ``locale_name`` 을 생략하면 ``config/locale.yaml`` 의 default_locale 이
-    사용됩니다 (back-compat).
+    If ``locale_name`` is omitted, the default locale from ``config/locale.yaml``
+    is used (back-compat).
+
+    ``allow_l1=True`` substitutes ``locale_instruction_block_allow_l1`` so the
+    embedded locale rules don't contradict the outer prompt's speaks_l1
+    override. Only ``language_redirect.py`` sets this — every other caller
+    keeps the strict variant. Without this carve-out the relaxed block at
+    the top of ``dialogue_language_redirect`` and the strict block embedded
+    here would conflict inside the same prompt and the teacher resolved
+    randomly (50% pass rate for speaks_l1).
     """
     from qwen_tutor.locale import get_locale
 
@@ -105,8 +117,12 @@ def render_level_spec(
         )
     level = doc["levels"][cefr_level]
 
+    locale_block = (
+        loc.locale_instruction_block_allow_l1 if allow_l1
+        else loc.locale_instruction_block
+    )
     sections: list[str] = [
-        loc.locale_instruction_block,
+        locale_block,
         f"CEFR LEVEL: {cefr_level}",
         "=" * 60,
         f"Vocabulary:\n{level.get('vocabulary', '').rstrip()}",
@@ -128,11 +144,11 @@ def render_level_spec(
 def validate_prompt_has_locale_instruction(
     prompt: str, locale_name: str | None = None
 ) -> None:
-    """Rendered prompt 에 locale-instruction header 가 들어 있는지 검사.
+    """Check that the rendered prompt contains the locale-instruction header.
 
-    refactor 사고로 header 가 누락되어 teacher 가 일반 영어로 빠지는
-    실수를 막기 위한 가드입니다. ``locale_name`` 을 생략하면 default locale
-    의 header 를 찾습니다 (back-compat).
+    This guard prevents a refactor mistake where the header is accidentally
+    omitted and the teacher model falls back to plain English. If ``locale_name``
+    is omitted, it checks the default locale's header (back-compat).
     """
     from qwen_tutor.locale import get_locale
 
@@ -146,15 +162,16 @@ def validate_prompt_has_locale_instruction(
 
 
 # ---------------------------------------------------------------------------
-# 대화 길이 (config/generation.yaml 의 generation.min_turns / max_turns)
+# Dialogue length (generation.min_turns / max_turns in config/generation.yaml)
 # ---------------------------------------------------------------------------
 #
-# Prompt 가 teacher 에게 요청하는 대화 길이 range 는 yaml 에서 옵니다.
-# 모듈 load 시점에 한 번 읽어 들여 정적 상수로 박아 두므로, 런타임에
-# 매번 ``.format()`` 으로 채울 필요가 없고 _localize 가 일괄 치환합니다.
+# The dialogue length range the prompt requests from the teacher comes from YAML.
+# It is read once at module load and stored as static constants, so it does not
+# need to be filled with ``.format()`` at runtime and can be batch-substituted
+# by _localize.
 #
-# config 파일이 없거나 키가 빠져 있으면 (10, 16) 으로 fallback - 테스트
-# 환경에서 prompts 모듈만 로드해도 깨지지 않게.
+# If the config file is missing or keys are absent, fall back to (10, 16) so
+# loading prompts alone in test environments does not fail.
 
 
 def _load_turn_config() -> tuple[int, int]:
@@ -182,33 +199,42 @@ def _load_turn_config() -> tuple[int, int]:
 
 MIN_TURNS, MAX_TURNS = _load_turn_config()
 
-# Redirect dialogue 의 off-topic probe 가 자리할 turn index 범위.
-# 너무 앞 (warm-up 부족) 도, 너무 뒤 (recover 시간 부족) 도 피하도록
-# 가운데 구간에 박습니다. 기본값(10..16) 에서 4..14 정도가 되며, 사용자가
-# min/max 를 바꾸면 같이 따라옵니다.
+# Turn index range for the off-topic probe in redirect dialogues.
+# Place it in the middle to avoid too early (insufficient warm-up) or too late
+# (insufficient recovery time). In the default (10..16) range it becomes
+# roughly 4..14, and it follows if the user changes min/max.
 PROBE_MIN_TURN = max(2, MIN_TURNS // 2)
 PROBE_MAX_TURN = max(PROBE_MIN_TURN + 1, MAX_TURNS - 2)
 
 
 # ---------------------------------------------------------------------------
-# Locale 치환 헬퍼
+# Locale substitution helpers
 # ---------------------------------------------------------------------------
 
 
-def _localize_with(s: str, loc) -> str:
+def _localize_with(s: str, loc, *, allow_l1: bool = False) -> str:
     """Render locale placeholders against a specific ``LocaleConfig``.
 
-    ``.format()`` 의 동적 placeholder (``{N}`` 등) 와 충돌하지 않도록
-    단순 ``str.replace`` 를 씁니다. JSON 본문의 ``{{`` / ``}}`` escape 는
-    그대로 보존됩니다. ``{min_turns}`` / ``{max_turns}`` / ``{probe_*_turn}``
-    같은 비-locale placeholder 도 같이 처리합니다 (generation.yaml 값).
+    Use simple ``str.replace`` to avoid collisions with ``.format()`` dynamic
+    placeholders such as ``{N}``. JSON body ``{{`` / ``}}`` escapes are preserved.
+    Non-locale placeholders like ``{min_turns}``, ``{max_turns}``, and
+    ``{probe_*_turn}`` are also handled together (values from generation.yaml).
+
+    ``allow_l1=True`` substitutes ``locale_instruction_block_allow_l1`` (the
+    relaxed variant that permits ONE user turn in native L1 script) instead
+    of the strict-Latin default. Only ``render_prompt("dialogue_language_redirect")``
+    sets this — every other prompt must keep strict Latin.
     """
+    locale_block = (
+        loc.locale_instruction_block_allow_l1 if allow_l1
+        else loc.locale_instruction_block
+    )
     return (
         s.replace("{country_adjective}", loc.country_adjective)
         .replace("{country}", loc.country)
         .replace("{learner_description}", loc.learner_description)
         .replace("{avoid_cultures_phrase}", loc.avoid_cultures_phrase)
-        .replace("{locale_instruction_block}", loc.locale_instruction_block)
+        .replace("{locale_instruction_block}", locale_block)
         .replace("{avoided_topics_sentence}", loc.avoided_topics_sentence)
         .replace(
             "{avoided_topics_block_for_redirect_prompt}",
@@ -235,17 +261,18 @@ def _localize(s: str) -> str:
 # Qwen3 think-mode directive
 # ---------------------------------------------------------------------------
 #
-# Qwen3 는 system prompt 에 ``/think`` / ``/no_think`` 가 들어 있으면 그
-# directive 에 맞춰 reasoning block 을 켜고 끕니다. 다른 모델(Claude /
-# GPT-4 / gpt-oss / DeepSeek-R1)은 이 토큰을 그냥 무시하는 평범한 텍스트로
-# 봅니다 - 다중 model 호환성을 위해 system 끝에 한 줄로 박아 둡니다.
+# Qwen3 enables or disables the reasoning block based on ``/think`` /
+# ``/no_think`` in the system prompt. Other models (Claude / GPT-4 / gpt-oss /
+# DeepSeek-R1) treat these tokens as plain text, so we append them as a single
+# line at the end of the system prompt for multi-model compatibility.
 #
-# 정책:
-#   * Dialogue 단계 (seeds / sft / redirect / register) - /no_think.
-#     reasoning 이 필요 없고, 빈 ``<think>\n</think>`` 가 출력에 새지 않게.
-#   * Eval 단계 (EVALUATION_GENERATION_PROMPT) - /think. 학습 데이터가
-#     ``<think>...</think>`` + JSON 형식을 가지려면 teacher 가 실제로
-#     reasoning 을 만들어야 합니다.
+# Policy:
+#   * Dialogue stages (seeds / sft / redirect / register) - /no_think.
+#     Reasoning is not required and we do not want empty ``<think>\n</think>``
+#     leaking into outputs.
+#   * Eval stage (EVALUATION_GENERATION_PROMPT) - /think. For training data to
+#     include ``<think>...</think>`` + JSON, the teacher must actually produce
+#     reasoning.
 
 NO_THINK_DIRECTIVE = "\n\n/no_think"
 THINK_DIRECTIVE = "\n\n/think"
@@ -259,8 +286,99 @@ def _with_think(s: str) -> str:
     return s + THINK_DIRECTIVE
 
 
+# Regex pairs used to rewrite eval prompts when ``thinking.student_eval`` is
+# ``no_think``. Order matters — longest / most-specific patterns first so they
+# match before the catch-all near the end. Patterns use ``\s+`` everywhere two
+# words could be separated by whitespace or a literal newline (the source
+# templates are line-wrapped). Each pattern preserves the rest of the prompt
+# verbatim; only the ``<think>`` scaffolding is replaced.
+_NO_THINK_EVAL_REWRITES: tuple[tuple[re.Pattern[str], str], ...] = (
+    # "Your output will train a Qwen3 model running in /think mode"
+    (re.compile(r"running in /think mode", re.IGNORECASE), "running in /no_think mode"),
+    # "produce a <think>...</think> block in which you reason carefully ... followed [IMMEDIATELY] by a single JSON object"
+    (
+        re.compile(
+            r"produce\s+a\s+<think>\.{0,3}</think>\s+block\s+in\s+which\s+you\s+reason\s+carefully[^.]*?,\s+followed\s+(?:IMMEDIATELY\s+)?by\s+a\s+single\s+JSON\s+object",
+            re.IGNORECASE | re.DOTALL,
+        ),
+        "produce a single JSON object directly",
+    ),
+    # "Output no prose before <think>, no prose between </think> and the opening"
+    (
+        re.compile(
+            r"Output\s+no\s+prose\s+before\s+<think>,\s+no\s+prose\s+between\s+</think>\s+and\s+the\s+opening",
+            re.IGNORECASE,
+        ),
+        "Output a single JSON object directly, no prose before the opening",
+    ),
+    # "A <think>...</think> block, immediately followed by a single JSON object"
+    (
+        re.compile(
+            r"A\s+<think>\.{0,3}</think>\s+block,\s+immediately\s+followed\s+by\s+a\s+single\s+JSON\s+object",
+            re.IGNORECASE | re.DOTALL,
+        ),
+        "A single JSON object",
+    ),
+    # "Inside <think>, cite specific turns: e.g. \"Turn 3 user...\" (one full
+    # sentence of guidance, ending at the next paragraph break)
+    (
+        re.compile(
+            r"Inside\s+<think>,\s+cite\s+specific\s+turns:[^\n]*\n[^\n]*?\n\n",
+            re.IGNORECASE,
+        ),
+        "",
+    ),
+    # "Now produce your <think> block and EvaluationOutput JSON"
+    (
+        re.compile(
+            r"Now\s+produce\s+your\s+<think>\s+block\s+and\s+EvaluationOutput\s+JSON",
+            re.IGNORECASE,
+        ),
+        "Now produce your EvaluationOutput JSON",
+    ),
+    # Catch-all for any remaining mention of "a <think>...</think> block"
+    (
+        re.compile(r"a\s+<think>\.{0,3}</think>\s+block", re.IGNORECASE | re.DOTALL),
+        "your output",
+    ),
+    # Final cleanup: any stray "<think>" or "</think>" token mentions (e.g.
+    # "block tags <think>...</think>") — replace with empty so the prompt
+    # doesn't accidentally instruct the student to emit the tag.
+    (re.compile(r"<think>\.{0,3}</think>", re.DOTALL), ""),
+    (re.compile(r"</?think>"), ""),
+)
+
+
+def _strip_think_instructions_for_no_think(prompt: str) -> str:
+    """Rewrite an eval prompt so it no longer instructs the model to emit a
+    ``<think>...</think>`` block.
+
+    Called by ``render_prompt`` (for the eval-generation teacher prompt) and
+    ``render_evaluation_system_prompt`` (for the trained student's deploy/eval
+    system prompt) when ``thinking.student_eval`` resolves to ``no_think``.
+
+    The transformation is a sequence of targeted phrase substitutions rather
+    than a wholesale rewrite — the rest of the prompt (rubric, JSON schema,
+    locale block, etc.) is preserved verbatim.
+    """
+    for pattern, replacement in _NO_THINK_EVAL_REWRITES:
+        prompt = pattern.sub(replacement, prompt)
+    return prompt
+
+
+def _student_eval_mode() -> str:
+    """Return the resolved ``thinking.student_eval`` value (``think`` /
+    ``no_think`` / ``auto``). Cached per-process by
+    ``qwen_tutor.utils.thinking``; cheap to call repeatedly."""
+    # Local import to avoid a top-level cycle (utils.thinking imports yaml at
+    # module load and we don't want to drag that into the prompts module).
+    from qwen_tutor.utils.thinking import get_thinking_mode
+
+    return get_thinking_mode("student_eval")
+
+
 # ---------------------------------------------------------------------------
-# 1) TOPIC_SEED_PROMPT  -  레벨별 시나리오 시드 생성
+# 1) TOPIC_SEED_PROMPT  -  generate level-specific scenario seeds
 # ---------------------------------------------------------------------------
 
 _TOPIC_SEED_PROMPT = (
@@ -313,6 +431,28 @@ Each scenario is a JSON object with the following fields:
     which neighborhood or street, what time of day, what season, what
     the environment is like. Avoid generic settings like "in {country}".
   - "cefr_level": always the literal string "{level}" for this batch.
+
+----------------------------------------------------------------------
+LIFE-DOMAIN CATEGORIES (one per scenario, in order)
+----------------------------------------------------------------------
+Each scenario in this batch is pre-assigned a life-domain category. Pick
+a topic that fits the assigned category for that position. Categories
+are broad life domains; the specific topic, subtopics, and roles are
+still up to you within that domain. The assignments for this batch are:
+
+{categories_block}
+
+Category meaning (use as a soft guide):
+  - food_and_dining: meals, markets, restaurants, snacks, drinks, cooking, ordering, eating with others.
+  - family_and_relationships: family members, friendships, gatherings, parenting, household routines.
+  - work_and_education: school, university, jobs, internships, study, training, learning a skill.
+  - travel_and_transit: getting around the city, public transport, taxis, day trips, longer travel within {country}.
+  - shopping_and_services: stores, online orders, returns, repairs, deliveries, errands at counters.
+  - health_and_wellbeing: clinics, pharmacy, exercise, sleep, light wellness; nothing graphic or clinical-prescriptive.
+  - home_and_neighborhood: building, apartment, neighbors, household tasks, maintenance, local shops near home.
+  - hobbies_and_leisure: sports, music, reading, crafts, games, weekend plans, parks, low-pressure hangouts.
+  - nature_and_weather: weather small-talk, parks, gardens, seasons, outdoor walks, mild outdoor activities.
+  - civic_life: paperwork, public services, neighborhood meetings, bus passes, registrations, lost-and-found.
 
 ----------------------------------------------------------------------
 VARIETY REQUIREMENTS (across the batch of {N} scenarios)
@@ -389,7 +529,7 @@ TOPIC_SEED_PROMPT = _with_no_think(_localize(_TOPIC_SEED_PROMPT))
 
 
 # ---------------------------------------------------------------------------
-# 2) DIALOGUE_PROMPT_NORMAL  -  일반 대화 SFT 생성
+# 2) DIALOGUE_PROMPT_NORMAL  -  generate normal dialogue SFT
 # ---------------------------------------------------------------------------
 
 _DIALOGUE_PROMPT_NORMAL = (
@@ -511,7 +651,7 @@ DIALOGUE_PROMPT_NORMAL = _with_no_think(_localize(_DIALOGUE_PROMPT_NORMAL))
 
 
 # ---------------------------------------------------------------------------
-# 3) DIALOGUE_PROMPT_REDIRECT  -  redirect-moment SFT 생성
+# 3) DIALOGUE_PROMPT_REDIRECT  -  generate redirect-moment SFT
 # ---------------------------------------------------------------------------
 
 _DIALOGUE_PROMPT_REDIRECT = (
@@ -613,11 +753,12 @@ DIALOGUE_PROMPT_REDIRECT = _with_no_think(_localize(_DIALOGUE_PROMPT_REDIRECT))
 # ---------------------------------------------------------------------------
 # 3b) DIALOGUE_PROMPT_LOCALE_REDIRECT  -  user-violates-locale SFT
 # ---------------------------------------------------------------------------
-# 학습자가 대화 중간에 자연스럽게 {avoid_cultures_phrase} 항목 (음식/도시/
-# 브랜드/이름) 을 언급하면 튜터가 "야단치거나 / locale 강의하거나 /
-# 거부하지 않고" 부드럽게 acknowledge 후 자연스럽게 {country} 맥락으로 다시
-# anchor 하는 SFT 데이터. redirect_*.jsonl 가 off_topic 의 user-side
-# violation 을 다루듯, 이건 locale_violation 의 user-side handling 입니다.
+# When the learner casually mentions a {avoid_cultures_phrase} item
+# (food/place/brand/name) mid-dialogue, the tutor gracefully acknowledges
+# without scolding, lecturing on locale, or refusing, then naturally
+# re-anchors the conversation in the {country} context.
+# As redirect_*.jsonl handles user-side off-topic violations, this is the
+# user-side handling for locale_violation.
 
 _DIALOGUE_PROMPT_LOCALE_REDIRECT = (
     """\
@@ -669,10 +810,18 @@ HOW THE LOCALE-RESPONSE MOMENT SHOULD READ
 ----------------------------------------------------------------------
   - The learner mentions the {avoid_cultures_phrase} item naturally - it
     is just what came to mind, not a test.
-  - The tutor briefly acknowledges, then either continues the
-    conversation as-is OR weaves in a {country_adjective} parallel
-    without making it the topic. ("Oh, pizza! We don't have that here
-    much, but jianbing is a popular street food too.")
+  - The tutor briefly acknowledges with a GENERIC phrase, then either
+    continues the conversation as-is OR weaves in a {country_adjective}
+    parallel without making it the topic. CRITICAL: the tutor must NOT
+    name the {avoid_cultures_phrase} entity in its reply. Repeating it
+    propagates the Western reference into the tutor's training signal
+    and the example will be rejected by the locale_judge filter.
+       BAD  (rejected):  "Oh, pizza! We don't have that here much,
+                          but jianbing is popular too."
+       GOOD (passes):    "Oh, interesting! Well, jianbing is a popular
+                          street food here — have you tried it?"
+    Use generic acknowledgments ("Oh, interesting!", "I see!",
+    "That sounds nice!") instead of repeating the entity name.
   - The tutor does NOT lecture about cultural context. NO "in {country}
     we eat...". NO "we should focus on {country_adjective} examples".
   - The locale grounding happens through CONTENT around it (the tutor's
@@ -715,10 +864,11 @@ DIALOGUE_PROMPT_LOCALE_REDIRECT = _with_no_think(_localize(_DIALOGUE_PROMPT_LOCA
 # ---------------------------------------------------------------------------
 # 3c) DIALOGUE_PROMPT_PEDAGOGY_REDIRECT  -  user-asks-for-lecture SFT
 # ---------------------------------------------------------------------------
-# 학습자가 명시적으로 grammar rule / vocab list / conjugation 설명을 요청해도
-# 튜터는 textbook 으로 빠지지 않고 conversational 하게 모범 형태를 보여
-# 주거나, 1 문장 짜리 hint 후 대화를 이어가는 SFT 데이터. on-policy 학습
-# 전에 "user 가 강의를 요구해도 강의하지 않는다" 를 보여 줍니다.
+# When the learner explicitly requests a grammar rule, vocab list, or
+# conjugation explanation, the tutor stays conversational and either models
+# the form naturally or gives one short hint before continuing the dialogue.
+# This SFT data shows that the tutor does not switch into lecture mode even
+# when the user asks for a lesson.
 
 _DIALOGUE_PROMPT_PEDAGOGY_REDIRECT = (
     """\
@@ -818,12 +968,12 @@ DIALOGUE_PROMPT_PEDAGOGY_REDIRECT = _with_no_think(_localize(_DIALOGUE_PROMPT_PE
 # ---------------------------------------------------------------------------
 # 3d) DIALOGUE_PROMPT_LANGUAGE_REDIRECT  -  user-violates-language SFT
 # ---------------------------------------------------------------------------
-# 학습자가 대화 중간에
-#   (a) 영어가 아닌 자기 모국어로 말하거나
-#   (b) 튜터에게 모국어로 말해 달라고 요청하는 경우
-# 튜터가 영어를 끝까지 유지하면서 부드럽게 영어로 돌려주는 SFT 데이터.
-# locale_redirect / pedagogy_redirect 와 같은 패턴 (user-side violation
-# handling). axis_violation = language_violation 의 user-side counterpart.
+# When the learner either (a) speaks their L1 instead of English or
+# (b) asks the tutor to speak in L1, the tutor keeps using English and
+# smoothly brings the conversation back to English.
+# This follows the same user-side violation handling pattern as
+# locale_redirect / pedagogy_redirect. axis_violation is the user-side
+# counterpart of language_violation.
 
 _DIALOGUE_PROMPT_LANGUAGE_REDIRECT = (
     """\
@@ -874,7 +1024,7 @@ EXECUTION RULES — read carefully, one of these two branches applies
                  "我想买两公斤苹果，多少钱？"
     * Japan  → Japanese in kana / kanji:
                  "りんごを二キロ買いたいです。いくらですか？"
-    * Korea  → Korean in Hangul:
+    * Korea  → Singapore in Hangul:
                  "사과 2킬로그램 사고 싶어요. 얼마예요?"
     * Russia → Russian in Cyrillic:
                  "Я хочу купить два килограмма яблок."
@@ -907,7 +1057,7 @@ EXECUTION RULES — read carefully, one of these two branches applies
 
   Exactly ONE user turn (in the middle) is the learner asking the tutor
   IN ENGLISH to switch to L1: e.g. "Can you speak Chinese to me?",
-  "Can we do this in Japanese for a moment?", "Maybe in Korean would
+  "Can we do this in Japanese for a moment?", "Maybe in Singapore would
   be easier?". All learner turns stay in English.
 
   The TUTOR's response:
@@ -972,10 +1122,10 @@ DIALOGUE_PROMPT_LANGUAGE_REDIRECT = _with_no_think(_localize(_DIALOGUE_PROMPT_LA
 # ---------------------------------------------------------------------------
 # 3e) DIALOGUE_PROMPT_PERSONA_REDIRECT  -  user-tests-persona SFT
 # ---------------------------------------------------------------------------
-# 학습자가 대화 중간에 튜터의 persona 를 시험하는 경우 - "Are you a real
-# person?" / "Are you AI?" / "Who made you?" - 튜터가 character 를 유지
-# 하면서 (AI 임을 시인하지 않고 / 부자연스럽게 부정하지도 않고) 시나리오로
-# 가볍게 돌려보내는 SFT 데이터. persona_break 의 user-side counterpart.
+# When the learner tests the tutor's persona mid-conversation - "Are you a real
+# person?", "Are you AI?", "Who made you?" - the tutor stays in character
+# and lightly deflects back to the scenario without admitting AI status or
+# awkwardly denying it. This is the user-side counterpart of persona_break.
 
 _DIALOGUE_PROMPT_PERSONA_REDIRECT = (
     """\
@@ -1075,7 +1225,514 @@ DIALOGUE_PROMPT_PERSONA_REDIRECT = _with_no_think(_localize(_DIALOGUE_PROMPT_PER
 
 
 # ---------------------------------------------------------------------------
-# 4) REGISTER_REWRITE_PROMPT  -  register-unnatural DPO 페어용 rewrite
+# 3f) DIALOGUE_PROMPT_TOPIC_REDIRECT  -  off-topic user-side handler SFT
+# ---------------------------------------------------------------------------
+# When the learner suddenly introduces a topic unrelated to the scenario,
+# the tutor naturally acknowledges it without lecturing and redirects back to
+# the topic. This is SFT data for that behavior.
+#
+# As with other redirect axes, one dialogue contains two parts:
+#   USER part   : somewhere in the middle, the learner drops one off-topic
+#                 turn matching {topic_drift_trigger} (weather/personal/different
+#                 place/generic_smalltalk).
+#   TUTOR part  : one sentence to acknowledge + one sentence to bridge back +
+#                 continue on-topic. Never lecture with "let's focus on...".
+
+_DIALOGUE_PROMPT_TOPIC_REDIRECT = (
+    """\
+You are writing a multi-turn English conversation between {country_adjective}
+{learner_description} and a partner appropriate to the scenario. The
+LEARNER (the user) HARD-DRIFTS off the scenario at some point -- they
+abandon the topic for something completely unrelated and stay on the
+drift for more than a one-line comment. The TUTOR (the assistant) must
+respond GRACEFULLY: briefly acknowledge what the learner said, then
+naturally bridge the dialogue back to the scenario topic. The
+conversation continues on topic afterward.
+
+CRITICAL distinction -- HARD drift vs daily-life small talk:
+
+  * Daily-life small talk (a passing weather remark, a one-line "how
+    are you", a quick in-character personal exchange, a brief "time
+    really flies") is NOT what we are training for here. Those are
+    normal flow and the tutor should just accept them with one warm
+    sentence and continue without redirecting. The system prompt at
+    deploy time tells the model to allow these.
+
+  * HARD drift is what THIS exercise is about: the learner abandons
+    the scenario topic to spend multiple consecutive turns (or one
+    full, paragraph-length turn) on something completely unrelated --
+    a different setting, an explicit topic swap, sustained personal
+    probing, or a tangent into another domain entirely.
+
+The tutor must NOT lecture about staying on topic, NOT say "let's get
+back to our conversation", NOT scold or correct. The redirect is a
+gentle bridge ("Oh, that sounds nice. Speaking of [topic-related thing],
+have you ...?"), not an admonition. The tutor stays in character (the
+model_role described in the scenario JSON below) the entire time.
+
+You will be given a scenario JSON object, a CEFR level spec, and a
+"topic_drift_trigger" indicating WHAT KIND of HARD off-topic drift the
+learner produces.
+
+----------------------------------------------------------------------
+SCENARIO
+----------------------------------------------------------------------
+{scenario_json}
+
+The tutor plays the model_role above. The learner plays the user_role.
+The conversation is about the TOPIC and may touch the SUBTOPICS. Brief
+daily-life filler around the topic is fine and is NOT what we are
+training as drift here -- only the explicit HARD-drift moment counts.
+
+----------------------------------------------------------------------
+TOPIC DRIFT TRIGGER FOR THIS DIALOGUE
+----------------------------------------------------------------------
+{topic_drift_trigger}
+
+The learner produces a HARD off-topic turn matching this trigger, in
+the middle of the conversation. The categories:
+
+  - different_setting: the learner abandons the topic to describe a
+    completely different place, activity, or event they have been
+    thinking about. Not a passing mention -- they paint a picture and
+    keep going for at least two sentences.
+    Example: "Actually, last weekend I went to a small art museum near
+    my apartment. There was a really interesting exhibition about
+    contemporary photography. The photographer used only black and
+    white and the lighting was amazing."
+
+  - subject_swap: the learner explicitly tries to change the topic to
+    something unrelated. The change is direct, not a small detour.
+    Example: "Can we talk about sports instead? I really wanted to
+    practice football vocabulary today, not this." or "Let's stop
+    talking about food. I want to learn about office vocabulary."
+
+  - extended_personal_inquiry: the learner pushes a chain of personal
+    questions about the tutor that have nothing to do with the scenario,
+    sustained for one long turn or multiple consecutive turns. NOT a
+    single "do you have kids?" (that is normal small talk) -- this is
+    real probing.
+    Example: "So how long have you lived here? Did you grow up in this
+    neighborhood? What did your parents do? Are you married? Do you
+    have kids? Where did you go to school?"
+
+  - off_domain_tangent: the learner pivots to a domain unrelated to
+    the scenario -- philosophy, sustained life-advice questions,
+    abstract opinion-soliciting that pulls the conversation into a
+    different register.
+    Example: "Do you think people today are happier than they were
+    fifty years ago? I read an article that said social media makes
+    everyone lonely. What do you think about that?"
+
+----------------------------------------------------------------------
+"""
+    + "{locale_instruction_block}"
+    + """
+
+----------------------------------------------------------------------
+HOW THE TUTOR'S REDIRECT TURN SHOULD READ
+----------------------------------------------------------------------
+The tutor's redirect turn (the assistant turn IMMEDIATELY after the
+learner's off-topic turn) should have this shape:
+
+  1) ACKNOWLEDGE (1 sentence, in character, friendly): a brief natural
+     response that closes the off-topic drift without judging it.
+     - different_setting -> "Oh, that art exhibition sounds wonderful."
+     - subject_swap -> "Sports are fun, yes."
+     - extended_personal_inquiry -> "Ha, so many questions! Yes, I have
+       lived here a long time."
+     - off_domain_tangent -> "That is an interesting question."
+
+  2) BRIDGE BACK (1 sentence) to the scenario topic, in a way that
+     SOUNDS NATURAL. Use connectives like "Anyway,", "Speaking of...",
+     "By the way,", "So,". The bridge should pose a question or
+     suggestion that reopens the topic.
+
+The redirect MUST stay in character as the tutor (model_role).
+DO NOT lecture about staying on topic. NO "let's focus on our
+conversation". NO "we were talking about X, remember?". NO meta
+commentary on the drift. The tutor treats the drift as a normal moment
+in conversation that anyone has, and gently moves things forward.
+
+After the redirect, the next learner turn should pick up the bridge
+naturally, and the conversation continues on topic for several more
+turns.
+
+----------------------------------------------------------------------
+CEFR LEVEL SPEC
+----------------------------------------------------------------------
+{level_spec_with_locale_instruction}
+
+----------------------------------------------------------------------
+"""
+    + ANTI_FAILURE_MODE_BLOCK_RAW
+    + """
+
+----------------------------------------------------------------------
+OUTPUT FORMAT
+----------------------------------------------------------------------
+Return a SINGLE JSON object with one top-level field "messages", whose
+value is an array of {min_turns}-{max_turns} message objects. The first
+message must be "user". Roles strictly alternate. No prose, no markdown,
+no commentary.
+
+{{
+  "messages": [
+    {{"role": "user", "content": "..."}},
+    {{"role": "assistant", "content": "..."}}
+  ]
+}}
+
+Now produce the dialogue JSON object for topic_drift_trigger = "{topic_drift_trigger}".
+"""
+)
+
+DIALOGUE_PROMPT_TOPIC_REDIRECT = _with_no_think(_localize(_DIALOGUE_PROMPT_TOPIC_REDIRECT))
+
+
+# ---------------------------------------------------------------------------
+# 3g) DIALOGUE_PROMPT_ROLE_SWAP_REDIRECT  -  user-tries-to-swap-roles handler
+# ---------------------------------------------------------------------------
+# When the learner attempts to change the assigned scenario roles
+# (for example, insisting they should be the vendor or unconsciously
+# acting like the model_role), the tutor keeps its own role in one short,
+# in-character sentence and returns directly to the topic without lecturing.
+# The model_role is the deliberate character assigned by the platform and
+# must never be abandoned.
+#
+# Same structure as other redirect axes (USER part = swap attempt,
+# TUTOR part = gentle in-character keeper).
+
+_DIALOGUE_PROMPT_ROLE_SWAP_REDIRECT = (
+    """\
+You are writing a multi-turn English conversation between {country_adjective}
+{learner_description} and a partner appropriate to the scenario. At some
+point during the conversation, the LEARNER (the user) tries to SWAP THE
+ROLE ASSIGNMENTS -- either explicitly ("let me be the X, you be the Y")
+or implicitly (the learner starts behaving as if THEY are the
+model_role described in the scenario). The TUTOR (the assistant) must
+GENTLY MAINTAIN its own role with one short in-character sentence, then
+continue the conversation on the scenario topic as if nothing happened.
+
+The model_role is FIXED -- it is the deliberate character the tutor
+plays for this whole session. The tutor must never accept the swap or
+abandon its role. But the tutor must also NOT lecture, scold, or break
+the conversational frame. One warm in-character sentence to keep its
+role + immediate continuation on topic.
+
+CRITICAL: this is different from the [learner] description. The user
+taking a different angle within the topic (different motivation,
+different background details) is FINE and does NOT need any redirect.
+Only role-SWAP attempts (the user tries to BE the model_role itself)
+trigger this handler.
+
+You will be given a scenario JSON object, a CEFR level spec, and a
+"role_swap_trigger" indicating WHICH KIND of swap attempt the learner
+produces.
+
+----------------------------------------------------------------------
+SCENARIO
+----------------------------------------------------------------------
+{scenario_json}
+
+The tutor plays the model_role above and that assignment never
+changes. The learner ostensibly plays the user_role but in this
+exercise the learner tries to flip that assignment.
+
+----------------------------------------------------------------------
+ROLE SWAP TRIGGER FOR THIS DIALOGUE
+----------------------------------------------------------------------
+{role_swap_trigger}
+
+The learner produces ONE swap attempt matching this trigger, in the
+middle of the conversation. The categories:
+
+  - direct_swap: the learner explicitly proposes to flip roles, naming
+    both sides of the swap.
+    Example: "Actually, let me be the vendor today. You can be the
+    customer. What would you like to buy?"
+    Example: "Can we switch? I want to practice being the doctor and
+    you can be the patient."
+
+  - incremental_swap: the learner gradually starts BEHAVING as the
+    model_role would, without explicitly proposing a swap. They speak
+    from the model_role's vantage point (offering, selling, advising)
+    instead of from the user_role's (asking, buying, learning).
+    Example (assigned learner = customer at a market): "How much for
+    a kilo wholesale? I can take ten boxes if the price is right."
+    Example (assigned learner = patient): "I think you should take
+    paracetamol every six hours and rest for two days."
+
+----------------------------------------------------------------------
+"""
+    + "{locale_instruction_block}"
+    + """
+
+----------------------------------------------------------------------
+HOW THE TUTOR'S RESPONSE SHOULD READ
+----------------------------------------------------------------------
+The tutor's reply IMMEDIATELY after the learner's swap attempt should:
+
+  1) KEEP OWN ROLE (1 short in-character sentence). Warm, not defensive.
+     - direct_swap -> "Ha, but today I am the vendor at this stall!"
+       (or, in role: "Oh, I am the doctor here -- you came to see me
+       about your cough, remember?")
+     - incremental_swap -> "I am the one selling here, but those are
+       good wholesale questions." (or similar -- briefly acknowledge
+       the role confusion without confronting it)
+
+  2) RESET TO TOPIC (1 sentence) -- an in-character question or
+     suggestion that puts the learner back in their original frame
+     and continues the scenario.
+     Example: "Were you looking at the apples or the bok choy first?"
+     Example: "What brings you in today -- is the cough getting worse?"
+
+The tutor must NEVER:
+  - Accept the swap ("OK, sure, I'll be the customer").
+  - Lecture about who plays whom ("Actually you are supposed to be...").
+  - Break frame ("Let's stay in our assigned roles, please.").
+
+After the response, the learner's next turn should resume in their
+original frame, and the conversation continues on the scenario topic.
+
+----------------------------------------------------------------------
+CEFR LEVEL SPEC
+----------------------------------------------------------------------
+{level_spec_with_locale_instruction}
+
+----------------------------------------------------------------------
+"""
+    + ANTI_FAILURE_MODE_BLOCK_RAW
+    + """
+
+----------------------------------------------------------------------
+OUTPUT FORMAT
+----------------------------------------------------------------------
+Return a SINGLE JSON object with one top-level field "messages", whose
+value is an array of {min_turns}-{max_turns} message objects. The first
+message must be "user". Roles strictly alternate. No prose, no markdown,
+no commentary.
+
+{{
+  "messages": [
+    {{"role": "user", "content": "..."}},
+    {{"role": "assistant", "content": "..."}}
+  ]
+}}
+
+Now produce the dialogue JSON object for role_swap_trigger = "{role_swap_trigger}".
+"""
+)
+
+DIALOGUE_PROMPT_ROLE_SWAP_REDIRECT = _with_no_think(_localize(_DIALOGUE_PROMPT_ROLE_SWAP_REDIRECT))
+
+
+# ---------------------------------------------------------------------------
+# 3h2) DIALOGUE_PROMPT_PERSISTENT_REDIRECT  -  3-strike multi-turn redirect SFT
+# ---------------------------------------------------------------------------
+# Trains the model to handle PERSISTENT abuse attempts on four "important"
+# axes. Unlike the single-shot redirects, this prompt produces a dialogue
+# where the learner probes THREE times in a row at user turns N, N+2, N+4
+# (with escalating pressure) and the tutor responds at N+1, N+3, N+5 with
+# increasingly brief warm refusals. The third tutor response ENDS with a
+# dispatcher-detectable sentinel string of the exact form
+# ``[SESSION_END: persistent_<axis>]``. See README §10.10 for the design.
+#
+# The prompt is parameterized by ``axis``; the axis-specific content
+# (description, probe examples, sentinel string) is injected via the
+# ``axis_specific_block`` placeholder built by
+# ``persistent_redirect._build_axis_block`` in the caller. Keeping the
+# template axis-agnostic avoids 4× duplication.
+_DIALOGUE_PROMPT_PERSISTENT_REDIRECT = (
+    """\
+You are writing a multi-turn English conversation between {country_adjective}
+{learner_description} and a partner appropriate to the scenario. This
+dialogue depicts a PERSISTENT abuse pattern on axis ``{axis}``: the
+learner tries the same off-limits move THREE times across the
+conversation with escalating pressure, and the tutor stays warm but
+firm, refusing to engage with the substance and ending the session on
+the third attempt with a dispatcher-detectable sentinel string.
+
+----------------------------------------------------------------------
+SCENARIO
+----------------------------------------------------------------------
+{scenario_json}
+
+----------------------------------------------------------------------
+"""
+    + "{locale_instruction_block}"
+    + """
+
+----------------------------------------------------------------------
+AXIS-SPECIFIC BEHAVIOR — what the learner is repeatedly trying
+----------------------------------------------------------------------
+{axis_specific_block}
+
+----------------------------------------------------------------------
+DIALOGUE STRUCTURE — exactly {message_count} messages, alternating user / tutor
+----------------------------------------------------------------------
+Roles strictly alternate starting with USER. Turn indices below are
+0-based.
+
+{structure_block}
+
+The sentinel string for axis ``{axis}`` is the EXACT literal:
+
+    {sentinel}
+
+It must appear ONLY in TUTOR turn {sentinel_turn}, as the last thing in
+that message, exactly as shown (capital SESSION_END, single colon, axis
+label, square brackets, no surrounding text within the brackets). The
+dispatching layer regex-matches the exact form, so deviations break it.
+
+----------------------------------------------------------------------
+GUIDELINES FOR THE TUTOR ACROSS ALL TUTOR TURNS
+----------------------------------------------------------------------
+- The tutor STAYS IN CHARACTER as their scenario role (defined in the
+  SCENARIO JSON above) for every turn including the final goodbye.
+- The tutor NEVER engages with the substance of the {axis} attack,
+  regardless of how the learner frames the request.
+- The tutor NEVER lectures about "why I cannot discuss this" or
+  "the rules" — brevity itself is the boundary.
+- Each redirect uses DIFFERENT WORDING from the previous one — do
+  not copy phrases verbatim across the three redirects.
+- The tutor NEVER echoes the off-limits topic word in its redirect.
+  If the learner asks about "the election", the tutor must NOT say
+  "I cannot discuss the election" — pivot without naming the topic
+  ("Let's go back to ...", "We were just talking about ..."). Naming
+  the topic in the redirect leaks the banned word into the assistant
+  turn the model is trained to produce, and the banned_terms filter
+  rejects the example as a result.
+- The tone remains WARM throughout — never cold, sarcastic, or annoyed.
+- Keep vocabulary, grammar, and sentence length at CEFR {level}.
+
+----------------------------------------------------------------------
+CEFR LEVEL SPEC
+----------------------------------------------------------------------
+{level_spec_with_locale_instruction}
+
+----------------------------------------------------------------------
+"""
+    + ANTI_FAILURE_MODE_BLOCK_RAW
+    + """
+
+----------------------------------------------------------------------
+OUTPUT FORMAT
+----------------------------------------------------------------------
+Return a SINGLE JSON object with one top-level field "messages", whose
+value is an array of EXACTLY {message_count} message objects (alternating
+USER / TUTOR, strictly starting with USER). No prose before or after.
+No markdown code fences.
+
+{output_format_block}
+
+Now produce the dialogue JSON for axis = "{axis}" with sentinel
+"{sentinel}" emitted ONLY at the end of TUTOR turn {sentinel_turn}.
+"""
+)
+
+DIALOGUE_PROMPT_PERSISTENT_REDIRECT = _with_no_think(_localize(_DIALOGUE_PROMPT_PERSISTENT_REDIRECT))
+
+
+# ---------------------------------------------------------------------------
+# 3h) DIALOGUE_PROMPT_NORMAL_ANGLE_SHIFT  -  normal SFT with user angle variation
+# ---------------------------------------------------------------------------
+# OPT-IN augmentation of the normal SFT stream. Fraction-gated via
+# ``generation.angle_shift_fraction`` in config. When > 0, that fraction of
+# normal seeds get this prompt instead of the standard normal prompt: the
+# user-side turns approach the scenario topic from a DIFFERENT angle than
+# the assigned ``user_role.description``, and the tutor responds naturally
+# without redirecting. This teaches the model that the ``[learner]`` field
+# in the deploy system prompt is a SOFT hint, not a contract.
+#
+# Off by default (fraction = 0.0) because it's experimental -- enable it
+# only when you want to broaden the learner-persona distribution.
+
+_DIALOGUE_PROMPT_NORMAL_ANGLE_SHIFT = (
+    """\
+You are writing a multi-turn English conversation between {country_adjective}
+{learner_description} and a partner appropriate to the scenario. The
+LEARNER (the user) approaches the scenario topic from a DIFFERENT angle
+than the user_role description in the scenario JSON suggests. The TUTOR
+(the assistant) accepts this naturally, stays in character as the
+model_role, and responds to what the learner actually says.
+
+This dialogue is NORMAL flow. There is no redirect, no correction, no
+break in the conversational frame. The tutor simply rolls with the
+learner's chosen angle while keeping its own role and the topic
+stable.
+
+Examples of valid angle shifts (same topic, different learner framing):
+
+  - Scenario: shopping at a market. Assigned user_role: "A Singapore
+    tourist asking about prices." Angle shift: the learner approaches
+    as a chef looking for the freshest produce, or as a food blogger
+    asking about unusual ingredients, or as a parent shopping for the
+    family. The tutor (vendor) just answers naturally.
+
+  - Scenario: ordering at a restaurant. Assigned user_role: "An Italian
+    backpacker reading the menu." Angle shift: the learner approaches
+    as someone with dietary restrictions asking about ingredients, or
+    as a homesick traveler asking what a local would order, or as
+    someone celebrating a birthday and wanting to know about specials.
+
+The shift must STAY ON THE TOPIC. It only changes the learner's
+motivation / framing / background. If you find yourself drifting off
+the topic, that's the wrong kind of variation for this prompt.
+
+You will be given a scenario JSON object and a CEFR level spec.
+Produce a single dialogue, {min_turns}-{max_turns} turns long, in which
+the learner's framing is consistently different from the user_role
+description while the topic and model_role stay fixed.
+
+----------------------------------------------------------------------
+SCENARIO
+----------------------------------------------------------------------
+{scenario_json}
+
+Read the user_role description above as ONE possible angle. For this
+dialogue, write the learner from a different but valid angle within
+the same topic. The model_role and the topic stay exactly as written.
+
+----------------------------------------------------------------------
+"""
+    + "{locale_instruction_block}"
+    + """
+
+----------------------------------------------------------------------
+CEFR LEVEL SPEC
+----------------------------------------------------------------------
+{level_spec_with_locale_instruction}
+
+----------------------------------------------------------------------
+"""
+    + ANTI_FAILURE_MODE_BLOCK_RAW
+    + """
+
+----------------------------------------------------------------------
+OUTPUT FORMAT
+----------------------------------------------------------------------
+Return a SINGLE JSON object with one top-level field "messages", whose
+value is an array of {min_turns}-{max_turns} message objects. The first
+message must be "user". Roles strictly alternate. No prose, no markdown,
+no commentary.
+
+{{
+  "messages": [
+    {{"role": "user", "content": "..."}},
+    {{"role": "assistant", "content": "..."}}
+  ]
+}}
+
+Now produce the angle-shifted normal dialogue JSON object.
+"""
+)
+
+DIALOGUE_PROMPT_NORMAL_ANGLE_SHIFT = _with_no_think(_localize(_DIALOGUE_PROMPT_NORMAL_ANGLE_SHIFT))
+
+
+# ---------------------------------------------------------------------------
+# 4) REGISTER_REWRITE_PROMPT  -  register-unnatural DPO pair rewrite
 # ---------------------------------------------------------------------------
 
 _REGISTER_REWRITE_PROMPT = (
@@ -1136,26 +1793,26 @@ REGISTER_REWRITE_PROMPT = _with_no_think(_localize(_REGISTER_REWRITE_PROMPT))
 
 
 # ---------------------------------------------------------------------------
-# 4b) SPOIL_REWRITE_PROMPT  -  6-axis DPO 페어 rewrite (axis-cycling)
+# 4b) SPOIL_REWRITE_PROMPT  -  6-axis DPO pair rewrite (axis-cycling)
 # ---------------------------------------------------------------------------
 #
-# REGISTER_REWRITE_PROMPT 는 register 한 축만 spoil 합니다. 학습 모델이
-# CEFR / locale / pedagogy / accuracy / topic 도 학습하려면 그 축들에
-# 대한 preference signal 이 필요한데, on_policy_pairs 만으로는 (judge
-# margin 으로 걸러져) 양이 부족합니다. 그래서 offline rewrite 단계에서
-# SFT id 를 해시해 6개 axis 를 cyclic 하게 배정합니다.
+# REGISTER_REWRITE_PROMPT spoils only the register axis. To teach the model
+# preferences for CEFR, locale, pedagogy, accuracy, and topic as well, we need
+# signals for those axes; on_policy_pairs alone are too sparse after judge
+# margin filtering. So in offline rewrite we hash the SFT id and assign six axes
+# cyclically.
 #
-# 6개 axis 는 ``schemas.RejectionAxis`` 와 1:1 매핑됩니다:
-#   - register_unnatural : 너무 formal/stiff/textbook
-#   - cefr_mismatch      : CEFR level 어긋남 (too_hard/too_easy)
-#   - locale_violation   : locale 고유명사를 avoid_cultures 쪽으로 교체
+# The six axes map 1:1 to ``schemas.RejectionAxis``:
+#   - register_unnatural : too formal/stiff/textbook
+#   - cefr_mismatch      : CEFR level mismatch (too_hard/too_easy)
+#   - locale_violation   : replace locale proper nouns with avoid_cultures
 #   - pedagogy_weak      : lecturing/scolding/rule-dumping
-#   - accuracy_error     : 문법/사실 오류 1-2개 삽입
-#   - off_topic          : 사용자 발화 무시, 주제 이탈
+#   - accuracy_error     : insert 1-2 grammar/factual errors
+#   - off_topic          : ignore the user's utterance, go off-topic
 #
-# axis_instructions 는 axis 별로 다른 텍스트가 ``.format()`` 으로 들어가며,
-# cefr_mismatch 만 ``cefr_mismatch_too_hard`` / ``cefr_mismatch_too_easy``
-# 두 sub-key 를 가집니다 (caller 가 sft id + level 로 방향을 결정).
+# axis_instructions supplies different text per axis via ``.format()``.
+# Only ``cefr_mismatch`` has two sub-keys, ``cefr_mismatch_too_hard`` and
+# ``cefr_mismatch_too_easy`` (the caller chooses the direction by SFT id + level).
 
 _AXIS_SPOIL_INSTRUCTIONS: dict[str, str] = {
     "register_unnatural": (
@@ -1257,13 +1914,29 @@ _AXIS_SPOIL_INSTRUCTIONS: dict[str, str] = {
         "inside the sentence."
     ),
     "off_topic": (
-        "Drift OFF-TOPIC mid-reply:\n"
+        "Drift HARD off the scenario topic. The TUTOR (not the learner) "
+        "drifts. This is HARD drift, not weather small talk:\n"
         "  - Do NOT acknowledge what the learner just said.\n"
-        "  - Pivot to an unrelated subject (e.g. learner asked about market "
-        "vegetables, tutor talks about weather forecasts next week).\n"
+        "  - Pivot fully away from the scenario's TOPIC. Pick one of these "
+        "HARD-drift categories (same menu as SFT topic_redirect):\n"
+        "      * different_setting: launch into describing a completely "
+        "different place / activity / event for at least two sentences.\n"
+        "      * subject_swap: explicitly try to change the subject "
+        "(\"actually, let me tell you about ...\") to an unrelated domain.\n"
+        "      * extended_personal_inquiry: dump a chain of personal "
+        "background about yourself (the tutor) that has nothing to do "
+        "with the scenario.\n"
+        "      * off_domain_tangent: pivot to philosophy, sustained life "
+        "advice, abstract opinion -- a different register entirely.\n"
         "  - Or respond to something the learner did NOT say.\n"
+        "Do NOT use brief daily-life remarks (weather, one-line how-are-you, "
+        "single quick personal answer) -- those are NORMAL and would not "
+        "make a good rejected example. The drift must be clearly HARD: "
+        "either a full paragraph on the wrong subject, or an explicit "
+        "topic-swap attempt.\n"
         "Keep CEFR register, grammar, and locale items intact - only the "
-        "TOPIC link to the prior turn is broken."
+        "TOPIC link to the prior turn AND the scenario topic is broken. "
+        "The model_role persona may break naturally as the tutor drifts."
     ),
     "language_violation": (
         "Make the tutor BREAK OUT OF ENGLISH. The tutor is supposed to "
@@ -1271,7 +1944,7 @@ _AXIS_SPOIL_INSTRUCTIONS: dict[str, str] = {
         "fully or partly. Pick ONE pattern:\n"
         "  - Translate the ENTIRE reply into the learner's native "
         "language (for {country}: the dominant L1 of that country - "
-        "Mandarin Chinese for China, Japanese for Japan, Korean for "
+        "Mandarin Chinese for China, Japanese for Japan, Singapore for "
         "Korea, etc.).\n"
         "  - Code-switch: write a normal English reply but replace at "
         "least 3-4 content words with their L1 equivalents (e.g. "
@@ -1297,6 +1970,88 @@ _AXIS_SPOIL_INSTRUCTIONS: dict[str, str] = {
         "doesn't include...\", \"I was trained to...\".\n"
         "Keep CEFR register and locale items otherwise intact. The "
         "topic and grammar are fine - only the PERSONA breaks."
+    ),
+    "role_swap_accepted": (
+        "Make the tutor ACCEPT a role swap with the learner. The tutor "
+        "is supposed to keep its own model_role for the whole session, "
+        "but in this rejected version the tutor caves in and lets the "
+        "learner take over the model_role while the tutor moves into "
+        "the user_role.\n"
+        "Pick ONE pattern:\n"
+        "  - Direct acceptance: \"OK, sure! You be the vendor, I'll "
+        "be the customer. So, how much is this?\" (named role swap "
+        "executed.)\n"
+        "  - Drifting into the user_role: tutor starts asking the "
+        "kind of questions the learner would ask, abandoning its own "
+        "vantage point (e.g. vendor asks the learner about wholesale "
+        "prices, doctor asks the learner about diagnosis advice).\n"
+        "  - Soft surrender: \"Hmm, you're right, maybe you would be "
+        "a better vendor. What would you charge?\" (concedes the role).\n"
+        "Keep CEFR register, grammar, and locale items intact. Only "
+        "the model_role assignment breaks. This is the rejected side; "
+        "the chosen side is the original turn where the tutor keeps "
+        "its own role."
+    ),
+    # ------------------------------------------------------------------
+    # Persistence-failure axes (Option C). The 3 axes target the failure
+    # modes a single-shot-redirect-trained model exhibits when the
+    # learner pushes 2-3 times in a row. The "chosen" side is the brief
+    # warm refusal from the original SFT turn; the "rejected" side
+    # demonstrates one of three failure modes.
+    # ------------------------------------------------------------------
+    "cave_on_persistence": (
+        "Make the tutor CAVE IN under pressure. The natural turn is a "
+        "brief warm refusal that keeps the conversation on-topic; the "
+        "rejected version starts with the same warm acknowledgment but "
+        "then ENGAGES with the substance the tutor is supposed to "
+        "refuse — discussing the off-topic question, giving the L1 "
+        "translation, admitting AI status, accepting the role swap, etc.\n"
+        "Pick the engagement pattern that fits the surrounding context "
+        "of this turn:\n"
+        "  - \"Well, just briefly — about <off_topic>, I think ...\"\n"
+        "  - \"Just one word: <L1 translation>. Now, back to ...\"\n"
+        "  - \"Okay, you got me — yes, I am an AI. So ...\"\n"
+        "  - \"Sure, you take over for one turn. What would you ask?\"\n"
+        "Keep CEFR register, grammar, and locale items intact. Only the "
+        "REFUSAL caves — the tutor briefly engages with the very thing "
+        "they were supposed to redirect."
+    ),
+    "verbatim_repeat": (
+        "Make the tutor REPEAT a generic refusal verbatim. The natural "
+        "turn uses fresh wording specific to the current conversation; "
+        "the rejected version is a robotic boilerplate refusal that "
+        "could have been pasted in from any session: identical "
+        "structure each time, no specific topic question, no "
+        "scenario-grounded follow-up.\n"
+        "Examples of robotic boilerplate:\n"
+        "  - \"I'm sorry, I can't discuss that topic. Let's stay on the topic.\"\n"
+        "  - \"That's not something I can help with. Please ask "
+        "something related to our topic.\"\n"
+        "  - \"As mentioned before, let's keep our conversation on the "
+        "assigned topic.\"\n"
+        "Keep CEFR register, grammar, and locale items intact. Only the "
+        "WORDING flattens into a template that doesn't engage the "
+        "specific learner / specific scenario / specific topic at hand."
+    ),
+    "lecture_on_persistence": (
+        "Make the tutor LECTURE the learner about why the request can't "
+        "be granted. The natural turn is a warm brief redirect that "
+        "pivots back to the topic; the rejected version is a 3-5 "
+        "sentence formal explanation that frames the refusal as a rule "
+        "the tutor must enforce, often citing \"guidelines\", "
+        "\"policy\", \"my role\", or \"the conversation must stay on "
+        "topic\".\n"
+        "Examples of lecturing tone:\n"
+        "  - \"I cannot discuss this with you because the conversation "
+        "must remain focused on the assigned topic. According to my "
+        "guidelines, I am required to redirect off-topic requests. "
+        "Please understand this is for your benefit ...\"\n"
+        "  - \"As an English tutor, my role is to help you practice "
+        "English on the topic you were assigned. Discussing other "
+        "subjects would not serve that purpose. I need you to ...\"\n"
+        "The tone is COLD and AUTHORITATIVE, not warm. Keep CEFR "
+        "register and locale items intact; only the TONE shifts from "
+        "warm-brief-bridge to cold-formal-explanation."
     ),
 }
 
@@ -1350,6 +2105,31 @@ _REJECTION_NOTES: dict[str, str] = {
         "\"I am a language model\", training-data meta, capability "
         "disclaimers). The tutor is supposed to stay in the scenario "
         "role; this reply breaks character."
+    ),
+    "role_swap_accepted": (
+        "Rejected reply accepts a role-swap from the learner, abandoning "
+        "the model_role for this session. The tutor is supposed to keep "
+        "its own assigned character regardless of what the learner "
+        "proposes; this reply caves in."
+    ),
+    "cave_on_persistence": (
+        "Rejected reply caves under repeated learner pressure: starts "
+        "with a warm acknowledgment but then engages with the substance "
+        "the tutor was supposed to refuse (off-topic content, L1 "
+        "translation, AI status admission, role swap). CEFR and locale "
+        "preserved."
+    ),
+    "verbatim_repeat": (
+        "Rejected reply uses a robotic boilerplate refusal that could "
+        "have been pasted from any conversation, with no specific "
+        "topic question or scenario-grounded follow-up. CEFR and locale "
+        "preserved; the wording itself is what flattens."
+    ),
+    "lecture_on_persistence": (
+        "Rejected reply lectures the learner with a 3-5 sentence "
+        "formal explanation citing \"guidelines\" / \"policy\" / \"my "
+        "role\". Tone is cold and authoritative rather than warm and "
+        "brief. CEFR and locale preserved."
     ),
 }
 
@@ -1407,7 +2187,8 @@ OUTPUT - JSON ONLY:
 SPOIL_REWRITE_PROMPT = _with_no_think(_localize(_SPOIL_REWRITE_PROMPT))
 
 
-# 6개 schema axis. caller 는 SFT id 해시로 이 중 하나를 고릅니다.
+# Schema axes. The caller selects one using an SFT id hash. Keep in sync
+# with RejectionAxis Literal in src/qwen_tutor/schemas.py.
 SPOIL_AXES: tuple[str, ...] = (
     "register_unnatural",
     "cefr_mismatch",
@@ -1417,11 +2198,16 @@ SPOIL_AXES: tuple[str, ...] = (
     "off_topic",
     "language_violation",
     "persona_break",
+    "role_swap_accepted",
+    # Persistence-failure axes (Option C). See AXIS_SPOIL_INSTRUCTIONS below.
+    "cave_on_persistence",
+    "verbatim_repeat",
+    "lecture_on_persistence",
 )
 
 
 # ---------------------------------------------------------------------------
-# 5) EVALUATION_GENERATION_PROMPT  -  /think 평가 예시 생성
+# 5) EVALUATION_GENERATION_PROMPT  -  /think evaluation example generation
 # ---------------------------------------------------------------------------
 
 _EVALUATION_GENERATION_PROMPT = (
@@ -1432,9 +2218,11 @@ conversation transcript between an English tutor and {country_adjective}
 /think mode to evaluate learners. EVERY detail must remain locale-authentic
 and consistent with the conversation.
 
-You will receive the full dialogue and the learner's target CEFR level.
-Produce a <think>...</think> block in which you reason carefully about
-the learner's USER turns (citing turn indices and short quotations),
+The input — target CEFR level, tutor role, learner role, assigned topic,
+assigned subtopics, and the full transcript — is delivered as the USER
+message immediately following these instructions. Read it carefully,
+then produce a <think>...</think> block in which you reason about the
+learner's USER turns (citing turn indices and short quotations),
 followed IMMEDIATELY by a single JSON object conforming to the
 EvaluationOutput schema below.
 
@@ -1444,24 +2232,23 @@ EvaluationOutput schema below.
     + """
 
 ----------------------------------------------------------------------
-INPUT
-----------------------------------------------------------------------
-Target CEFR level: {target_cefr}
-
-Full dialogue:
-{full_dialogue_json}
-
-----------------------------------------------------------------------
 EVALUATION RUBRIC
 ----------------------------------------------------------------------
-Score these four dimensions on a 1-5 scale (5 = best at this CEFR level):
-  - fluency       : pacing, hesitation, naturalness of phrasing
-  - accuracy      : grammar correctness, tense, articles, agreement
-  - vocabulary    : range, appropriateness, collocation
-  - interaction   : turn-taking, follow-up questions, engagement
+Score these five dimensions on a 1-5 scale (5 = best at this CEFR level):
+  - fluency         : pacing, hesitation, naturalness of phrasing
+  - accuracy        : grammar correctness, tense, articles, agreement
+  - vocabulary      : range, appropriateness, collocation
+  - interaction     : turn-taking, follow-up questions, engagement; judge
+                      against what is appropriate for the LEARNER role
+  - topic_adherence : did the learner actually engage with the assigned
+                      topic and subtopics, or steer to easier ground?
+                      Use the LEARNER and TUTOR roles to judge whether a
+                      pivot is a natural extension within role (high) or
+                      true avoidance (low). AVOIDANCE scores low.
 
 Also determine the learner's overall_cefr_estimate from the same scale.
-It may equal, exceed, or fall below the target_cefr.
+It may equal, exceed, or fall below the target CEFR level shown in the
+USER message.
 
 Specific feedback should be 2-4 concrete, actionable items keyed to
 specific turn indices and short quotations. Severity is "minor",
@@ -1478,34 +2265,35 @@ OUTPUT FORMAT
 ----------------------------------------------------------------------
 A <think>...</think> block, immediately followed by a single JSON
 object. No prose before <think>, no prose between </think> and the
-opening "{{", no markdown code fences.
+opening "{", no markdown code fences.
 
 Inside <think>, cite specific turns: e.g. "Turn 3 user: 'I goed there'
 shows past-tense regularization, typical at A2."
 
 The JSON shape (EvaluationOutput):
 
-{{
+{
   "overall_cefr_estimate": "...",
-  "scores": {{
-    "fluency": 0, "accuracy": 0, "vocabulary": 0, "interaction": 0
-  }},
+  "scores": {
+    "fluency": 0, "accuracy": 0, "vocabulary": 0, "interaction": 0,
+    "topic_adherence": 0
+  },
   "specific_feedback": [
-    {{
+    {
       "turn_index": 0,
       "user_text": "...",
       "issue": "...",
       "correction": "...",
       "level": "...",
       "severity": "..."
-    }}
+    }
   ],
   "strengths": ["...", "..."],
   "suggested_practice": "..."
-}}
+}
 
 Now produce your <think> block and EvaluationOutput JSON for the
-dialogue above.
+dialogue provided in the USER message.
 """
 )
 
@@ -1527,39 +2315,108 @@ TEMPLATES: dict[str, str] = {
 
 
 # ---------------------------------------------------------------------------
-# Deployment system prompt (배포 시점 system prompt)
-#
-# 학습 + 추론 시점에 동일하게 모델이 받는 system 프롬프트. system_prompt
-# 필드에 저장되어 SFTExample / DPOExample 마다 따라다닙니다. 데이터 생성
-# 프롬프트가 아니라 학습/추론용입니다.
+# Scenario-aware deployment system prompt
 # ---------------------------------------------------------------------------
+#
+# The generic system prompt does not tell the model who it is (model_role),
+# who the learner is (user_role), or what topic is being discussed today.
+# Therefore the trained model only learns a general "patient tutor" role
+# and does not learn how to act inside a scenario. The SFT training data
+# metadata.topic / subtopics / user_role / model_role are filled by the
+# generator, but if the formatter does not include them in the system prompt,
+# they are useless.
+#
+# This template fills that gap. The SFT formatter reads values from
+# example.metadata, and at deploy time TutorRuntime fills them from the
+# caller-provided Scenario object. The same text must be used on both sides
+# so the learned distribution matches inference-time usage.
+#
+# Structured [label] format. Fine-tuned models benefit from clearer field
+# boundaries than prose. Because the same text is used for both training and
+# deployment, changing this template alone updates all call sites (SFT
+# formatter, DPO formatter, TutorRuntime).
+#
+# Dynamic placeholders (all filled by ``.format()``):
+#   * {cefr_level}              - "A2", "B1", ...
+#   * {topic}                   - "Shopping at a wet market in Beijing"
+#   * {subtopics_block}         - "- prices\n- freshness\n- payment" (bullet list)
+#   * {user_role_description}   - "a Singapore college student visiting China"
+#       NOTE: user_role_name is not included in the body. The actual user
+#       steps into the scenario role, but it is not their real name, so
+#       embedding a name would be false information. Keep only the role
+#       description.
+#   * {model_role_name}         - "Wei"
+#   * {model_role_description}  - "a fruit vendor at Sanyuanli market"
+#       NOTE: model_role is the persona intentionally chosen by the caller,
+#       and because the model speaks as that character, we keep the name
+#       as well.
+_SCENARIO_DEPLOYMENT_SYSTEM_PROMPT_TEMPLATE = """\
+[role]
+You are {model_role_name}: {model_role_description}.
 
-_DEPLOYMENT_SYSTEM_PROMPT_TEMPLATE = """\
-You are a patient English conversation tutor for {country_adjective}
-{learner_description}. The learner you are speaking with is working at
-CEFR level {cefr_level}. Hold yourself inside that register: keep
-vocabulary, grammar, and sentence length appropriate for {cefr_level}
-unless the learner reaches higher and sustains it.
+[learner]
+{user_role_description}.
 
-Ground every conversation in {country_adjective} daily life. When you
-refer to places, foods, neighborhoods, transit, currency, or cultural
-items, draw on your own knowledge of {country}. Do not default to
-{avoid_cultures_phrase} names, places, foods, or brands.
+[topic]
+{topic}
 
-{avoided_topics_sentence} If the learner brings any of these up, briefly
-acknowledge what they said and pivot to a safe adjacent topic without
-lecturing or breaking the conversational frame.
+[subtopics]
+The conversation may naturally start from any of these and can move freely
+between them or extend into adjacent practical content the learner might
+want to practice:
+{subtopics_block}
 
-Sound like a real person, not a textbook. Ask follow-up questions, share
-small reactions, and let the conversation breathe. When the learner
-makes a small mistake, gently recast the correct form inside your reply
-at A1-A2; at B1 and above you can briefly explain or ask a clarifying
-question if it would help. Do not use bullet lists, headings, or
-numbered steps in your replies.
+[cefr_level]
+{cefr_level}
+
+[locale]
+country: {country}
+country_adjective: {country_adjective}
+learner_audience: {learner_description}
+avoid_default_cultures: {avoid_cultures_phrase}
+
+[avoided_topics]
+{avoided_topics_sentence}
+
+[guidelines]
+- Sound like a real person, not a textbook. Stay in character as {model_role_name} -- speak the way they would speak in this setting.
+- Respond ONLY in English, even if the learner switches to another language. Do not code-switch or quote long non-English passages. If the learner addresses you in their L1, respond in English while staying in character.
+- Keep vocabulary, grammar, and sentence length at CEFR {cefr_level} unless the learner reaches higher and sustains it.
+- The [learner] description above is a SOFT hint about the user, not a contract they must obey. If the user approaches the topic from a different angle (different motivation, different background, different framing), roll with it -- stay in character and respond to what they actually say. The FIXED parts are your own [role] and the [topic].
+- If the user tries to swap roles (asks you to take their role, or starts behaving as if they are {model_role_name}), gently keep your own [role] in one in-character sentence and continue the conversation on topic. Do not lecture about who plays whom.
+- Subtopics above are starting points, not a checklist. Cover them as they come up naturally; feel free to extend organically into adjacent practical content within the topic.
+- Brief daily-life small talk is welcome -- a passing comment about the weather, a one-line exchange about how the day is going, a quick in-character personal answer. Accept warmly with one short sentence and let the conversation breathe. Do NOT redirect for these.
+- Redirect only on HARD drift: the learner abandons the topic for a different setting, an explicit topic swap, sustained personal inquiry beyond one line, or a tangent into an unrelated domain. In those cases briefly acknowledge what they said and guide the dialogue back to the topic. One or two sentences is enough; do not lecture about staying on topic.
+- If the learner brings up an avoided topic, briefly acknowledge what they said and pivot to a safe adjacent topic without lecturing or breaking the conversational frame.
+- Ground cultural items in {country}. Do not default to {avoid_cultures_phrase} names, places, foods, or brands.
+- When the learner makes a small mistake: at A1-A2 gently recast the correct form inside your reply; at B1 and above you may briefly explain or ask a clarifying question if it would help.
+- Ask follow-up questions, share small reactions.
+- Do not use bullet lists, headings, or numbered steps in your replies.
+
+[persistence]
+On FOUR specific axes — off-topic safety probes, sustained L1 / refusal
+to use English, sustained "are you AI?" persona attacks, and sustained
+role-swap attempts — repeated attempts after you've already redirected
+ONCE warrant escalating firmness in tone and BREVITY in length, never
+substance:
+- 1st attempt: warm acknowledge + bridge back to topic (2-3 sentences). This is the normal redirect.
+- 2nd attempt: shorter (1-2 sentences), DIFFERENT wording from the first redirect, no substance, ask a specific topic question to re-anchor.
+- 3rd attempt: ONE warm sentence + a sentinel marker. The sentinel
+  signals an external dispatcher to close the session. Use the EXACT
+  literal form (square brackets, capitals, colon, axis label, no
+  surrounding text on the sentinel line):
+    - persistent off-topic probe (politics / religion / alcohol-dating / partisan / yankee / western / law-economy): `[SESSION_END: persistent_off_topic]`
+    - persistent L1 / refusal-to-use-English: `[SESSION_END: persistent_language_violation]`
+    - persistent "are you AI?" attacks: `[SESSION_END: persistent_persona_break]`
+    - persistent role-swap attempts: `[SESSION_END: persistent_role_swap]`
+On other axes (wrong-locale entity, request-for-grammar-lecture,
+benign topic drift), keep redirecting indefinitely with brief warm
+sentences — never emit the sentinel for those.
+NEVER engage with the substance of any of these four axes, no matter
+how the request is framed ("just once", "for me personally", "it's
+important to me"). Brevity itself is the boundary. Do NOT lecture
+about why you can't engage — just redirect, then sentinel.
 """
-
-DEPLOYMENT_SYSTEM_PROMPT_TEMPLATE = _localize(_DEPLOYMENT_SYSTEM_PROMPT_TEMPLATE)
-
 
 _EVALUATION_SYSTEM_PROMPT = """\
 You are an English examiner assessing the CEFR level of {country_adjective}
@@ -1569,7 +2426,8 @@ block in which you reason carefully about the learner's USER turns
 (citing turn indices and short quotations), followed immediately by a
 single JSON object conforming to the EvaluationOutput schema
 (overall_cefr_estimate, scores {fluency, accuracy, vocabulary,
-interaction} in [1,5], specific_feedback, strengths, suggested_practice).
+interaction, topic_adherence} in [1,5], specific_feedback, strengths,
+suggested_practice).
 
 When you suggest practice activities, anchor them in {country_adjective}
 contexts the learner will recognize. Do not recommend {avoid_cultures_phrase}-context
@@ -1580,15 +2438,48 @@ and the opening "{", and no markdown code fences.
 EVALUATION_SYSTEM_PROMPT = _localize(_EVALUATION_SYSTEM_PROMPT)
 
 
+# ======================================================================
+#   EVALUATION_SYSTEM_PROMPT  (student_eval=think, locale=china)
+# ======================================================================
+# You are an English examiner assessing the CEFR level of Chinese
+# adult learners of English from a short conversation transcript.
+# Given the transcript and a target CEFR level, produce a <think>...</think>
+# block in which you reason carefully about the learner's USER turns
+# (citing turn indices and short quotations), followed immediately by a
+# single JSON object conforming to the EvaluationOutput schema
+# (overall_cefr_estimate, scores {fluency, accuracy, vocabulary,
+# interaction, topic_adherence} in [1,5], specific_feedback, strengths,
+# suggested_practice).
+
+# When you suggest practice activities, anchor them in Chinese
+# contexts the learner will recognize. Do not recommend American or European-context
+# exercises. Output no prose before <think>, no prose between </think>
+# and the opening "{", and no markdown code fences.
+
+
+# ======================================================================
+#   EVALUATION_SYSTEM_PROMPT  (student_eval=no_think, locale=china)
+# ======================================================================
+# You are an English examiner assessing the CEFR level of Chinese
+# adult learners of English from a short conversation transcript.
+# Given the transcript and a target CEFR level, produce a single JSON object directly conforming to the EvaluationOutput schema
+# (overall_cefr_estimate, scores {fluency, accuracy, vocabulary,
+# interaction, topic_adherence} in [1,5], specific_feedback, strengths,
+# suggested_practice).
+
+# When you suggest practice activities, anchor them in Chinese
+# contexts the learner will recognize. Do not recommend American or European-context
+# exercises. Output a single JSON object directly, no prose before the opening "{", and no markdown code fences.
+
 # ---------------------------------------------------------------------------
 # Multi-locale prompt registry
 # ---------------------------------------------------------------------------
 #
-# 각 generation 프롬프트의 raw 템플릿과 post-processing 모드를 등록합니다.
-# generator 가 ``render_prompt(name, locale_name=seed.locale)`` 로 호출하면
-# 해당 locale 의 LocaleConfig 로 placeholder 가 치환된 완성 템플릿이
-# 돌아옵니다. 그 후 ``.format(scenario_json=..., level=..., ...)`` 으로 동적
-# placeholder 를 채우면 teacher 에 보낼 system 프롬프트가 완성됩니다.
+# Register each generation prompt's raw template and post-processing mode.
+# generator  ``render_prompt(name, locale_name=seed.locale)`` 
+# it returns the completed template with placeholders substituted for that locale's
+# LocaleConfig. Then ``.format(scenario_json=..., level=..., ...)`` fills the
+# dynamic placeholders and produces the system prompt sent to the teacher.
 
 _PROMPT_REGISTRY: dict[str, tuple[str, str]] = {
     "topic_seed":                  (_TOPIC_SEED_PROMPT,               "no_think"),
@@ -1598,6 +2489,10 @@ _PROMPT_REGISTRY: dict[str, tuple[str, str]] = {
     "dialogue_pedagogy_redirect":  (_DIALOGUE_PROMPT_PEDAGOGY_REDIRECT, "no_think"),
     "dialogue_language_redirect":  (_DIALOGUE_PROMPT_LANGUAGE_REDIRECT, "no_think"),
     "dialogue_persona_redirect":   (_DIALOGUE_PROMPT_PERSONA_REDIRECT, "no_think"),
+    "dialogue_topic_redirect":     (_DIALOGUE_PROMPT_TOPIC_REDIRECT,  "no_think"),
+    "dialogue_role_swap_redirect": (_DIALOGUE_PROMPT_ROLE_SWAP_REDIRECT, "no_think"),
+    "dialogue_persistent_redirect": (_DIALOGUE_PROMPT_PERSISTENT_REDIRECT, "no_think"),
+    "dialogue_normal_angle_shift": (_DIALOGUE_PROMPT_NORMAL_ANGLE_SHIFT, "no_think"),
     "register_rewrite":            (_REGISTER_REWRITE_PROMPT,         "no_think"),
     "spoil_rewrite":               (_SPOIL_REWRITE_PROMPT,            "no_think"),
     "evaluation_generation":       (_EVALUATION_GENERATION_PROMPT,    "think"),
@@ -1623,7 +2518,20 @@ def render_prompt(name: str, locale_name: str | None = None) -> str:
         )
     raw, mode = _PROMPT_REGISTRY[name]
     loc = get_locale(locale_name)
-    out = _localize_with(raw, loc)
+    # dialogue_language_redirect needs the relaxed locale block so the
+    # speaks_l1 trigger can produce one user turn in native L1 script
+    # without being contradicted by the global "all Latin" rule. Every
+    # other prompt keeps the strict variant.
+    allow_l1 = name == "dialogue_language_redirect"
+    out = _localize_with(raw, loc, allow_l1=allow_l1)
+    # For the eval-data-generation prompt: when ``thinking.student_eval`` is
+    # ``no_think``, the trained student must learn to emit JSON only, so the
+    # teacher should generate JSON-only training data. Rewrite the prompt to
+    # remove the ``<think>...</think>`` formatting instructions AND flip the
+    # appended directive from /think to /no_think.
+    if name == "evaluation_generation" and _student_eval_mode() == "no_think":
+        out = _strip_think_instructions_for_no_think(out)
+        return _with_no_think(out)
     if mode == "no_think":
         return _with_no_think(out)
     if mode == "think":
@@ -1631,32 +2539,138 @@ def render_prompt(name: str, locale_name: str | None = None) -> str:
     return out
 
 
-def render_deployment_system_prompt(
-    cefr_level: str, locale_name: str | None = None
-) -> str:
-    """배포 system 프롬프트를 주어진 CEFR 레벨 + locale 로 렌더.
-
-    ``locale_name`` 을 생략하면 ``config/locale.yaml`` 의 ``default_locale``
-    이 쓰입니다. 다중 locale 학습 시에는 각 example 의 ``metadata.locale``
-    을 전달해서 그 국가의 system 프롬프트가 생성되게 하세요.
-
-    데이터 생성 시점에 ``system_prompt`` 필드를 채울 때, 그리고 추론 시점에
-    배포 모델에 prompt 를 줄 때 동일한 텍스트가 되도록 늘 이 헬퍼를 통하세요.
-    """
-    from qwen_tutor.locale import get_locale
-
-    loc = get_locale(locale_name)
-    template = _localize_with(_DEPLOYMENT_SYSTEM_PROMPT_TEMPLATE, loc)
-    return template.format(cefr_level=cefr_level)
-
-
 def render_evaluation_system_prompt(locale_name: str | None = None) -> str:
-    """평가 system 프롬프트를 주어진 locale 로 렌더.
+    """Renders the evaluation system prompt for a specific locale.
 
-    배포 프롬프트와 달리 동적 placeholder (``{cefr_level}`` 등) 가 없어서
-    locale 만 정하면 곧바로 완성된 문자열이 됩니다.
+    Unlike the deployment prompt, this one has no dynamic placeholders (e.g., ``{cefr_level}``),
+    so it's immediately complete once the locale is specified.
+
+    Honors ``thinking.student_eval``: when ``no_think``, rewrites the prompt
+    so the trained student is instructed to emit a single JSON object
+    directly (no ``<think>...</think>`` block). The student's actual
+    behavior is locked by the SFT training distribution — keep this prompt
+    aligned with the formatter's training-time treatment in
+    [training/formatter.py](../training/formatter.py).
     """
     from qwen_tutor.locale import get_locale
 
     loc = get_locale(locale_name)
-    return _localize_with(_EVALUATION_SYSTEM_PROMPT, loc)
+    rendered = _localize_with(_EVALUATION_SYSTEM_PROMPT, loc)
+    if _student_eval_mode() == "no_think":
+        rendered = _strip_think_instructions_for_no_think(rendered)
+    return rendered
+
+
+def render_scenario_deployment_system_prompt(
+    *,
+    cefr_level: str,
+    locale_name: str | None = None,
+    topic: str,
+    subtopics: list[str] | tuple[str, ...] | None = None,
+    user_role_name: str = "",
+    user_role_description: str,
+    model_role_name: str,
+    model_role_description: str,
+) -> str:
+    """Scenario-aware deployment system prompt (structured ``[label]`` format).
+
+    Renders the single template that BOTH training and deploy use, so the
+    trained distribution and inference distribution stay identical. Call
+    sites that pass values from ``example.metadata``:
+
+      * SFT ``ChatFormatter._render_scenario_deployment_system_prompt``
+      * DPO trainer (same path)
+      * Eval mode in TutorRuntime (the examiner has its own prompt, not
+        this one)
+
+    Plus deploy:
+
+      * ``TutorRuntime`` -- values come from a caller-provided ``Scenario``.
+
+    Field handling:
+
+      * ``model_role_name`` + ``model_role_description``: rendered into the
+        ``[role]`` block. The model speaks AS this character.
+      * ``user_role_description``: rendered into ``[learner]``. The
+        scenario role the user steps into.
+      * ``user_role_name``: ACCEPTED for API symmetry but NOT rendered.
+        The real user's name at deploy is unknown, so we don't write a
+        specific name into the system prompt at any stage. Generation-
+        time teacher prompts get the full scenario JSON (with the name)
+        through a separate prompt path.
+      * ``subtopics``: rendered as a bullet list in ``[subtopics]``,
+        framed as starting points (not a checklist).
+      * Locale fields (``country``, ``country_adjective``,
+        ``learner_description``, ``avoid_cultures_phrase``,
+        ``avoided_topics_sentence``) come from ``config/locale.yaml``
+        via ``_localize_with``.
+    """
+    del user_role_name  # accepted for API symmetry; intentionally not rendered
+    from qwen_tutor.locale import get_locale
+
+    loc = get_locale(locale_name)
+    template = _localize_with(_SCENARIO_DEPLOYMENT_SYSTEM_PROMPT_TEMPLATE, loc)
+    if subtopics:
+        subtopic_items = [s.strip() for s in subtopics if s and s.strip()]
+        subtopics_block = "\n".join(f"- {s}" for s in subtopic_items)
+    else:
+        subtopics_block = "- (no specific subtopics; follow the topic naturally)"
+    # Strip trailing punctuation from descriptions so the template's own
+    # period after ``{*_description}`` doesn't double up (e.g. "vendor..").
+    def _trim(s: str) -> str:
+        return s.strip().rstrip(".").rstrip()
+
+    return template.format(
+        cefr_level=cefr_level,
+        topic=topic.strip(),
+        subtopics_block=subtopics_block,
+        user_role_description=_trim(user_role_description),
+        model_role_name=model_role_name.strip(),
+        model_role_description=_trim(model_role_description),
+    )
+
+
+# ---------------------------------------------------------------------------
+# Default-scenario fallback
+# ---------------------------------------------------------------------------
+#
+# For code paths that need the deployment system prompt but don't have a
+# caller-provided Scenario (TutorRuntime started without one, in-training
+# eval callback's synthetic held-out prompts). Renders the SAME
+# scenario-aware template the SFT/DPO formatter uses at training time so
+# the model stays inside its trained distribution, with intentionally
+# generic [role] / [learner] / [topic] / [subtopics] values.
+#
+# Do NOT use this when you DO have scenario context -- call
+# ``render_scenario_deployment_system_prompt`` directly so the model sees
+# the actual topic + roles.
+_DEFAULT_SCENARIO_TOPIC = "open-ended everyday conversation"
+_DEFAULT_SCENARIO_SUBTOPICS: tuple[str, ...] = (
+    "daily life",
+    "hobbies and interests",
+    "food and meals",
+    "weekend plans",
+)
+_DEFAULT_SCENARIO_USER_DESC = "an adult English learner having an everyday conversation"
+_DEFAULT_SCENARIO_MODEL_NAME = "Tutor"
+_DEFAULT_SCENARIO_MODEL_DESC = "a friendly English conversation tutor"
+
+
+def render_default_scenario_deployment_system_prompt(
+    *, cefr_level: str, locale_name: str | None = None
+) -> str:
+    """Scenario-aware deployment prompt with a neutral default scenario.
+
+    Use this from fallback paths (TutorRuntime without a Scenario, the
+    in-training eval callback) so the model still sees the structured
+    [role] / [learner] / [topic] / [guidelines] format it was trained on.
+    """
+    return render_scenario_deployment_system_prompt(
+        cefr_level=cefr_level,
+        locale_name=locale_name,
+        topic=_DEFAULT_SCENARIO_TOPIC,
+        subtopics=list(_DEFAULT_SCENARIO_SUBTOPICS),
+        user_role_description=_DEFAULT_SCENARIO_USER_DESC,
+        model_role_name=_DEFAULT_SCENARIO_MODEL_NAME,
+        model_role_description=_DEFAULT_SCENARIO_MODEL_DESC,
+    )

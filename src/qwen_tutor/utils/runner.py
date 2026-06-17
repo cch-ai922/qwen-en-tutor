@@ -39,11 +39,13 @@ def deterministic_sample(
     fraction: float,
     key: Callable[[T], str],
 ) -> list[T]:
-    """``items`` 중 약 ``fraction`` 비율을 ``key(item)`` 의 해시로 골라 반환.
+    """Return roughly ``fraction`` of ``items``, selected by hashing
+    ``key(item)``.
 
-    ``random.sample`` 과 다르게 시드 재실행 / 부분 resume 사이에서도 항상
-    같은 부분집합을 돌려줍니다 (해시값이 작은 순서대로 ``ceil(N*fraction)``
-    개를 선택). 비율 0 이면 빈 리스트, 1 이상이면 전부 반환.
+    Unlike ``random.sample``, this returns the same subset across seed
+    reruns and partial resumes (it keeps the ``ceil(N*fraction)`` items
+    whose hash is smallest). Returns an empty list when ``fraction`` is
+    0 and every item when ``fraction`` is >= 1.
     """
     if fraction >= 1.0:
         return list(items)

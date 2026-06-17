@@ -1,0 +1,17 @@
+{
+  "topic": "Shopping at a wet market in Beijing",
+  "subtopics": [
+    "fresh vegetables and prices",
+    "asking how to cook unfamiliar produce",
+    "payment by mobile QR code",
+    "small talk about busy market days"
+  ],
+  "user_role": {
+    "name": "Yumi",
+    "description": "A Singapore college student spending a semester in Beijing, doing her first solo grocery run at a local wet market."
+  },
+  "model_role": {
+    "name": "Wei",
+    "description": "A friendly fruit and vegetable vendor at the Sanyuanli market who has been selling there for fifteen years and is patient with foreign students."
+  }
+}

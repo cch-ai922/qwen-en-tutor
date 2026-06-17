@@ -220,13 +220,29 @@ class TutorEvalCallback(TrainerCallback):  # type: ignore[misc]
         """
         tok = self.formatter.tokenizer
         if prompt.mode == "conversation":
-            system_content = self.formatter._render_deployment_system_prompt(prompt.cefr_level)
+            # Use the scenario-aware deployment prompt with a neutral default
+            # scenario — same template the SFT/DPO formatter feeds the model
+            # at training time, so callback samples stay inside the trained
+            # distribution. (Held-out prompts carry no per-scenario fields.)
+            from qwen_tutor.generation.prompts import (
+                render_default_scenario_deployment_system_prompt,
+            )
+
+            system_content = render_default_scenario_deployment_system_prompt(
+                cefr_level=prompt.cefr_level,
+            )
             user_content = self.formatter._ensure_no_think(prompt.user_message)
             enable_thinking = False
         else:
+            # Honor ``thinking.student_eval`` so the in-training eval
+            # callback probe matches what the trained model will actually
+            # emit at deploy. See formatter.py for the matching SFT-time
+            # treatment that strips <think> blocks when no_think is set.
+            from qwen_tutor.utils.thinking import get_thinking_mode
+
             system_content = self.formatter.evaluation_system_prompt
             user_content = prompt.user_message
-            enable_thinking = True
+            enable_thinking = get_thinking_mode("student_eval") != "no_think"
         messages = [
             {"role": "system", "content": system_content},
             {"role": "user", "content": user_content},
@@ -294,7 +310,10 @@ class TutorEvalCallback(TrainerCallback):  # type: ignore[misc]
     ) -> dict[str, Any]:
         valid = 0
         rows: list[dict[str, Any]] = []
-        score_sums = {"fluency": 0, "accuracy": 0, "vocabulary": 0, "interaction": 0}
+        score_sums = {
+            "fluency": 0, "accuracy": 0, "vocabulary": 0,
+            "interaction": 0, "topic_adherence": 0,
+        }
         score_counts = 0
         for prompt, text in samples:
             parsed = _parse_evaluation_output(text)

@@ -1,21 +1,24 @@
 """speaks_l1 sanity filter.
 
-``language_redirect`` 의 ``speaks_l1`` 변종은 user turn 한 개가 L1
-(non-Latin script) 로 작성되어야 합니다. teacher 가 L1 출력을 거부하고
-영어로만 응답하면, 학습 데이터로서 가치가 없는 degenerate 예시가 됩니다.
+The ``speaks_l1`` variant of ``language_redirect`` requires one user turn
+to be written in the learner's L1 (a non-Latin script). When the teacher
+refuses to emit L1 and answers only in English, the resulting example is
+degenerate and useless as training data.
 
-이 필터는 ``metadata.generation.language_trigger == "speaks_l1"`` 인
-SFTExample 만 검사하고, 다음 두 경우에 reject 합니다:
+This filter only inspects SFTExamples whose
+``metadata.generation.language_trigger == "speaks_l1"`` and rejects them
+in either of these cases:
 
-  1. 모든 user turn 이 영어(=non-Latin script 가 단 하나도 없는 상태) 인 경우
-     → teacher 가 L1 turn 을 작성하지 않았음. degenerate.
-  2. assistant 가 "you could say in English: '<text>'" 패턴으로 user 의
-     직전 영어 turn 을 그대로 echo 하는 경우
-     → teacher 가 L1 turn 을 안 만들었기 때문에 tutor 가 영어를 영어로
-       "번역" 하는 nonsensical 응답. 정상 paraphrase 와 구별을 위해
-       echo 의 유사도가 0.8 이상일 때만 reject.
+  1. Every user turn is English (i.e. zero non-Latin characters anywhere)
+     -> the teacher never produced the L1 turn. Degenerate.
+  2. The assistant turn contains a "you could say in English: '<text>'"
+     pattern that simply echoes the user's previous English turn
+     -> because the teacher skipped the L1 turn, the tutor ends up
+       "translating" English into English, which is nonsensical. Only
+       reject when the echo similarity is >= 0.8, so genuine paraphrases
+       still pass.
 
-다른 모든 record (speaks_l1 이 아닌 것) 는 그대로 통과시킵니다.
+All other records (not speaks_l1) are passed through unchanged.
 """
 
 from __future__ import annotations
