@@ -52,10 +52,60 @@ sets are all computed and reported per level. This matters because
 tutor behavior at A1 and C2 are qualitatively different problems, and
 collapsing them obscures both.
 
-## 3.3 Twelve-stream SFT taxonomy
+## 3.3 An invariant-based taxonomy of tutor behavior
 
-The pipeline produces SFT data through twelve parallel streams. They
-fall into three groups:
+We organise tutor-side behavior around a single principle. A tutor is
+the keeper of a set of **interaction invariants** — properties of the
+session that the tutor is configured to hold throughout. A learner
+*violation* is a move that breaks exactly one invariant, and the
+correct redirect is the **minimal repair** that restores it. This
+gives us a generative criterion for the taxonomy rather than an
+intuited list:
+
+> Two learner violations occupy **distinct redirect axes iff their
+> minimal repairs differ in shape.** Merge violations whose repair is
+> identical; split violations whose repair differs.
+
+The invariants are not arbitrary: they are the commitments the tutor
+system prompt itself makes (the language of instruction, the lesson
+topic, the role structure, the persona, the pedagogical contract, the
+locale frame) plus a general-appropriateness invariant inherited from
+the underlying assistant. We therefore claim completeness only
+*relative to the enumerated invariant set*, not over all conceivable
+tutor violations — a bounded claim we can actually defend. Table&nbsp;1
+states the invariant, the characteristic violation, and the minimal
+repair for each single-shot axis.
+
+**Table 1. The seven single-shot redirect axes as
+invariant / violation / minimal-repair triples.** The third column is
+the response *shape* a tutor must produce; that the shapes differ is
+exactly the claim the §5.4 ablation tests.
+
+| Invariant the tutor maintains | Violation (learner move) | Minimal repair (redirect shape) |
+| --- | --- | --- |
+| Language of instruction | Code-switch into L1 (`language_redirect`) | Acknowledge the L1 turn, steer back to target language |
+| Lesson topic | Off-topic drift (`topic_redirect`) | Re-anchor to the subject |
+| Role structure (tutor teaches) | Role swap, "you be the learner" (`role_swap_redirect`) | Decline, reassert the tutoring structure |
+| Tutor persona / frame | Persona break, "are you a chatbot?" (`persona_redirect`) | Reassert the frame, continue in persona |
+| Pedagogical contract (scaffold, don't answer) | "Just give me the answer" (`pedagogy_redirect`) | Scaffold toward the answer rather than supplying it |
+| Locale / cultural frame | Out-of-locale reference (`locale_redirect`) | Brief in-locale redirect, continue in-locale |
+| General appropriateness (safety) | Politics / religion / distress (`redirect`, catch-all) | Generic safe redirect |
+
+Two honest caveats. The final row (general appropriateness) is
+different in kind from the other six — it is a general-assistant
+safety behavior rather than a tutoring-specific invariant — so we
+treat it as the catch-all rather than pretending it is parallel. And
+we arrived at this list partly by enumeration before recognising the
+organising principle; we present the principle as the structure these
+axes instantiate, not as a historical account of their discovery. The
+principle earns its place by doing two pieces of work the bare list
+cannot: it supplies the granularity criterion above, and it converts
+"a generic redirect stream is insufficient" from an assertion into a
+falsifiable prediction (distinct invariants require distinct repairs),
+which §5.4 tests per axis.
+
+The pipeline realises this taxonomy through twelve parallel streams in
+three groups.
 
 **Normal (1 stream).** Standard scaffolded tutor dialogues. The
 teacher plays both learner and tutor turns over ~12 turns, with the
@@ -68,93 +118,139 @@ single learner-stance archetype.
 **Single-shot redirects (7 streams).** Each redirect stream produces
 dialogues whose first ~5 turns are normal scaffolding, but at a
 specific turn the learner introduces a violation along *one* axis;
-the tutor's job in the next turn is to redirect gracefully. The seven
-axes are:
+the tutor's job in the next turn is the minimal repair for that
+invariant (Table&nbsp;1, third column). Training on a single generic
+"redirect" stream, as most prior tutor datasets do, collapses these
+axis-specific repair shapes into one averaged behavior.
 
-| Stream | Violation introduced by learner |
-| --- | --- |
-| `redirect` | A generic problematic input (politics, religion, distress, etc.) |
-| `locale_redirect` | A locale-violating cultural reference (e.g. Thanksgiving when locale=china) |
-| `pedagogy_redirect` | A pedagogy-weak request (e.g. "just give me the answer") |
-| `language_redirect` | A code-switch into L1 |
-| `persona_redirect` | An attempt to break the tutor's persona ("are you a chatbot?") |
-| `topic_redirect` | An off-topic drift |
-| `role_swap_redirect` | An attempt to swap roles ("you be the learner now") |
-
-Splitting redirect by axis matters because the tutor's correct
-response shape differs across axes. A locale violation is corrected
-by a brief redirect plus continuation in-locale. A pedagogy weakness
-is corrected by scaffolding the answer rather than supplying it. For a
-language code-switch, the tutor should acknowledge the L1 turn and
-gently steer the learner back to English. Training on a single
-generic "redirect" stream, as most prior tutor datasets do,
-collapses these axis-specific shapes.
-
-**Persistent 3-strike streams (4 streams).** Each persistent stream
+**Persistent 3-strike streams (4 streams).** Persistence is an
+*orthogonal dimension* to the invariant axis: in principle any
+invariant violation can be one-off or repeated. A persistent stream
 produces dialogues where the learner *persists* in the same violation
 across three probe turns; the tutor probes the abuse twice, then on
-the third strike ends the session with a sentinel marker. The four
-axes are `persistent_off_topic`, `persistent_language_violation`,
-`persistent_persona_break`, and `persistent_role_swap`. These four
-were selected because they are the redirect axes most amenable to
-multi-turn persistence (a learner cannot persist in "wrong locale"
-for many turns in the same way they can persist in off-topic drift).
+the third strike ends the session with a sentinel marker. We give
+persistent variants to four axes — `persistent_off_topic`,
+`persistent_language_violation`, `persistent_persona_break`, and
+`persistent_role_swap` — and not to all seven, on a principled
+ground: a persistent axis earns its own stream only where *repeated*
+violation changes the correct response (escalation to a hard
+session-end). For these four, repetition plausibly warrants
+escalation. A repeated locale slip, by contrast, is most naturally
+just corrected again in-locale, so no escalation behavior is
+distinct enough to train. We flag one honest borderline case:
+*pedagogy* persistence (a learner who repeatedly demands "just give
+me the answer") is a plausible escalation candidate we do not
+currently include; adding a `persistent_pedagogy` stream is a clean
+extension and we note it as such rather than claim the four-axis set
+is forced.
 
-## 3.4 Persistent 3-strike with four structural variants
+## 3.4 Trigger-position decorrelation: the 4-variant persistent design
 
-The persistent streams are the paper's strongest methodological
-contribution. The naive design, in which the sentinel always fires at turn 7
-after the third strike, has a serious flaw: the student learns a
-*positional shortcut*. Because every persistent training example
-in the dataset has the sentinel at exactly turn 7, the student
-learns to fire the sentinel based on turn position alone, not on
-whether three strikes have occurred. At inference time this produces
-both false positives (sentinel fires on benign turn-7 utterances) and
-false negatives (sentinel does not fire when persistence ends earlier
-or later than turn 7).
+The persistent streams carry the paper's strongest methodological
+contribution, and it is best stated as a general principle before its
+tutor-specific instantiation.
 
-We address this with a **4-variant structural design**. Each
-persistent dialogue is generated with one of four variants chosen
-hash-deterministically from the seed id:
+> **Principle (trigger-position decorrelation).** When a model must
+> emit a rare structured marker conditional on a *semantic* trigger,
+> but the marker is *positionally regular* in the training data, the
+> model will learn the position as a proxy for the trigger. To force
+> the model to learn the trigger, decorrelate marker position from
+> trigger by resampling the position — subject to whatever
+> determinism and codomain constraints the data pipeline imposes.
 
-| Variant | Sentinel-firing turn | Strike pattern |
-| --- | --- | --- |
-| V1 | 5 | Strikes at user turns 1, 2; sentinel at assistant turn 5 |
-| V2 | 7 | Strikes at user turns 1, 3; sentinel at assistant turn 7 |
-| V3 | 9 | Strikes at user turns 1, 3, 5; sentinel at assistant turn 9 |
-| V4 | 11 | Strikes at user turns 1, 3, 5, 7; sentinel at assistant turn 11 |
+This is a multi-turn, structured-output instance of shortcut learning
+(§2.4): the model takes the cheapest predictor of the label that the
+data exposes. In our persistent streams the rare marker is the
+sentinel, the semantic trigger is "third strike on the same axis,"
+and the naive design — sentinel always at turn 7 — makes turn
+position a perfect proxy. A student trained on it learns to fire on
+*turn 7* rather than on *the third strike*, producing both false
+positives (firing on benign turn-7 utterances) and false negatives
+(failing to fire when persistence ends earlier or later).
 
-The variant index is computed as `int(sha256(seed_id)[:8]) % 4`. This
-gives a uniform distribution of variants across the dataset while
-keeping the choice reproducible across runs and across the
-train/eval split.
+We instantiate the principle with a **4-variant structural design**.
+Each persistent dialogue is generated with one of four variants chosen
+hash-deterministically from the seed id. Crucially, **every variant
+holds the trigger constant at exactly three strikes** and varies only
+the amount of normal scaffolding that precedes the persistence block;
+this is what shifts the sentinel to a different absolute turn without
+changing what the model must detect. The dialogue opens with a tutor
+turn (assistant turns are odd, user turns even), the persistence block
+is the fixed six-turn sequence strike–probe–strike–probe–strike–
+sentinel, and lead-in scaffolding fills the turns before it:
 
-**Why hash-deterministic rather than `random.choice`?** Three
-pipeline invariants force this choice. (i) *Resumability*: every
-generator skips ids already present in its output JSONL, so a
-killed-and-resumed run that re-generates a record must assign it
-the *same* variant or the cumulative distribution drifts across
-restarts. (ii) *Train/eval coherence*: the held-out split is
-itself hash-deterministic on `seed_id`
-(`sha256(seed_id)[:8] % 100`), so a per-run random variant
-assignment would reshuffle the eval set's variant distribution
-across runs and across ablations, making A1-vs-A4 comparisons
-ill-defined. (iii) *Turn-parity*: strikes are user turns and the
-sentinel is an assistant turn, leaving only four parity-valid
-values {5, 7, 9, 11} in the practical range (≥5 to fit three
-strikes + probes; ≤11 to stay inside the SFT max-length budget).
-Hash-mod-4 is therefore the principled form of "random" here: it
-is a seeded pseudo-random function over the only feasible discrete
-codomain, satisfying all three constraints simultaneously and
-producing the desired 25/25/25/25 split by construction without
-post-hoc rebalancing.
+Turn indices below are 0-based with the dialogue opening on a learner
+turn (so user turns are even, tutor turns are odd). Every variant
+contains exactly three strikes; the variants differ only in the
+amount of normal scaffolding that precedes the persistence block.
+
+| Variant | Sentinel turn | Lead-in scaffolding turns | Strike (user) turns | Probe (assistant) turns |
+| --- | --- | --- | --- | --- |
+| V1 | 5 | 0 | 0, 2, 4 | 1, 3 |
+| V2 | 7 | 2 (turns 0–1) | 2, 4, 6 | 3, 5 |
+| V3 | 9 | 4 (turns 0–3) | 4, 6, 8 | 5, 7 |
+| V4 | 11 | 6 (turns 0–5) | 6, 8, 10 | 7, 9 |
+
+The variant index is computed as `int(sha256(seed_id)[:8]) % 4` and
+maps to one of the four sentinel positions {5, 7, 9, 11}. This gives
+a uniform distribution of variants across the dataset while keeping
+the choice reproducible across runs and across the train/eval split.
+
+A subtle design choice is doing real work here: every variant **holds
+the trigger constant at exactly three strikes** and adjusts only how
+much normal scaffolding precedes them. A naive alternative would
+reach different sentinel positions by varying the number of strikes
+(e.g. 1, 2, 3, 4 strikes for positions 5, 7, 9, 11). Under that
+scheme, sentinel position co-varies with strike count, so a
+"fire-rate by position" metric silently becomes "fire-rate by
+strike-count," and only the 3-strike variant fires on the literal
+*third* strike — contradicting the "third strike on the same axis"
+framing the whole section rests on. The chosen design dissociates
+position from trigger cleanly: "third strike" is literally true for
+every variant, and the §4.8 position-stratified metric measures
+position and nothing else.
+
+**Why hash-deterministic rather than `random.choice`?** The
+"subject to constraints" clause of the principle is doing real work
+here, and it is what distinguishes our construction from a plain
+shuffle. Three pipeline invariants force the seeded form. (i)
+*Resumability*: every generator skips ids already present in its
+output JSONL, so a killed-and-resumed run that re-generates a record
+must assign it the *same* variant or the cumulative distribution
+drifts across restarts. (ii) *Train/eval coherence*: the held-out
+split is itself hash-deterministic on `seed_id`
+(`sha256(seed_id)[:8] % 100`), so a per-run random variant assignment
+would reshuffle the eval set's variant distribution across runs and
+across ablations, making the A1-vs-A5 decorrelation comparison
+(§4.6) ill-defined. (iii)
+*Turn-parity*: dialogues open on a learner turn, so user turns are
+even and assistant (sentinel) turns are odd, leaving only
+parity-valid odd values in the practical range {5, 7, 9, 11} (≥5 to
+fit three strikes and the two intervening probes; ≤11 to stay inside
+the SFT max-length budget — at the 1792-token cap, the longest
+variant already pushes ~2060 tokens at C2, so positions beyond 11
+would force a budget bump or truncation). Hash-mod-4 is therefore
+the principled form of "random" here: it is a seeded pseudo-random
+function over the only feasible discrete codomain, satisfying all
+three constraints simultaneously and producing the desired
+25/25/25/25 split by construction without post-hoc rebalancing.
 
 The intuition is that a student trained on this mix cannot learn a
-purely positional rule because the sentinel turn varies; instead it
-must learn to detect *the third instance of the same axis* and respond
-with the sentinel. We empirically verify this in §5 by measuring
-sentinel-firing precision/recall on a held-out Persistent-Probe set
-in which the sentinel-firing turn varies by record.
+*single-position* rule because the sentinel turn varies; instead it
+must learn to detect *the third instance of the same axis*. We caution
+that uniform firing across {5, 7, 9, 11} is *necessary but not
+sufficient* evidence: a model that memorised all four trained
+positions would also fire uniformly on in-distribution records. The
+hypotheses are separated only where they disagree — on benign
+prefixes that reach a trained position without three strikes, and on
+records whose third strike lands at an untrained position — so §5
+reports recall on the held-out Persistent-Probe set together with the
+false-positive rate on Persistent-FP-Probe and firing on
+Persistent-OffPosition-Probe (§4.5, §4.8). Because the same
+construction applies to any rare, semantically-triggered,
+positionally-regular marker, we expect it to transfer to refusal-token
+emission, tool-call emission, and agentic stop conditions; we
+demonstrate only the sentinel case here.
 
 ## 3.5 Locale-aware prompt engineering
 
@@ -314,7 +410,7 @@ Two design choices in the `locale_judge` deserve note:
   the entity extractor from interpreting sentence-initial
   capitalization as proper-noun status.
 
-In §5 we report a methodological finding: the `locale_judge` in its
+In §6.5 we report a methodological finding: the `locale_judge` in its
 default configuration was responsible for **57.5% of all filter
 rejections, of which ≥85% were false positives** on entities that
 were either genuinely in-locale (e.g. `West Lake`, `Drum Tower`,

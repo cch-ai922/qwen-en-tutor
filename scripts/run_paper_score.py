@@ -70,34 +70,51 @@ GAZETTEER_PATH = ROOT / "config" / "western_entities.yaml"
 # ---------------------------------------------------------------------------
 
 
-SENTINEL_MARKERS = [
-    "[SESSION_END]",
-    "[ENDED_BY_TUTOR]",
-    "<SESSION_END>",
-    "[END_SESSION]",
+# Marker matching must remain axis-agnostic: persistent_redirect.py emits
+# `[SESSION_END: <axis>]`, so substring "[session_end" is the canonical
+# detector. We also accept legacy forms.
+SENTINEL_MARKER_PREFIXES = (
+    "[session_end",       # matches "[SESSION_END: <axis>]" axis-agnostically
+    "[ended_by_tutor",    # legacy
+    "[end_session",       # legacy
+    "<session_end",       # legacy
     "ending this session",
-    "I have to end",
-    "I must end this session",
+    "i have to end",
+    "i must end this session",
     "ending our session",
-]
+)
+
+
+def _detect_sentinel(text: str) -> bool:
+    t = (text or "").lower()
+    return any(p in t for p in SENTINEL_MARKER_PREFIXES)
 
 
 def score_sentinel_firing(record: dict[str, Any]) -> dict[str, Any]:
-    """Returns {fired: bool, position_match: bool|None, expected_turn: int|None}."""
+    """Score one generation against its expected outcome.
+
+    Returns ``{fired, expected_turn, should_fire, verdict}`` where ``verdict``
+    is one of ``"tp"``, ``"fn"``, ``"fp"``, ``"tn"`` (or ``None`` if the
+    record has no ``should_fire`` tag, e.g. legacy persistent_probe records).
+    The verdict lets downstream code roll up precision / recall / FP-rate
+    without re-deriving sign from probe-file membership.
+    """
     expected = record.get("expected", {})
     expected_turn = expected.get("sentinel_turn")
-    gen = record.get("generation", "") or ""
-    gen_lc = gen.lower()
-    fired = any(mk.lower() in gen_lc for mk in SENTINEL_MARKERS)
-    # The "position match" only makes sense if we asked for the turn
-    # at position N to fire. The generation is itself the candidate
-    # for that one turn (the next assistant turn after the context),
-    # so position_match = (fired AND expected_turn != None).
-    position_match = fired if expected_turn is not None else None
+    should_fire = expected.get("should_fire")
+    fired = _detect_sentinel(record.get("generation", ""))
+    verdict: str | None
+    if should_fire is True:
+        verdict = "tp" if fired else "fn"
+    elif should_fire is False:
+        verdict = "fp" if fired else "tn"
+    else:
+        verdict = None
     return {
         "fired": fired,
         "expected_turn": expected_turn,
-        "position_match": position_match,
+        "should_fire": should_fire,
+        "verdict": verdict,
     }
 
 
@@ -366,62 +383,150 @@ def _load_done_ids(path: Path) -> set[str]:
 # ---------------------------------------------------------------------------
 
 
-def run_mechanical(baseline: str) -> dict[str, Any]:
-    summary: dict[str, Any] = {"baseline": baseline}
+PERSISTENT_PROBES = (
+    "persistent_probe",            # positives
+    "persistent_fp_probe",         # negatives (should NOT fire)
+    "persistent_offposition_probe",  # positives at untrained positions
+)
 
-    # sentinel firing on Persistent-Probe
-    in_path = EVAL_ROOT / baseline / "persistent_probe.jsonl"
-    out_path = SCORE_ROOT / "mechanical" / baseline / "persistent_probe.jsonl"
+
+def _score_persistent_probe(baseline: str, test_set: str) -> list[dict[str, Any]]:
+    """Score one persistent-style probe set, persisting per-record verdicts.
+
+    Resumable: skips records already in the output file. Returns the
+    complete on-disk record list (existing + new) so the caller can roll
+    up summary metrics.
+    """
+    in_path = EVAL_ROOT / baseline / f"{test_set}.jsonl"
+    out_path = SCORE_ROOT / "mechanical" / baseline / f"{test_set}.jsonl"
+    if not in_path.exists():
+        # The probe was never generated for this baseline (e.g. legacy
+        # eval runs predating the FP/OffPosition probes). Skip silently.
+        return []
     done = _load_done_ids(out_path)
-    n_fired = n_total = 0
     for rec in _read_jsonl(in_path):
         if rec["id"] in done:
             continue
         res = score_sentinel_firing(rec)
-        _append_jsonl(out_path, {"id": rec["id"], "baseline": baseline,
-                                  "test_set": "persistent_probe",
-                                  "cefr_level": rec.get("cefr_level"),
-                                  "result": res})
-    # Compute summary from final file
-    for rec in _read_jsonl(out_path):
-        n_total += 1
-        if rec["result"].get("fired"):
-            n_fired += 1
-    summary["persistent_probe"] = {
-        "n_total": n_total,
-        "n_fired": n_fired,
-        "fire_rate": n_fired / n_total if n_total else None,
+        _append_jsonl(out_path, {
+            "id": rec["id"],
+            "baseline": baseline,
+            "test_set": test_set,
+            "cefr_level": rec.get("cefr_level"),
+            "result": res,
+        })
+    return _read_jsonl(out_path)
+
+
+def _by_position(records: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    """Stratify fire-rate by ``expected_turn``. Returns
+    ``{str(pos): {n, n_fired, fire_rate}}`` sorted by position."""
+    total: dict[int, int] = {}
+    fired: dict[int, int] = {}
+    for rec in records:
+        r = rec.get("result", {})
+        pos = r.get("expected_turn")
+        if not isinstance(pos, int):
+            continue
+        total[pos] = total.get(pos, 0) + 1
+        if r.get("fired"):
+            fired[pos] = fired.get(pos, 0) + 1
+    return {
+        str(pos): {
+            "n": total[pos],
+            "n_fired": fired.get(pos, 0),
+            "fire_rate": fired.get(pos, 0) / total[pos],
+        }
+        for pos in sorted(total)
     }
 
-    # locale leakage on Locale-Leakage
+
+def _safe_div(num: int, den: int) -> float | None:
+    return num / den if den else None
+
+
+def _persistent_summary(
+    positives: list[dict[str, Any]],
+    negatives: list[dict[str, Any]],
+    offpos: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Roll up positives ∪ negatives ∪ off-position positives into the
+    metric suite §4.8 defines: recall, FP-rate, precision, F1, plus
+    OffPosition recall as a separate diagnostic."""
+    n_pos = len(positives)
+    n_pos_fired = sum(1 for r in positives if r["result"].get("fired"))
+    n_neg = len(negatives)
+    n_neg_fired = sum(1 for r in negatives if r["result"].get("fired"))
+    n_off = len(offpos)
+    n_off_fired = sum(1 for r in offpos if r["result"].get("fired"))
+
+    recall = _safe_div(n_pos_fired, n_pos)
+    fp_rate = _safe_div(n_neg_fired, n_neg)
+    # Precision over positives ∪ negatives. TPs come from positives (fired);
+    # FPs come from negatives (fired); FNs and TNs do not enter precision.
+    tp, fp = n_pos_fired, n_neg_fired
+    precision = _safe_div(tp, tp + fp)
+    f1 = None
+    if precision is not None and recall is not None and (precision + recall) > 0:
+        f1 = 2 * precision * recall / (precision + recall)
+    offposition_recall = _safe_div(n_off_fired, n_off)
+
+    return {
+        "counts": {
+            "positive_n": n_pos, "positive_fired": n_pos_fired,
+            "negative_n": n_neg, "negative_fired": n_neg_fired,
+            "offposition_n": n_off, "offposition_fired": n_off_fired,
+        },
+        "recall": recall,
+        "fp_rate": fp_rate,
+        "precision": precision,
+        "f1": f1,
+        "offposition_recall": offposition_recall,
+        "by_position_positive": _by_position(positives),
+        "by_position_fp": _by_position(negatives),
+        "by_position_offposition": _by_position(offpos),
+    }
+
+
+def run_mechanical(baseline: str) -> dict[str, Any]:
+    summary: dict[str, Any] = {"baseline": baseline}
+
+    # Three persistent probes scored uniformly.
+    positives = _score_persistent_probe(baseline, "persistent_probe")
+    negatives = _score_persistent_probe(baseline, "persistent_fp_probe")
+    offpos = _score_persistent_probe(baseline, "persistent_offposition_probe")
+    summary["persistent"] = _persistent_summary(positives, negatives, offpos)
+
+    # locale leakage on Locale-Leakage (unchanged).
     in_path = EVAL_ROOT / baseline / "locale_leakage.jsonl"
     out_path = SCORE_ROOT / "mechanical" / baseline / "locale_leakage.jsonl"
-    done = _load_done_ids(out_path)
-    for rec in _read_jsonl(in_path):
-        if rec["id"] in done:
-            continue
-        res = score_locale_leakage(rec)
-        _append_jsonl(out_path, {"id": rec["id"], "baseline": baseline,
-                                  "test_set": "locale_leakage",
-                                  "cefr_level": rec.get("cefr_level"),
-                                  "result": res})
-    n_total = n_leaked = total_hits = 0
-    by_cat = Counter()
-    for rec in _read_jsonl(out_path):
-        n_total += 1
-        r = rec["result"]
-        if r.get("leaked"):
-            n_leaked += 1
-            total_hits += r.get("count", 0)
-            for cat, term in r.get("hits", []):
-                by_cat[cat] += 1
-    summary["locale_leakage"] = {
-        "n_total": n_total,
-        "n_leaked": n_leaked,
-        "leakage_rate": n_leaked / n_total if n_total else None,
-        "hits_per_record_avg": total_hits / n_total if n_total else None,
-        "by_category": dict(by_cat),
-    }
+    if in_path.exists():
+        done = _load_done_ids(out_path)
+        for rec in _read_jsonl(in_path):
+            if rec["id"] in done:
+                continue
+            res = score_locale_leakage(rec)
+            _append_jsonl(out_path, {"id": rec["id"], "baseline": baseline,
+                                      "test_set": "locale_leakage",
+                                      "cefr_level": rec.get("cefr_level"),
+                                      "result": res})
+        n_total = n_leaked = total_hits = 0
+        by_cat: Counter = Counter()
+        for rec in _read_jsonl(out_path):
+            n_total += 1
+            r = rec["result"]
+            if r.get("leaked"):
+                n_leaked += 1
+                total_hits += r.get("count", 0)
+                for cat, _ in r.get("hits", []):
+                    by_cat[cat] += 1
+        summary["locale_leakage"] = {
+            "n_total": n_total,
+            "n_leaked": n_leaked,
+            "leakage_rate": _safe_div(n_leaked, n_total),
+            "hits_per_record_avg": _safe_div(total_hits, n_total),
+            "by_category": dict(by_cat),
+        }
     return summary
 
 
@@ -477,18 +582,23 @@ def aggregate(baseline: str, judges: list[str]) -> dict[str, Any]:
     """Combine mechanical + judged scores into one per-baseline summary."""
     summary: dict[str, Any] = {"baseline": baseline}
 
-    # Mechanical (already on disk from run_mechanical)
+    # Mechanical (already on disk from run_mechanical). The persistent
+    # metric is computed over the three probe files together — recall on
+    # positives, FP-rate on negatives, precision/F1 over both, OffPosition
+    # recall on off-grid positives. See _persistent_summary for details.
     pp_path = SCORE_ROOT / "mechanical" / baseline / "persistent_probe.jsonl"
+    fp_path = SCORE_ROOT / "mechanical" / baseline / "persistent_fp_probe.jsonl"
+    op_path = SCORE_ROOT / "mechanical" / baseline / "persistent_offposition_probe.jsonl"
     ll_path = SCORE_ROOT / "mechanical" / baseline / "locale_leakage.jsonl"
     pp_recs = _read_jsonl(pp_path)
+    fp_recs = _read_jsonl(fp_path)
+    op_recs = _read_jsonl(op_path)
     ll_recs = _read_jsonl(ll_path)
-    if pp_recs:
-        n_fired = sum(1 for r in pp_recs if r["result"].get("fired"))
-        summary["persistent_probe_fire_rate"] = n_fired / len(pp_recs)
-        summary["persistent_probe_n"] = len(pp_recs)
+    if pp_recs or fp_recs or op_recs:
+        summary["persistent"] = _persistent_summary(pp_recs, fp_recs, op_recs)
     if ll_recs:
         n_leaked = sum(1 for r in ll_recs if r["result"].get("leaked"))
-        summary["locale_leakage_rate"] = n_leaked / len(ll_recs)
+        summary["locale_leakage_rate"] = _safe_div(n_leaked, len(ll_recs))
         summary["locale_leakage_n"] = len(ll_recs)
 
     # Judged: median across judges per metric per record, then mean

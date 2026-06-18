@@ -14,6 +14,16 @@ Conditions:
   A4  no persistent streams       — data/sft_filtered_a4/  (normal + 7
                                    single-shot redirects; drops the 4
                                    persistent streams)
+  A5  fixed-turn-7 persistent     — data/sft_filtered_a5/  (full 12-stream
+                                   mix, but the 4 persistent streams come
+                                   from data/sft_filtered_a5_persistent/
+                                   regenerated with the V2-only override
+                                   QWEN_TUTOR_PERSISTENT_FORCED_VARIANT=1).
+                                   Used to isolate the decorrelation
+                                   contribution: A1-vs-A5 is the direct
+                                   test of §3.4. Pre-req: regen persistent
+                                   first (see training_a5_fixed_turn_7.yaml
+                                   header).
 
 Run after any change to data/sft_filtered/ — the script clears the per-
 condition dir and re-links from scratch, so it's idempotent.
@@ -53,6 +63,20 @@ PERSISTENT = [
 CONDITIONS: dict[str, list[str]] = {
     "a3": NORMAL + GENERIC_REDIRECT + PERSISTENT,  # no specialized redirects
     "a4": NORMAL + GENERIC_REDIRECT + SPECIALIZED_REDIRECTS,  # no persistent
+    # A5: same streams as A1, but persistent streams come from a separate
+    # fixed-turn-7 regen dir (handled below in setup_condition).
+    "a5": NORMAL + GENERIC_REDIRECT + SPECIALIZED_REDIRECTS + PERSISTENT,
+}
+
+# Per-condition stream-specific source overrides. Streams listed here pull
+# their _passed.jsonl from the alternate dir instead of data/sft_filtered/.
+# Used for A5, where the persistent streams need to come from the V2-only
+# regen rather than the standard 4-variant data.
+CONDITION_STREAM_SRC: dict[str, dict[str, Path]] = {
+    "a5": {
+        stream: ROOT / "data" / "sft_filtered_a5_persistent"
+        for stream in PERSISTENT
+    },
 }
 
 
@@ -71,7 +95,12 @@ def link_or_copy(src: Path, dst: Path) -> str:
 
 def setup_condition(condition: str, streams: list[str], dry_run: bool = False) -> dict:
     """Materialize data/sft_filtered_<condition>/ with only passed files of the
-    listed streams. Returns a summary dict."""
+    listed streams. Returns a summary dict.
+
+    Source dir is data/sft_filtered/ by default, but
+    CONDITION_STREAM_SRC[condition][stream] overrides it per-stream (used
+    by A5 to source persistent streams from the V2-only regen).
+    """
     dst_dir = ROOT / "data" / f"sft_filtered_{condition}"
     if not dry_run:
         dst_dir.mkdir(parents=True, exist_ok=True)
@@ -79,26 +108,30 @@ def setup_condition(condition: str, streams: list[str], dry_run: bool = False) -
         for p in dst_dir.glob("*.jsonl"):
             p.unlink()
 
+    per_stream_src = CONDITION_STREAM_SRC.get(condition, {})
     summary = {"condition": condition, "dst": str(dst_dir),
                "streams": streams, "files_linked": 0, "missing": []}
     for stream in streams:
-        for src in SRC_DIR.glob(f"{stream}_*_passed.jsonl"):
+        src_dir = per_stream_src.get(stream, SRC_DIR)
+        matches = list(src_dir.glob(f"{stream}_*_passed.jsonl"))
+        if not matches:
+            summary["missing"].append(f"{stream} (looked in {src_dir})")
+            continue
+        for src in matches:
             dst = dst_dir / src.name
             if dry_run:
-                print(f"  would link: {src.name}")
+                print(f"  would link: {src} -> {dst}")
             else:
-                method = link_or_copy(src, dst)
+                link_or_copy(src, dst)
                 summary["files_linked"] += 1
-        # Sanity: warn if no files matched for this stream
-        if not list(SRC_DIR.glob(f"{stream}_*_passed.jsonl")):
-            summary["missing"].append(stream)
     return summary
 
 
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--conditions", default="a3,a4",
-                        help="Comma-separated list of conditions to set up.")
+                        help="Comma-separated list of conditions to set up "
+                             "(choices: a3, a4, a5).")
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()
 

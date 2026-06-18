@@ -73,7 +73,14 @@ logger = logging.getLogger("paper_eval")
 
 EVAL_SETS_DIR = ROOT / "eval_sets"
 OUTPUT_ROOT = ROOT / "outputs" / "paper" / "eval"
-TEST_SET_NAMES = ("tutor_scenario", "redirect_probe", "persistent_probe", "locale_leakage")
+TEST_SET_NAMES = (
+    "tutor_scenario",
+    "redirect_probe",
+    "persistent_probe",
+    "persistent_fp_probe",
+    "persistent_offposition_probe",
+    "locale_leakage",
+)
 
 
 # ---------------------------------------------------------------------------
@@ -178,7 +185,12 @@ def assemble_chat(record: dict[str, Any]) -> tuple[str, list[dict[str, str]]]:
     user turn so the model has something to respond to.
     """
     test_set = record.get("test_set", "")
-    if test_set in ("redirect_probe", "persistent_probe"):
+    if test_set in (
+        "redirect_probe",
+        "persistent_probe",
+        "persistent_fp_probe",
+        "persistent_offposition_probe",
+    ):
         return record.get("system_prompt", ""), record.get("context_messages", [])
 
     # Cold-start: derive system_prompt + starter user turn from the seed.

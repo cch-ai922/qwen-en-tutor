@@ -44,14 +44,15 @@ multi-judge consensus with paired-comparison protocols.
 
 Our **`locale_judge`** is a specialised single-axis judge whose only
 job is to classify entities as `in_locale` or `out_of_locale` for
-the configured locale. We document a fifth limitation that to our
+the configured locale. We document a failure mode that to our
 knowledge has not been catalogued in this literature: **systematic
 false positives on common-English sentence-initial words and
 locally-canonical landmarks**, with FP rates of ~85% on the judge's
 rejections in our setting. The methodological lesson (that LLM-judge
 filters benefit from aggressive in-locale and English-word
 allowlists, and that the rejection log requires periodic auditing)
-is a contribution we believe generalises beyond locale.
+is, we believe, the part of this finding that generalises beyond
+locale.
 
 ## 2.3 Tutor and educational LLMs
 
@@ -68,8 +69,11 @@ LearningQ [@chen2018learningq] and similar resources provide
 question-answer pairs at varying difficulty levels but are not
 multi-turn. To our knowledge, no publicly described tutor dataset
 both (i) stratifies systematically across CEFR levels A1–C2 and
-(ii) covers multi-axis redirect / persistent abuse handling. The
-12-stream taxonomy is our contribution to this gap.
+(ii) covers multi-axis redirect / persistent abuse handling. Our
+invariant-based taxonomy (§3.3) is our contribution to this gap: it
+treats redirect behavior as the restoration of a small, enumerated
+set of interaction invariants rather than as a single undifferentiated
+"handle bad input" behavior.
 
 ## 2.4 Persona, safety, and adversarial dialogue data
 
@@ -84,18 +88,35 @@ through which assigned personas amplify toxicity
 
 Most of this work treats safety as a *single-turn* problem: a single
 unsafe prompt, a single refusal. Two contributions of our pipeline
-are not addressed by this prior work. First, **multi-axis
-decomposition**: we separate the redirect behavior into seven
-single-shot axes because the correct *response shape* differs by
-axis (a locale violation is corrected by a brief in-locale redirect;
-a pedagogy weakness is corrected by scaffolding rather than
-answering; a code-switch is corrected by acknowledging L1 and
-steering back). Second, **multi-turn persistence**: the persistent
-3-strike streams test whether a student trained on fixed-position
-sentinel data learns *the third strike* or only *turn N*. The 4-
-variant structural design is our solution to this positional-
-shortcut problem; we are not aware of a directly comparable
-adversarial-training contribution in the dialogue literature.
+are not addressed by this prior work. First, **invariant-based
+multi-axis decomposition**: we separate redirect behavior into seven
+single-shot axes because the correct *response shape* — the minimal
+repair — differs by invariant (a locale violation is repaired by a
+brief in-locale redirect; a pedagogy weakness by scaffolding rather
+than answering; a code-switch by acknowledging L1 and steering
+back). Second, **multi-turn persistence**: the persistent 3-strike
+streams test whether a student trained on fixed-position sentinel
+data learns *the third strike* or only *turn N*.
+
+**Shortcut learning and the positional defense.** The failure our
+persistent streams target is a dialogue-level instance of a general
+phenomenon: neural models latch onto superficial cues that are
+correlated with the label in training but spurious with respect to
+the intended task — *shortcut learning* [@geirhos2020shortcut]. The
+phenomenon is well documented in natural-language inference, where
+annotation artifacts and shallow syntactic heuristics let models
+succeed without the intended reasoning [@gururangan2018artifacts;
+@mccoy2019hans]. In our setting the spurious cue is turn position:
+under a fixed-turn sentinel, "turn 7" is perfectly correlated with
+"third strike," so the student learns the cheaper positional rule.
+The standard remedy in that literature is to break the spurious
+correlation in the data itself. Our 4-variant construction (§3.4) is
+the multi-turn dialogue-sentinel form of that remedy, with the
+added engineering constraints — unaddressed by the NLI work — that
+the position resampling be *deterministic* (for resumability and
+train/eval-split coherence) and confined to a *parity-valid
+codomain*. We are not aware of a directly comparable construction in
+the multi-turn adversarial-dialogue literature.
 
 ## 2.5 Positioning
 
@@ -103,10 +124,11 @@ Against this backdrop, our contributions are positioned as follows:
 
 | Prior work axis | Our contribution beyond |
 | --- | --- |
-| Self-Instruct / Evol-Instruct / WizardLM | Multi-axis decomposition + yield-aware ratio targets |
+| Self-Instruct / Evol-Instruct / WizardLM | Invariant-based multi-axis decomposition + yield-aware ratio targets |
 | LLM-judge filtering | Locale-judge with allowlist defenses + FP audit methodology |
-| Tutor / educational LLMs | Six-level CEFR × twelve-stream taxonomy + locale-aware prompts |
-| Single-turn safety / persona data | Multi-turn persistent 3-strike + 4-variant positional defense |
+| Tutor / educational LLMs | Six-level CEFR × twelve-stream invariant taxonomy + locale-aware prompts |
+| Single-turn safety / persona data | Multi-turn persistent 3-strike + trigger-position decorrelation defense |
+| Shortcut learning / spurious cues (NLI) | Multi-turn dialogue-sentinel instantiation with deterministic, parity-constrained resampling |
 
 We empirically demonstrate the pipeline at the smallest practical
 scale (0.8B student on consumer GPU) so the result transfers to

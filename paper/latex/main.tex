@@ -21,6 +21,9 @@
 \usepackage{times}
 \usepackage{latexsym}
 \usepackage{booktabs}
+\usepackage{longtable}
+\usepackage{array}
+\usepackage{calc}
 \usepackage{microtype}
 \usepackage{inconsolata}
 \usepackage{amsmath}
@@ -32,6 +35,17 @@
 % Allow utf-8 input for non-ASCII chars in citations (Köpf, Tülu, etc.)
 \usepackage[utf8]{inputenc}
 \usepackage[T1]{fontenc}
+
+% ---- Pandoc compatibility shims ---------------------------------------
+% Pandoc emits table column specs that reference \real and \tightlist;
+% these macros are provided by pandoc's default LaTeX template but not by
+% the ACL style, so we declare them here. Without these, pipe-table
+% conversions render as raw column-spec text in the body.
+\providecommand{\real}[1]{#1}
+\providecommand{\tightlist}{%
+  \setlength{\itemsep}{0pt}\setlength{\parskip}{0pt}}
+% pandoc 3.x uses \pandocbounded to wrap floats; harmless no-op shim:
+\providecommand{\pandocbounded}[1]{#1}
 
 % Compact spacing around section headings so the 8-page budget holds.
 \usepackage{titlesec}
@@ -101,9 +115,9 @@ locally-canonical landmarks, which a static allowlist remediates
 % -------------------------------------------------------------------------
 % Bibliography
 % -------------------------------------------------------------------------
-% acl_natbib.bst ships with the acl style files; \bibliography{references}
-% picks up generated/references.bib that the build script copies in.
-\bibliographystyle{acl_natbib}
+% acl.sty already issues \bibliographystyle{acl_natbib} internally, so we
+% only call \bibliography{} here. generated/references.bib is the file the
+% build script copies in.
 \bibliography{references}
 
 \end{document}

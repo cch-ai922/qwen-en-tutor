@@ -43,8 +43,14 @@ is bounded by the test-set bootstrap CIs we report. For judged
 metrics the variance is partially captured by the inter-judge
 agreement we report. Reviewers reading this should treat the
 mechanical metrics with more confidence than the judged ones, and
-the locale_judge FP audit (§5.1) as the strongest finding
-independent of single-seed concerns.
+the locale_judge FP audit (§6.5) as the strongest finding
+independent of single-seed concerns. We note that our two headline
+*conceptual* claims rest on the firmest evidence available here:
+the trigger-position decorrelation claim is tested by a fully
+mechanical metric (sentinel firing), and the invariant-decomposition
+claim is a falsifiable per-axis prediction whose direction (A1 ≫ A3
+on unseen axes, A1 ≈ A3 on the shared generic axis) does not depend
+on absolute judged scores.
 
 ## 6.3 Threats to validity
 
@@ -66,10 +72,17 @@ left to future work.
 from the Qwen family. When judging Qwen-family outputs, this
 introduces a known bias toward Qwen-style responses
 [@panickssery2024selfpreference]. The mechanical metrics (sentinel
-firing, locale
-leakage) do not have this bias because they do not consult a
-judge. The judged metrics (CEFR adherence, redirect F1,
+firing, locale leakage) do not have this bias because they do not
+consult a judge. The judged metrics (CEFR adherence, redirect F1,
 naturalness) should be read with this caveat.
+
+**Repair-shape vs intent detection.** The redirect-axis F1 metric
+classifies the *produced response* by repair shape (§4.5), which is
+a proxy for whether the model produced the correct minimal repair.
+A model could in principle name the right axis while producing a
+mis-shaped repair, or vice versa; we mitigate by classifying the
+response rather than any explicit intent label, but the proxy is
+not perfect and per-axis results (§5.4) should be read accordingly.
 
 **Hardware-constrained scope.** All training fits on RTX 3060 12GB
 via QLoRA. We argue this is a deployment-relevant choice: the
@@ -78,6 +91,26 @@ trained on the same data might capture more of the teacher's
 capability; we have not measured this.
 
 ## 6.4 What we would do differently with more compute
+
+Given a 40-hour A100-class budget rather than RTX 3060, the changes
+that would most improve the paper are, in priority order:
+
+1. **Three training seeds per condition** with paired significance
+   tests on every judged metric.
+2. **Larger student** (4B or 7B) to measure how each contribution
+   scales with student capacity. The invariant framing makes a
+   concrete prediction here: the redirect-taxonomy contribution
+   should *shrink* at larger capacities, because a larger model can
+   infer axis-specific repair shapes from a generic redirect stream,
+   whereas the trigger-position decorrelation contribution should
+   *hold*, because positional shortcut-learning is a data-structure
+   artifact rather than a capacity limitation.
+3. **A learned naturalness filter** to address the C2 gap.
+4. **Multi-locale empirical evaluation**, repeating the pipeline
+   end-to-end for `japan` and `italy`.
+
+We name these explicitly so that a reviewer's "but what about X"
+intuition is met with a concrete answer rather than silence.
 
 ## 6.5 Engineering caveat: locale_judge false positives
 
@@ -97,24 +130,9 @@ We report this as an engineering caveat rather than as a research
 contribution. The failure mode is a consequence of the extractor
 choice; a different extractor (a learned NER model, or asking the
 LLM to enumerate entities directly) would not have these specific
-false positives. Practitioners building similar pipelines should
-budget time to audit their entity-extractor rejections regardless
-of which extractor they choose, but the lesson is not novel.
-
-Given a 40-hour A100-class budget rather than RTX 3060, the changes
-that would most improve the paper are, in priority order:
-
-1. **Three training seeds per condition** with paired significance
-   tests on every judged metric.
-2. **Larger student** (4B or 7B) to measure how the pipeline's
-   benefits scale with student capacity. The hypothesis is that
-   the redirect-axis taxonomy contribution shrinks at larger
-   capacities (because a larger model can pick up axis-specific
-   patterns from a generic redirect stream) but the persistent
-   4-variant contribution holds.
-3. **A learned naturalness filter** to address the C2 gap.
-4. **Multi-locale empirical evaluation**, repeating the pipeline
-   end-to-end for `japan` and `italy`.
-
-We name these explicitly so that a reviewer's "but what about X"
-intuition is met with a concrete answer rather than silence.
+false positives. The reusable lesson is not the fix but the
+discipline: practitioners building similar pipelines should budget
+time to audit their entity-extractor rejection log regardless of
+which extractor they choose, because a filter that silently discards
+~57% of records — most of them good — can quietly halve a corpus
+before anyone inspects the rejections.

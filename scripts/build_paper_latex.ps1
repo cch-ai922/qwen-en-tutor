@@ -105,9 +105,13 @@ foreach ($md in $sections) {
     # auto-numbers via \section / \subsection). Handles both
     # "# 2. Title" (trailing period after the number) and
     # "## 2.1 Title" (no trailing period).
-    $content = Get-Content $md.FullName -Raw
+    # IMPORTANT: read+write as UTF-8 no-BOM via .NET API. PowerShell 5.1's
+    # default `Get-Content`/`Set-Content -Encoding utf8` round-trips through
+    # the system code page, which mangles em-dashes, section signs, etc.
+    $utf8NoBom = [System.Text.UTF8Encoding]::new($false)
+    $content = [System.IO.File]::ReadAllText($md.FullName, $utf8NoBom)
     $content = [regex]::Replace($content, '(?m)^(#{1,3})\s+\d+(\.\d+)*\.?\s+', '$1 ')
-    Set-Content -Path $tmpMd -Value $content -Encoding utf8
+    [System.IO.File]::WriteAllText($tmpMd, $content, $utf8NoBom)
 
     # --natbib makes pandoc emit \citep{key} from [@key] so the bib
     # entries in references.bib resolve through bibtex+acl_natbib.bst.
@@ -130,20 +134,41 @@ Write-Host '== LaTeX compile (pdflatex/bibtex/pdflatex x2) ==' -ForegroundColor 
 Push-Location $genDir
 try {
     function Invoke-LaTeX {
-        param([string]$Cmd, [string[]]$Args)
-        Write-Host "  $Cmd $($Args -join ' ')" -ForegroundColor DarkGray
-        & $Cmd @Args
-        if ($LASTEXITCODE -ne 0) {
-            Write-Error "$Cmd failed (exit $LASTEXITCODE). See $genDir\main.log"
+        param([string]$Cmd, [string[]]$LaTeXArgs, [string]$SuccessFile)
+        Write-Host "  $Cmd $($LaTeXArgs -join ' ')" -ForegroundColor DarkGray
+        # MiKTeX (and pdflatex when it triggers METAFONT for first-time fonts)
+        # writes informational chatter and a "you have not checked for MiKTeX
+        # updates" line to stderr. With the script-wide $ErrorActionPreference
+        # = 'Stop', PowerShell wraps each stderr line in a NativeCommandError
+        # exception that aborts the script. We locally drop back to 'Continue'
+        # and verify success by checking that the expected output file was
+        # produced/updated, not by exit code.
+        $ErrorActionPreference = 'Continue'
+        $beforeMtime = if ($SuccessFile -and (Test-Path $SuccessFile)) {
+            (Get-Item $SuccessFile).LastWriteTimeUtc
+        } else { [DateTime]::MinValue }
+        # Redirect stderr to $null entirely; the .log file holds everything
+        # we'd need for debugging. Suppressing stdout via $null= avoids
+        # flooding the terminal.
+        $null = & $Cmd @LaTeXArgs 2>$null
+        if ($SuccessFile) {
+            if (-not (Test-Path $SuccessFile)) {
+                throw "$Cmd produced no $SuccessFile. See $genDir\main.log"
+            }
+            $afterMtime = (Get-Item $SuccessFile).LastWriteTimeUtc
+            if ($afterMtime -le $beforeMtime) {
+                throw "$Cmd did not update $SuccessFile (still $afterMtime). See $genDir\main.log"
+            }
         }
     }
 
     # -interaction=nonstopmode keeps pdflatex from blocking on missing
-    # references during the first pass.
-    Invoke-LaTeX 'pdflatex' @('-interaction=nonstopmode', '-halt-on-error', 'main.tex')
-    Invoke-LaTeX 'bibtex'   @('main')
-    Invoke-LaTeX 'pdflatex' @('-interaction=nonstopmode', '-halt-on-error', 'main.tex')
-    Invoke-LaTeX 'pdflatex' @('-interaction=nonstopmode', '-halt-on-error', 'main.tex')
+    # references during the first pass. We check the .pdf / .bbl file
+    # mtime rather than $LASTEXITCODE to detect real failures.
+    Invoke-LaTeX 'pdflatex' @('-interaction=nonstopmode', 'main.tex') -SuccessFile 'main.pdf'
+    Invoke-LaTeX 'bibtex'   @('main')                                  -SuccessFile 'main.bbl'
+    Invoke-LaTeX 'pdflatex' @('-interaction=nonstopmode', 'main.tex') -SuccessFile 'main.pdf'
+    Invoke-LaTeX 'pdflatex' @('-interaction=nonstopmode', 'main.tex') -SuccessFile 'main.pdf'
 } finally {
     Pop-Location
 }

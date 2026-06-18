@@ -240,7 +240,9 @@
     "tutor_scenario": 224,
     "locale_leakage": 224,
     "redirect_probe": 143,
-    "persistent_probe": 142
+    "persistent_probe": 142,
+    "persistent_fp_probe": 240,
+    "persistent_offposition_probe": 60
   },
   "redirect_probe_by_axis_level": {
     "redirect": {
@@ -333,5 +335,15 @@
       "C1": 7,
       "C2": 8
     }
+  },
+  "persistent_fp_probe_by_position": {
+    "5": 60,
+    "7": 60,
+    "9": 60,
+    "11": 60
+  },
+  "persistent_offposition_probe_by_position": {
+    "13": 30,
+    "15": 30
   }
 }

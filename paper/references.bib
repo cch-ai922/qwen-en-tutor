@@ -5,9 +5,12 @@
 % Citations referenced in the paper drafts (sections/02_related_work.md,
 % sections/03_method.md, sections/06_discussion.md). Venue, pages, and
 % DOIs have been verified against ACL Anthology / NeurIPS / ICML / arXiv
-% as of 2026-06. A few remaining @article entries (JudgeLM, AdvBench,
-% Verbosity Bias, EduChat) are still arXiv-only preprints; upgrade if
-% they appear at a venue before submission.
+% as of 2026-06. A few remaining preprint-only entries (JudgeLM, AdvBench,
+% Verbosity Bias, EduChat) are still arXiv-only; upgrade if they appear at
+% a venue before submission.
+% NOTE: BibTeX does not honour percent-sign comments the way LaTeX does --
+% it stops at any at-sign in column zero. Keep at-signs out of comment
+% bodies in this file or bibtex will try to parse them as entries.
 %
 % Grouped by topic to match §2 subsections.
 
@@ -60,12 +63,13 @@
   note      = {arXiv:2304.07327}
 }
 
-@article{chiang2023vicuna,
+@misc{chiang2023vicuna,
   author    = {Wei-Lin Chiang and Zhuohan Li and Zi Lin and Ying Sheng and
                Zhanghao Wu and Hao Zhang and Lianmin Zheng and Siyuan Zhuang and
                Yonghao Zhuang and Joseph E. Gonzalez and Ion Stoica and Eric P. Xing},
   title     = {Vicuna: An Open-Source Chatbot Impressing GPT-4 with 90\% ChatGPT Quality},
   year      = {2023},
+  note      = {LMSYS Blog},
   howpublished = {\url{https://lmsys.org/blog/2023-03-30-vicuna/}}
 }
 
@@ -217,9 +221,7 @@
 @inproceedings{chen2018learningq,
   author    = {Guanliang Chen and Jie Yang and Claudia Hauff and Geert-Jan Houben},
   title     = {LearningQ: A Large-Scale Dataset for Educational Question Generation},
-  booktitle = {Proceedings of the International AAAI Conference on Web and Social Media (ICWSM)},
-  volume    = {12},
-  number    = {1},
+  booktitle = {Proceedings of the 12th International AAAI Conference on Web and Social Media (ICWSM)},
   year      = {2018}
 }
 
@@ -310,4 +312,42 @@
   booktitle = {Advances in Neural Information Processing Systems 36 (NeurIPS 2023)},
   year      = {2023},
   note      = {arXiv:2305.14314}
+}
+
+% ------------------------------------------------------------------------
+% Shortcut learning / spurious cues (added for §2.4 positioning of the
+% positional-shortcut defense). Verify venue/pages before camera-ready.
+% ------------------------------------------------------------------------
+
+@article{geirhos2020shortcut,
+  author    = {Robert Geirhos and J{\"o}rn-Henrik Jacobsen and Claudio Michaelis and
+               Richard Zemel and Wieland Brendel and Matthias Bethge and Felix A. Wichmann},
+  title     = {Shortcut Learning in Deep Neural Networks},
+  journal   = {Nature Machine Intelligence},
+  volume    = {2},
+  number    = {11},
+  pages     = {665--673},
+  doi       = {10.1038/s42256-020-00257-z},
+  year      = {2020}
+}
+
+@inproceedings{mccoy2019hans,
+  author    = {R. Thomas McCoy and Ellie Pavlick and Tal Linzen},
+  title     = {Right for the Wrong Reasons: Diagnosing Syntactic Heuristics in Natural Language Inference},
+  booktitle = {Proceedings of the 57th Annual Meeting of the Association for Computational Linguistics (ACL)},
+  pages     = {3428--3448},
+  address   = {Florence, Italy},
+  publisher = {Association for Computational Linguistics},
+  year      = {2019}
+}
+
+@inproceedings{gururangan2018artifacts,
+  author    = {Suchin Gururangan and Swabha Swayamdipta and Omer Levy and
+               Roy Schwartz and Samuel R. Bowman and Noah A. Smith},
+  title     = {Annotation Artifacts in Natural Language Inference Data},
+  booktitle = {Proceedings of the 2018 Conference of the North American Chapter of the Association for Computational Linguistics: Human Language Technologies (NAACL-HLT)},
+  pages     = {107--112},
+  address   = {New Orleans, Louisiana},
+  publisher = {Association for Computational Linguistics},
+  year      = {2018}
 }

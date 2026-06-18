@@ -212,7 +212,22 @@ _STRUCTURE_VARIANTS: tuple[dict[str, Any], ...] = (
 def _select_structure_idx(axis: str, seed_id: str, variant: int) -> int:
     """Pick a structural variant deterministically. Same (axis, seed_id,
     variant) always picks the same variant, but different seeds within an
-    axis spread roughly uniformly across the 4 variants."""
+    axis spread roughly uniformly across the 4 variants.
+
+    Override (for A5 ablation): if env var
+    ``QWEN_TUTOR_PERSISTENT_FORCED_VARIANT`` is set to a valid index, every
+    record uses that variant. Used to materialize the fixed-turn-7 design
+    that A5 isolates the decorrelation contribution against.
+    """
+    import os
+    forced = os.environ.get("QWEN_TUTOR_PERSISTENT_FORCED_VARIANT")
+    if forced is not None:
+        try:
+            idx = int(forced)
+        except (TypeError, ValueError):
+            idx = -1
+        if 0 <= idx < len(_STRUCTURE_VARIANTS):
+            return idx
     key = f"{axis}:{seed_id}:v{variant}:structure".encode("utf-8")
     h = hashlib.sha256(key).digest()
     return h[0] % len(_STRUCTURE_VARIANTS)
