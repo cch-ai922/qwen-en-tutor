@@ -415,6 +415,11 @@ def run_dpo(config_path: str | Path = "config/training.yaml") -> str:
         save_total_limit=dpo_cfg.get("save_total_limit", 1),
         report_to=dpo_cfg.get("report_to", "none"),
         seed=dpo_cfg["seed"],
+        # Force PrinterCallback (vs default ProgressCallback) so the loss
+        # dict is written to stdout every `logging_steps` instead of only
+        # into a tqdm postfix that gets eaten by carriage-return overwrites.
+        # Same fix as sft.py — keeps the training observable.
+        disable_tqdm=dpo_cfg.get("disable_tqdm", True),
     )
 
     callbacks = []
