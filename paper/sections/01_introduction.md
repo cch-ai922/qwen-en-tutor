@@ -91,7 +91,7 @@ pipeline that operationalizes them at consumer scale.
    `locale_judge` reveals systematic false positives (~85% of its
    rejections) on common English sentence-initial words and
    locally-canonical landmarks, remediable with static allowlists
-   (global pass rate 70.1% → 88.4%; §6.5). We single this out because
+   (global pass rate 70.1% $\to$ 88.4%; §6.5). We single this out because
    it generalises to any capitalization-based entity filter, not
    because the fix is deep.
 

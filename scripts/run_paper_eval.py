@@ -121,6 +121,39 @@ BASELINES: dict[str, dict[str, Any]] = {
         "config_path": "config/generation.yaml",
         "role": "teacher",
     },
+    # ---------------------------------------------------------------------
+    # Cross-family judge ensemble for paper §4.7.
+    # All three share the llama-server endpoint in generation.yaml; the
+    # operator swaps the GGUF behind llama-server between rounds (only one
+    # judge fits in 12 GB at a time). expected_model_substr is asserted
+    # at probe time so we don't accidentally score with the wrong model
+    # loaded. prompt_protocol selects per-judge prompt + parser in
+    # run_paper_score.py.
+    # ---------------------------------------------------------------------
+    "prometheus_7b_judge": {
+        "kind": "api",
+        "config_path": "config/generation.yaml",
+        "role": "teacher",
+        "expected_model_substr": "prometheus",
+        "prompt_protocol": "prometheus_rubric",
+        "gguf": "vendor/models/GGUF/prometheus-7b-v2.0.Q4_K_M.gguf",
+    },
+    "llama31_8b_judge": {
+        "kind": "api",
+        "config_path": "config/generation.yaml",
+        "role": "teacher",
+        "expected_model_substr": "Llama-3.1",
+        "prompt_protocol": "instruct_json",
+        "gguf": "vendor/models/GGUF/Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf",
+    },
+    "gemma2_9b_judge": {
+        "kind": "api",
+        "config_path": "config/generation.yaml",
+        "role": "teacher",
+        "expected_model_substr": "gemma-2",
+        "prompt_protocol": "instruct_json",
+        "gguf": "vendor/models/GGUF/gemma-2-9b-it-Q5_K_M.gguf",
+    },
     # Our trained conditions. SFT-only points at outputs/paper/a1/sft; DPO
     # variants point at /dpo. Override --adapter-path on the CLI to test a
     # specific seed checkpoint.

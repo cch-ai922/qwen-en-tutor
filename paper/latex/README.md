@@ -89,7 +89,11 @@ The script:
 5. Runs `pdflatex -> bibtex -> pdflatex -> pdflatex` (the classic
    four-pass dance needed to resolve cross-references and the
    bibliography).
-6. Reports the final path: `paper/latex/generated/main.pdf`.
+6. Copies the final PDF to `paper/build/paper.pdf` (the canonical
+   "latest rendered paper" path, used by both the LaTeX path here
+   and the Chrome HTML-preview path).
+7. Reports both paths: the canonical `paper/build/paper.pdf` and
+   the intermediate `paper/latex/generated/main.pdf`.
 
 ## What's in this directory
 

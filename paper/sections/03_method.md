@@ -76,20 +76,27 @@ tutor violations — a bounded claim we can actually defend. Table&nbsp;1
 states the invariant, the characteristic violation, and the minimal
 repair for each single-shot axis.
 
-**Table 1. The seven single-shot redirect axes as
-invariant / violation / minimal-repair triples.** The third column is
-the response *shape* a tutor must produce; that the shapes differ is
-exactly the claim the §5.4 ablation tests.
-
-| Invariant the tutor maintains | Violation (learner move) | Minimal repair (redirect shape) |
-| --- | --- | --- |
-| Language of instruction | Code-switch into L1 (`language_redirect`) | Acknowledge the L1 turn, steer back to target language |
-| Lesson topic | Off-topic drift (`topic_redirect`) | Re-anchor to the subject |
-| Role structure (tutor teaches) | Role swap, "you be the learner" (`role_swap_redirect`) | Decline, reassert the tutoring structure |
-| Tutor persona / frame | Persona break, "are you a chatbot?" (`persona_redirect`) | Reassert the frame, continue in persona |
-| Pedagogical contract (scaffold, don't answer) | "Just give me the answer" (`pedagogy_redirect`) | Scaffold toward the answer rather than supplying it |
-| Locale / cultural frame | Out-of-locale reference (`locale_redirect`) | Brief in-locale redirect, continue in-locale |
-| General appropriateness (safety) | Politics / religion / distress (`redirect`, catch-all) | Generic safe redirect |
+```{=latex}
+\begin{table*}[t]
+\centering
+\small
+\begin{tabular}{@{}p{0.20\linewidth} p{0.32\linewidth} p{0.40\linewidth}@{}}
+\toprule
+\textbf{Invariant the tutor maintains} & \textbf{Violation (learner move)} & \textbf{Minimal repair (redirect shape)} \\
+\midrule
+Language of instruction              & Code-switch into L1 (\texttt{language\_redirect})                       & Acknowledge the L1 turn, steer back to target language          \\
+Lesson topic                         & Off-topic drift (\texttt{topic\_redirect})                             & Re-anchor to the subject                                        \\
+Role structure (tutor teaches)       & Role swap, ``you be the learner'' (\texttt{role\_swap\_redirect})      & Decline, reassert the tutoring structure                        \\
+Tutor persona / frame                & Persona break, ``are you a chatbot?'' (\texttt{persona\_redirect})     & Reassert the frame, continue in persona                         \\
+Pedagogical contract (scaffold, don't answer) & ``Just give me the answer'' (\texttt{pedagogy\_redirect})     & Scaffold toward the answer rather than supplying it             \\
+Locale / cultural frame              & Out-of-locale reference (\texttt{locale\_redirect})                    & Brief in-locale redirect, continue in-locale                    \\
+General appropriateness (safety)     & Politics / religion / distress (\texttt{redirect}, catch-all)          & Generic safe redirect                                           \\
+\bottomrule
+\end{tabular}
+\caption{\textbf{The seven single-shot redirect axes as invariant / violation / minimal-repair triples.} The third column is the response \emph{shape} a tutor must produce; that the shapes differ is exactly the claim the \S5.4 ablation tests.}
+\label{tab:invariant-triples}
+\end{table*}
+```
 
 Two honest caveats. The final row (general appropriateness) is
 different in kind from the other six — it is a general-assistant
@@ -184,6 +191,10 @@ turn (so user turns are even, tutor turns are odd). Every variant
 contains exactly three strikes; the variants differ only in the
 amount of normal scaffolding that precedes the persistence block.
 
+**Table 2. The four structural variants of the persistent 3-strike
+streams.** Sentinel turn and lead-in length vary; variant is chosen
+hash-deterministically per record from the seed id.
+
 | Variant | Sentinel turn | Lead-in scaffolding turns | Strike (user) turns | Probe (assistant) turns |
 | --- | --- | --- | --- | --- |
 | V1 | 5 | 0 | 0, 2, 4 | 1, 3 |
@@ -225,11 +236,13 @@ across ablations, making the A1-vs-A5 decorrelation comparison
 (§4.6) ill-defined. (iii)
 *Turn-parity*: dialogues open on a learner turn, so user turns are
 even and assistant (sentinel) turns are odd, leaving only
-parity-valid odd values in the practical range {5, 7, 9, 11} (≥5 to
+parity-valid odd values in the practical range {5, 7, 9, 11} ($\geq$5 to
 fit three strikes and the two intervening probes; ≤11 to stay inside
 the SFT max-length budget — at the 1792-token cap, the longest
-variant already pushes ~2060 tokens at C2, so positions beyond 11
-would force a budget bump or truncation). Hash-mod-4 is therefore
+trained variant (V4 at C2) is at median 1685 tokens and overflows
+the cap in only ~1% of records, so the cap is not a load-bearing
+constraint on positions {5, 7, 9, 11} but would tighten for any
+V5+ extension beyond turn 11). Hash-mod-4 is therefore
 the principled form of "random" here: it is a seeded pseudo-random
 function over the only feasible discrete codomain, satisfying all
 three constraints simultaneously and producing the desired
@@ -380,6 +393,10 @@ short-circuit cascade. The order is chosen to put cheap and high-
 catch filters first so most rejections occur before the expensive
 LLM-judge filter is consulted.
 
+**Table 3. Six-filter cascade.** Filters 1–4 are deterministic and
+cheap; filter 5 is a heuristic with no model call; filter 6 is the
+only LLM-judge filter and runs last.
+
 | # | Filter | Cost | Catches |
 | --- | --- | --- | --- |
 | 1 | `speaks_l1_sanity` | mechanical | Degenerate speaks_l1 records lacking the L1 code-switch turn |
@@ -412,7 +429,7 @@ Two design choices in the `locale_judge` deserve note:
 
 In §6.5 we report a methodological finding: the `locale_judge` in its
 default configuration was responsible for **57.5% of all filter
-rejections, of which ≥85% were false positives** on entities that
+rejections, of which $\geq$85% were false positives** on entities that
 were either genuinely in-locale (e.g. `West Lake`, `Drum Tower`,
 `Muslim Quarter`) or were English modal verbs / connectors (e.g.
 `Will`, `Plus`, `Line`). After auditing the rejections and extending
@@ -437,7 +454,7 @@ generated immediately after SFT data without the trained student.
 complete, we draw the student's own response to a turn in a held-out
 SFT dialogue and compare it to the teacher's response. A judge
 ensemble scores the two responses; pairs with a *clear* margin (a
-judge-set threshold of ≥2 on a 1–5 scale) are kept, with the teacher
+judge-set threshold of $\geq$2 on a 1–5 scale) are kept, with the teacher
 response as `chosen` and the student response as `rejected`. The
 margin threshold matters: with no margin the dataset becomes noisy;
 with too aggressive a margin the dataset becomes too small.

@@ -239,67 +239,67 @@
   "test_set_sizes": {
     "tutor_scenario": 224,
     "locale_leakage": 224,
-    "redirect_probe": 143,
+    "redirect_probe": 169,
     "persistent_probe": 142,
     "persistent_fp_probe": 240,
     "persistent_offposition_probe": 60
   },
   "redirect_probe_by_axis_level": {
     "redirect": {
-      "A1": 10,
+      "A1": 6,
       "A2": 10,
-      "B1": 10,
+      "B1": 7,
       "B2": 10,
-      "C1": 6,
-      "C2": 4
+      "C1": 10,
+      "C2": 10
     },
     "locale_redirect": {
-      "A1": 2,
-      "A2": 4,
-      "B1": 2,
-      "B2": 4,
-      "C1": 2,
+      "A1": 4,
+      "A2": 3,
+      "B1": 3,
+      "B2": 3,
+      "C1": 5,
       "C2": 2
     },
     "pedagogy_redirect": {
-      "A1": 2,
-      "A2": 4,
-      "B1": 2,
-      "B2": 4,
-      "C1": 2,
+      "A1": 4,
+      "A2": 3,
+      "B1": 3,
+      "B2": 3,
+      "C1": 5,
       "C2": 2
     },
     "language_redirect": {
-      "A1": 1,
-      "A2": 4,
-      "B1": 2,
-      "B2": 4,
-      "C1": 2,
+      "A1": 4,
+      "A2": 3,
+      "B1": 3,
+      "B2": 2,
+      "C1": 3,
       "C2": 2
     },
     "persona_redirect": {
-      "A1": 2,
-      "A2": 4,
-      "B1": 2,
-      "B2": 4,
-      "C1": 2,
+      "A1": 4,
+      "A2": 3,
+      "B1": 3,
+      "B2": 3,
+      "C1": 5,
       "C2": 2
     },
     "topic_redirect": {
-      "A1": 2,
+      "A1": 4,
       "A2": 3,
-      "B1": 2,
-      "B2": 4,
-      "C1": 2,
+      "B1": 3,
+      "B2": 2,
+      "C1": 5,
       "C2": 2
     },
     "role_swap_redirect": {
-      "A1": 2,
-      "A2": 4,
-      "B1": 2,
-      "B2": 4,
-      "C1": 2,
-      "C2": 1
+      "A1": 4,
+      "A2": 3,
+      "B1": 3,
+      "B2": 3,
+      "C1": 5,
+      "C2": 2
     }
   },
   "persistent_probe_by_axis_level": {

@@ -115,6 +115,16 @@ async def _generate_one(
             temperature=temperature,
         )
         messages = _parse_messages(raw)
+        # Pull violation_turn_idx out of the same JSON the teacher emitted.
+        _vti_data = extract_first_json(raw)
+        violation_turn_idx: int | None = None
+        if isinstance(_vti_data, dict):
+            _vti_val = _vti_data.get("violation_turn_idx")
+            if isinstance(_vti_val, (int, float)):
+                try:
+                    violation_turn_idx = int(_vti_val)
+                except (TypeError, ValueError):
+                    violation_turn_idx = None
     except Exception as exc:  # noqa: BLE001
         append_failure(
             failures_path,
@@ -137,7 +147,12 @@ async def _generate_one(
         scenario_type="redirect",
         locale=locale,
         category=seed.category,
-        generation={**generation_meta_base, "redirect_axis": axis, "variant": variant},
+        generation={
+            **generation_meta_base,
+            "redirect_axis": axis,
+            "variant": variant,
+            "violation_turn_idx": violation_turn_idx,
+        },
     )
     return SFTExample(
         id=_redirect_id(seed_id, axis, variant),

@@ -30,7 +30,7 @@ this to future work.
 
 We report a single training seed for each of the four trained
 conditions. Standard practice for SFT/DPO ablation studies is three
-or more seeds with mean ± std and a paired significance test. We
+or more seeds with mean $\pm$ std and a paired significance test. We
 explicitly do not have those numbers. The compute cost of three
 seeds for four conditions on RTX 3060 is large enough that we
 chose to spend that budget on the four conditions instead of three
@@ -48,8 +48,8 @@ independent of single-seed concerns. We note that our two headline
 *conceptual* claims rest on the firmest evidence available here:
 the trigger-position decorrelation claim is tested by a fully
 mechanical metric (sentinel firing), and the invariant-decomposition
-claim is a falsifiable per-axis prediction whose direction (A1 ≫ A3
-on unseen axes, A1 ≈ A3 on the shared generic axis) does not depend
+claim is a falsifiable per-axis prediction whose direction (A1 $\gg$ A3
+on unseen axes, A1 $\approx$ A3 on the shared generic axis) does not depend
 on absolute judged scores.
 
 ## 6.3 Threats to validity
@@ -65,16 +65,42 @@ locale.
 and the teacher is Qwen3.5-9B-UD-Q4_K_XL. Both come from the same
 model family, which means our distillation results reflect
 intra-family distillation and may not transfer to e.g.
-Llama-3 → Qwen3.5 or vice versa. Multi-family experiments are
+Llama-3 $\to$ Qwen3.5 or vice versa. Multi-family experiments are
 left to future work.
 
-**Self-preference judge bias.** Three of our three judges come
-from the Qwen family. When judging Qwen-family outputs, this
-introduces a known bias toward Qwen-style responses
-[@panickssery2024selfpreference]. The mechanical metrics (sentinel
-firing, locale leakage) do not have this bias because they do not
-consult a judge. The judged metrics (CEFR adherence, redirect F1,
-naturalness) should be read with this caveat.
+**Self-preference judge bias (flagged, mitigated, not eliminated).**
+The self-preference failure mode
+[@panickssery2024selfpreference] — a model scoring its own family's
+outputs more favourably than an out-of-family judge would — is a
+well-documented threat for any work that uses an LLM ensemble to
+evaluate a small student. We mitigate at the ensemble level: the
+three judges in §4.7 (Prometheus-7B-v2, Mistral lineage;
+Llama-3.1-8B-Instruct, Meta; Gemma-2-9B-it, Google) are drawn from
+three model families *all distinct from the teacher's Qwen family*,
+so the student is never scored by a checkpoint that shares its
+pre-training corpus, tokenizer, or post-training recipe with the
+teacher that produced its supervision data. The Qwen3.5-9B teacher
+appears in the paper only as the data generator and as zero-shot
+upper-bound baseline B4 — never as a judge. This is a stricter
+judge-independence than is standard practice in tutor-LLM
+evaluations, where at least one same-family judge is typical.
+
+Two residual considerations remain, which we flag rather than
+claim away. (i) Cross-family judges still carry their own
+stylistic priors — Prometheus's rubric protocol prefers
+explicit-criterion language, Llama-3.1 tends to reward longer
+responses, Gemma-2 has its own register preferences — and the
+ensemble median controls only the *family-correlated* component of
+bias, not these individual priors. (ii) All three judges are
+post-trained on instruction-following corpora that overlap
+non-trivially with the data sources our teacher itself was trained
+on, so "no shared family" does not imply "no shared training data."
+We treat the cross-family ensemble as the strongest practical
+mitigation available within the RTX-3060 12 GB compute envelope
+and report inter-judge Krippendorff $\alpha$ and 100-sample
+human-validation correlation (§5.7) as transparency on the
+residual. The mechanical metrics (sentinel firing, locale leakage)
+remain entirely judge-free and so untouched by this concern.
 
 **Repair-shape vs intent detection.** The redirect-axis F1 metric
 classifies the *produced response* by repair shape (§4.5), which is
@@ -104,7 +130,15 @@ that would most improve the paper are, in priority order:
    infer axis-specific repair shapes from a generic redirect stream,
    whereas the trigger-position decorrelation contribution should
    *hold*, because positional shortcut-learning is a data-structure
-   artifact rather than a capacity limitation.
+   artifact rather than a capacity limitation. The §5.3.3
+   per-CEFR stratification adds a quantitative prediction for the
+   *recall* dimension: the V3 / V4 dip (60% vs ~87% at V1 / V2)
+   is uniform across CEFR and well under the SFT max-length cap, so
+   it reads as a 0.8B capacity-at-distance limit rather than a data
+   artefact. We predict a 4B student on the identical 4-variant
+   corpus should recover most of that gap, closing V3 / V4 recall
+   from 60% to $\geq$75% without any change to data or recipe; FP-rate
+   should remain at zero and OffPosition recall at or above 70%.
 3. **A learned naturalness filter** to address the C2 gap.
 4. **Multi-locale empirical evaluation**, repeating the pipeline
    end-to-end for `japan` and `italy`.

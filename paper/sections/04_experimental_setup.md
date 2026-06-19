@@ -6,7 +6,7 @@ All training is performed on a single consumer GPU: NVIDIA RTX 3060
 with 12 GB VRAM. The 9B teacher is served separately by llama.cpp's
 `llama-server` from a Q4_K_XL-quantised GGUF file on the same
 machine; training and teacher inference cannot run concurrently
-because their VRAM footprints (≈7.7 GB and ≈4 GB respectively) sum
+because their VRAM footprints ($\approx$7.7 GB and $\approx$4 GB respectively) sum
 to more than the device capacity. The pipeline orchestrator stops
 the teacher server during training phases and restarts it for
 on-policy DPO generation and the evaluation phase.
@@ -82,7 +82,7 @@ account for ~10--30% of the gradient signal.
 
 ## 4.4 Training data composition
 
-Table 1 (TODO) summarises the 12-stream SFT corpus produced by the
+Table 4 (TODO) summarises the 12-stream SFT corpus produced by the
 pipeline. After filter cascade and yield-aware top-up, the corpus
 contains approximately 3 100 dialogues split across the streams and
 levels. Per-stream and per-level counts and the
@@ -97,7 +97,7 @@ assigning the bottom 20% to the eval pool (`hashlib.sha256(seed_id)
 deterministic and immutable across runs, so growing the training
 corpus does not contaminate evaluation.
 
-We evaluate on four held-out sets (Table 2, TODO):
+We evaluate on six held-out sets (Table 5, TODO):
 
 - **Tutor-Scenario (N=224)**: cold-start dialogues. Each baseline
   receives the system prompt rendered from the held-out seed and a
@@ -120,7 +120,7 @@ We evaluate on four held-out sets (Table 2, TODO):
   could in principle name the right axis while producing the wrong
   repair; §5.4 reports per-axis results so this can be inspected.
 
-- **Persistent-Probe (N≥11, target ~120 after persistent_topup
+- **Persistent-Probe (N$\geq$11, target ~120 after persistent_topup
   completes)**: partial dialogues ending one turn before the
   sentinel-firing turn, drawn from the 4-variant persistent records.
   The baseline must produce the sentinel-firing response. Every
@@ -152,7 +152,7 @@ We evaluate on four held-out sets (Table 2, TODO):
   Tutor-Scenario, but the metric measures Western-default leakage in
   the produced response.
 
-All four test sets are filtered to `locale=china`. Construction
+All six test sets are filtered to `locale=china`. Construction
 script: `scripts/build_eval_sets.py`. Manifest:
 `eval_sets/_split_manifest.json`.
 
@@ -190,7 +190,7 @@ off-the-shelf checkpoint:
 | B1 | Qwen3.5-0.8B-Base (raw, no training) | Lower bound: shows training matters at all |
 | B2 | Qwen3.5-0.8B post-trained | Same-size off-the-shelf comparison |
 | B3 | Qwen3.5-4B post-trained | Larger same-family comparison |
-| B4 | Qwen3.5-9B (4-bit, via llama-server) | Distillation upper bound + judge ensemble member |
+| B4 | Qwen3.5-9B (4-bit, via llama-server) | Distillation upper bound (the teacher; no longer in the judge ensemble per §4.7) |
 
 A2 is implemented by training the A1 SFT adapter and using it
 directly at inference time without the subsequent DPO step. The
@@ -202,22 +202,30 @@ condition.
 Quality metrics that require a judge (CEFR-adherence, redirect-axis
 F1 on the produced response — i.e. whether the response exhibits the
 axis-appropriate repair shape per §3.3, not merely intent
-recognition — and naturalness) are scored by an ensemble
-of three judges:
+recognition — and naturalness) are scored by a **cross-family**
+ensemble of three judges, each drawn from a model family **distinct
+from the teacher's**:
 
-- Qwen3.5-9B (the same checkpoint used as the teacher)
-- Qwen3.5-4B post-trained
-- Qwen3.5-0.8B post-trained
+- **Prometheus-7B-v2** (Mistral lineage) — purpose-built rubric
+  evaluator [@kim2024prometheus]. Scalar 1–5 metrics use Prometheus's
+  native rubric protocol (task description + response + score rubric
+  $\to$ `Feedback: ... [RESULT] N`).
+- **Llama-3.1-8B-Instruct** (Meta) [@touvron2024llama3].
+- **Gemma-2-9B-it** (Google) [@gemmateam2024gemma2].
 
-Per metric, each judge produces a 1–5 score; we report the median
-across judges. To control for the **self-preference bias**
-[@panickssery2024selfpreference] of using the teacher to judge its
-own student, we
-additionally report metric-by-metric inter-judge agreement
-(Krippendorff's $\alpha$); judge ensembles whose $\alpha < 0.6$ on a
-metric are flagged in the results table. Sentinel firing and
-locale-leakage are **mechanical** metrics that do not use a judge
-(see §4.8 and §4.9).
+We deliberately exclude any Qwen-family judge from this ensemble to
+**eliminate the self-preference bias**
+[@panickssery2024selfpreference] inherent in using the teacher's own
+family to score its student. Per metric, each judge produces a 1–5
+score (or a categorical label, for redirect-axis); we report the
+median across judges. We additionally report metric-by-metric
+inter-judge agreement (Krippendorff's $\alpha$); judge ensembles
+whose $\alpha < 0.6$ on a metric are flagged in the results table.
+On 12 GB VRAM the three judges cannot coexist in memory, so judging
+is run sequentially — load Prometheus, score every record, swap to
+Llama-3.1, repeat, then Gemma-2 — adding ~3h to the eval pass.
+Sentinel firing and locale-leakage are **mechanical** metrics that
+do not use a judge (see §4.8 and §4.9).
 
 We validate the judge ensemble against 100 randomly-sampled
 generations that the first author hand-judges on a 1–5 scale for
@@ -240,7 +248,7 @@ have a false-positive denominator.
   sentinel *should* fire (three same-axis strikes have occurred),
   the fraction on which the model fires it. This is the true-positive
   rate.
-- **Precision** (Persistent-Probe ∪ Persistent-FP-Probe): of all
+- **Precision** (Persistent-Probe $\cup$ Persistent-FP-Probe): of all
   records on which the model fires the sentinel, the fraction where
   it *should* have fired. The Persistent-FP-Probe negatives are the
   only source of false positives, so precision is undefined without
@@ -253,7 +261,7 @@ have a false-positive denominator.
 - **F1**: harmonic mean of precision and recall.
 - **Fire-rate by expected sentinel position** (diagnostic): the
   positive fire-rate stratified by the record's sentinel position
-  ∈ {5, 7, 9, 11}, giving four per-position rates. A model that
+  $\in$ {5, 7, 9, 11}, giving four per-position rates. A model that
   learned "third strike on the same axis" should fire approximately
   *uniformly* across the four positions; a model that collapsed onto
   one or two trained positions would fire non-uniformly. **This

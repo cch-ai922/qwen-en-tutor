@@ -40,7 +40,16 @@ judges. A growing strand of work documents the limits of LLM
 judges: position bias, length bias, judge-style bias, and self-
 preference bias [@wang2023pandalm; @saito2023verbosity;
 @panickssery2024selfpreference]. The standard mitigation is
-multi-judge consensus with paired-comparison protocols.
+multi-judge consensus with paired-comparison protocols. Our own
+judge ensemble (§4.7) follows the multi-judge mitigation but adds
+a deliberate cross-family constraint: we use Prometheus-7B-v2
+(Mistral lineage), Llama-3.1-8B-Instruct (Meta), and Gemma-2-9B-it
+(Google) — three families all distinct from the Qwen-family
+teacher — so that no judge shares pre-training or post-training
+lineage with the model that produced the student's supervision
+data. Prometheus is doubly relevant here: it functions both as
+related work on judge-model methodology and as a working component
+of our evaluation pipeline.
 
 Our **`locale_judge`** is a specialised single-axis judge whose only
 job is to classify entities as `in_locale` or `out_of_locale` for

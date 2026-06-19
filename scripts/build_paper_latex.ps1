@@ -178,11 +178,21 @@ if (-not (Test-Path $outPdf)) {
     Write-Error "Build finished without producing $outPdf -- check $genDir\main.log"
 }
 
+# Copy to the canonical paper/build/paper.pdf location so callers can find
+# "the latest rendered paper" at a stable path regardless of whether it
+# was built via Chrome+HTML or via LaTeX. paper/latex/generated/ keeps the
+# LaTeX intermediate artifacts (.aux/.log/.bbl/.bib/.tex/...).
+$buildDir = Join-Path $paperDir 'build'
+New-Item -ItemType Directory -Force -Path $buildDir | Out-Null
+$canonicalPdf = Join-Path $buildDir 'paper.pdf'
+Copy-Item $outPdf $canonicalPdf -Force
+
 Write-Host ''
 Write-Host '== Build OK ==' -ForegroundColor Green
-Write-Host "PDF: $outPdf"
-Write-Host "Log: $(Join-Path $genDir 'main.log')"
+Write-Host "PDF:           $canonicalPdf"
+Write-Host "  (intermediate $outPdf)"
+Write-Host "Log:           $(Join-Path $genDir 'main.log')"
 
 if ($Open) {
-    Start-Process $outPdf
+    Start-Process $canonicalPdf
 }

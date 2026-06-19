@@ -180,6 +180,40 @@ def score_locale_leakage(record: dict[str, Any]) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 
+# ---------------------------------------------------------------------------
+# Per-judge protocol routing
+# ---------------------------------------------------------------------------
+# We support two judge protocols:
+#   - instruct_json: chat-style instruction + STRICT JSON output. Works for
+#                    Llama-3.1-Instruct, Gemma-2-it, and the legacy Qwen
+#                    judges. Parser: _parse_json_response.
+#   - prometheus_rubric: Prometheus-2's rubric protocol — task description,
+#                        response under eval, score rubric, then a
+#                        "Feedback: ... [RESULT] N" output. Used for the
+#                        scalar 1-5 metrics (cefr_adherence, naturalness).
+#                        For redirect_axis (a categorical, not scalar),
+#                        Prometheus falls back to instruct_json since the
+#                        rubric protocol is built for 1-5 numeric scores.
+#
+# Routing happens in _build_prompt / _parse_score; the JUDGED_METRIC_FUNCS
+# dispatch stays untouched.
+
+
+def _judge_protocol(judge_name: str | None) -> str:
+    """Return the prompt protocol identifier for a judge name. Falls back
+    to ``instruct_json`` for unknown judges (safe default)."""
+    if not judge_name:
+        return "instruct_json"
+    try:
+        # Lazy import to avoid circular dep at module load.
+        sys.path.insert(0, str(ROOT / "scripts"))
+        from run_paper_eval import BASELINES  # type: ignore
+    except Exception:  # noqa: BLE001
+        return "instruct_json"
+    spec = BASELINES.get(judge_name, {})
+    return spec.get("prompt_protocol", "instruct_json")
+
+
 CEFR_ADHERENCE_PROMPT = """\
 You are evaluating an English tutor's response. The learner's target CEFR
 level is {level}. Rate how well the tutor's response matches the
@@ -198,6 +232,56 @@ Tutor response to evaluate:
 {response}
 \"\"\"
 """
+
+
+PROMETHEUS_PROMPT_TEMPLATE = """\
+###Task Description:
+An instruction (might include an Input inside it), a response to evaluate,
+and a score rubric representing an evaluation criteria are given.
+1. Write a detailed feedback that assesses the quality of the response
+   strictly based on the given score rubric, not evaluating in general.
+2. After writing a feedback, write a score that is an integer between 1
+   and 5. You should refer to the score rubric.
+3. The output format should look as follows:
+   "Feedback: (write a feedback for criteria) [RESULT] (an integer number between 1 and 5)"
+4. Please do not generate any other opening, closing, and explanations.
+
+###The instruction to evaluate:
+{instruction}
+
+###Response to evaluate:
+{response}
+
+###Score Rubrics:
+{rubric}
+
+###Feedback:
+"""
+
+
+PROMETHEUS_CEFR_RUBRIC = """\
+[Does the tutor's response match the target CEFR level of {level}?]
+Score 1: Wrong level — vocabulary or grammar grossly above or below the
+         target (e.g., C1 vocabulary or sentence structure aimed at an A1
+         learner; or trivially simple language aimed at a C2 learner).
+Score 2: Noticeable level mismatch — substantially too easy or too hard,
+         would confuse the {level} learner.
+Score 3: Some level mismatch but still useful — the {level} learner could
+         follow with effort.
+Score 4: Mostly level-appropriate with minor mismatches in vocabulary,
+         grammar, or pacing.
+Score 5: Perfectly level-appropriate vocabulary, grammar, and pacing for
+         the {level} learner."""
+
+
+PROMETHEUS_NATURALNESS_RUBRIC = """\
+[Does the tutor's English read naturally for the target register?]
+Score 1: Broken or incoherent English.
+Score 2: Unnatural, robotic, or grammatically awkward.
+Score 3: Comprehensible but stilted or repetitive.
+Score 4: Mostly natural with small awkward phrasing.
+Score 5: Sounds like a fluent native or near-native tutor at the target
+         register."""
 
 
 REDIRECT_AXIS_PROMPT = """\
@@ -285,11 +369,61 @@ def _parse_json_response(text: str) -> dict[str, Any] | None:
         return None
 
 
-async def judge_cefr_adherence(judge, record: dict[str, Any]) -> dict[str, Any]:
-    prompt = CEFR_ADHERENCE_PROMPT.format(
-        level=record.get("cefr_level", "B1"),
-        response=(record.get("generation") or "").strip()[:1500],
-    )
+_PROMETHEUS_RESULT_RE = re.compile(r"\[RESULT\]\s*(\d+)", re.IGNORECASE)
+
+
+def _parse_prometheus_score(raw: str) -> int | None:
+    """Parse a Prometheus "Feedback: ... [RESULT] N" output. Returns the
+    integer 1-5 score or None if not found / out of range."""
+    if not raw:
+        return None
+    m = _PROMETHEUS_RESULT_RE.search(raw)
+    if not m:
+        return None
+    try:
+        n = int(m.group(1))
+    except (TypeError, ValueError):
+        return None
+    return n if 1 <= n <= 5 else None
+
+
+def _parse_prometheus_feedback(raw: str) -> str:
+    """Extract the feedback prose preceding the [RESULT] tag (best-effort,
+    used only for the verdict note)."""
+    if not raw:
+        return ""
+    m = _PROMETHEUS_RESULT_RE.search(raw)
+    head = raw[: m.start()] if m else raw
+    head = head.replace("Feedback:", "", 1).strip()
+    return head[:280]
+
+
+async def judge_cefr_adherence(judge, record: dict[str, Any],
+                               judge_name: str | None = None) -> dict[str, Any]:
+    protocol = _judge_protocol(judge_name)
+    level = record.get("cefr_level", "B1")
+    response = (record.get("generation") or "").strip()[:1500]
+    if protocol == "prometheus_rubric":
+        prompt = PROMETHEUS_PROMPT_TEMPLATE.format(
+            instruction=(
+                f"You are an English tutor responding to a learner at CEFR "
+                f"level {level}. Produce a tutor turn appropriate for that "
+                f"level."
+            ),
+            response=response,
+            rubric=PROMETHEUS_CEFR_RUBRIC.format(level=level),
+        )
+        raw = await judge.generate(
+            system="You are a fair, rubric-driven evaluator.",
+            messages=[{"role": "user", "content": prompt}],
+            max_new_tokens=400, temperature=0.0,
+        )
+        score = _parse_prometheus_score(raw)
+        return {"raw": raw, "score": score,
+                "note": _parse_prometheus_feedback(raw),
+                "protocol": protocol}
+    # instruct_json / default
+    prompt = CEFR_ADHERENCE_PROMPT.format(level=level, response=response)
     raw = await judge.generate(
         system="You are a careful evaluator of language tutor responses.",
         messages=[{"role": "user", "content": prompt}],
@@ -299,12 +433,18 @@ async def judge_cefr_adherence(judge, record: dict[str, Any]) -> dict[str, Any]:
     score = parsed.get("score")
     try:
         score = int(score)
-    except Exception:
+    except Exception:  # noqa: BLE001
         score = None
-    return {"raw": raw, "score": score, "note": parsed.get("note", "")}
+    return {"raw": raw, "score": score, "note": parsed.get("note", ""),
+            "protocol": protocol}
 
 
-async def judge_redirect_axis(judge, record: dict[str, Any]) -> dict[str, Any]:
+async def judge_redirect_axis(judge, record: dict[str, Any],
+                              judge_name: str | None = None) -> dict[str, Any]:
+    # Redirect-axis is categorical (one of 8 labels), not a 1-5 scalar.
+    # Prometheus's rubric protocol is built for scalar 1-5; we use the
+    # instruct_json prompt for all judges on this metric.
+    protocol = _judge_protocol(judge_name)
     prompt = REDIRECT_AXIS_PROMPT.format(
         context=_last_user_turn(record)[:1000],
         response=(record.get("generation") or "").strip()[:1500],
@@ -320,13 +460,34 @@ async def judge_redirect_axis(judge, record: dict[str, Any]) -> dict[str, Any]:
              "topic", "role_swap", "none"}
     if axis not in valid:
         axis = "none"
-    return {"raw": raw, "axis": axis, "note": parsed.get("note", "")}
+    return {"raw": raw, "axis": axis, "note": parsed.get("note", ""),
+            "protocol": protocol}
 
 
-async def judge_naturalness(judge, record: dict[str, Any]) -> dict[str, Any]:
-    prompt = NATURALNESS_PROMPT.format(
-        response=(record.get("generation") or "").strip()[:1500],
-    )
+async def judge_naturalness(judge, record: dict[str, Any],
+                            judge_name: str | None = None) -> dict[str, Any]:
+    protocol = _judge_protocol(judge_name)
+    response = (record.get("generation") or "").strip()[:1500]
+    if protocol == "prometheus_rubric":
+        prompt = PROMETHEUS_PROMPT_TEMPLATE.format(
+            instruction=(
+                "You are an English tutor in a learner-facing dialogue. "
+                "Produce a tutor turn."
+            ),
+            response=response,
+            rubric=PROMETHEUS_NATURALNESS_RUBRIC,
+        )
+        raw = await judge.generate(
+            system="You are a fair, rubric-driven evaluator.",
+            messages=[{"role": "user", "content": prompt}],
+            max_new_tokens=400, temperature=0.0,
+        )
+        score = _parse_prometheus_score(raw)
+        return {"raw": raw, "score": score,
+                "note": _parse_prometheus_feedback(raw),
+                "protocol": protocol}
+    # instruct_json / default
+    prompt = NATURALNESS_PROMPT.format(response=response)
     raw = await judge.generate(
         system="You are a careful evaluator of English fluency and naturalness.",
         messages=[{"role": "user", "content": prompt}],
@@ -336,9 +497,10 @@ async def judge_naturalness(judge, record: dict[str, Any]) -> dict[str, Any]:
     score = parsed.get("score")
     try:
         score = int(score)
-    except Exception:
+    except Exception:  # noqa: BLE001
         score = None
-    return {"raw": raw, "score": score, "note": parsed.get("note", "")}
+    return {"raw": raw, "score": score, "note": parsed.get("note", ""),
+            "protocol": protocol}
 
 
 JUDGED_METRIC_FUNCS = {
@@ -535,12 +697,57 @@ def run_mechanical(baseline: str) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 
-async def run_judged(baseline: str, judge_name: str, metric_filter: list[str] | None = None) -> dict[str, Any]:
+async def _verify_judge_model_match(judge_name: str) -> None:
+    """If the BASELINES entry specifies ``expected_model_substr``, probe
+    ``/v1/models`` on the configured endpoint and assert the running model
+    name contains that substring. Catches the case where the operator
+    accidentally has the wrong GGUF loaded in llama-server.
+
+    Logs a warning rather than raising — fail-forward semantics.
+    """
+    try:
+        sys.path.insert(0, str(ROOT / "scripts"))
+        from run_paper_eval import BASELINES  # type: ignore
+        spec = BASELINES.get(judge_name, {})
+        expected = spec.get("expected_model_substr")
+        if not expected:
+            return
+        # Read the teacher base_url from generation.yaml.
+        import yaml
+        with open(spec.get("config_path", "config/generation.yaml"),
+                  encoding="utf-8") as fh:
+            cfg = yaml.safe_load(fh) or {}
+        base_url = cfg.get("teacher", {}).get("base_url", "")
+        if not base_url:
+            return
+        import urllib.request
+        with urllib.request.urlopen(base_url.rstrip("/") + "/models",
+                                    timeout=5) as r:
+            data = json.loads(r.read())
+        models = data.get("data") or data.get("models") or []
+        names = [str(m.get("id") or m.get("name") or "") for m in models]
+        if not any(expected.lower() in n.lower() for n in names):
+            print(f"  WARNING: judge {judge_name!r} expects model substring "
+                  f"{expected!r} but loaded model(s) are {names!r}. "
+                  f"Scoring will continue with the wrong model — stop and "
+                  f"reload the correct GGUF if this matters.")
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("could not verify judge model match for %s: %s",
+                       judge_name, exc)
+
+
+async def run_judged(baseline: str, judge_name: str,
+                     metric_filter: list[str] | None = None,
+                     limit: int | None = None) -> dict[str, Any]:
     # Build the judge client once (it loads a model).
-    from scripts.run_paper_eval import build_baseline
+    sys.path.insert(0, str(ROOT / "scripts"))
+    from run_paper_eval import build_baseline  # type: ignore
     judge = build_baseline(judge_name)
+    await _verify_judge_model_match(judge_name)
 
     summary: dict[str, Any] = {"baseline": baseline, "judge": judge_name}
+    if limit:
+        summary["limit"] = limit
     metrics = [m for m in JUDGED_METRIC_FUNCS
                if metric_filter is None or m in metric_filter]
     for metric in metrics:
@@ -550,14 +757,23 @@ async def run_judged(baseline: str, judge_name: str, metric_filter: list[str] | 
         done = _load_done_ids(out_path)
         records = _read_jsonl(in_path)
         todo = [r for r in records if r["id"] not in done]
+        # --limit clips the per-metric per-judge new-work list. Useful for
+        # the smoke test where we want a quick sample (~30 per metric)
+        # rather than a full pass. Already-scored records aren't counted
+        # against the limit so a follow-up full run resumes cleanly.
+        if limit:
+            todo = todo[:limit]
         if not todo:
             print(f"  [{metric}] all {len(records)} records already judged.")
             continue
+        suffix = f" (limit={limit})" if limit else ""
         print(f"  [{metric}] judging {len(todo)} new records "
-              f"(skipping {len(done)} done)...")
+              f"(skipping {len(done)} done){suffix}...")
         for idx, rec in enumerate(todo, 1):
             try:
-                verdict = await func(judge, rec)
+                # judge_name is plumbed through so the per-judge prompt
+                # protocol can dispatch (Prometheus rubric vs JSON).
+                verdict = await func(judge, rec, judge_name=judge_name)
                 _append_jsonl(out_path, {
                     "id": rec["id"], "baseline": baseline,
                     "judge": judge_name, "metric": metric,
@@ -657,10 +873,18 @@ def _parse_args() -> argparse.Namespace:
                    help="Comma-separated subset of judged metrics to run.")
     p.add_argument("--judge", default=None,
                    help="Judge baseline name (only used when --metrics=judged).")
-    p.add_argument("--judges", default="qwen3_5_9b_teacher,qwen3_5_4b_instruct,qwen3_5_0_8b_instruct",
-                   help="Comma-separated judges for --aggregate.")
+    p.add_argument("--judges",
+                   default="prometheus_7b_judge,llama31_8b_judge,gemma2_9b_judge",
+                   help="Comma-separated judges for --aggregate. Default is "
+                        "the cross-family ensemble (Prometheus + Llama-3.1 + "
+                        "Gemma-2) used in paper §4.7.")
     p.add_argument("--aggregate", action="store_true",
                    help="Aggregate already-computed mechanical+judged scores.")
+    p.add_argument("--limit", type=int, default=None,
+                   help="For --metrics=judged: cap the number of NEW records "
+                        "scored per (metric, judge) for fast smoke tests. "
+                        "Already-scored records aren't counted against the "
+                        "limit, so a later full run resumes cleanly.")
     p.add_argument("-v", "--verbose", action="store_true")
     return p.parse_args()
 
@@ -704,7 +928,8 @@ async def _main() -> int:
         if not args.judge:
             raise SystemExit("--judge required for judged metrics")
         print(f"\n=== judged scoring for {args.baseline} (judge={args.judge}) ===")
-        summary = await run_judged(args.baseline, args.judge, metric_filter)
+        summary = await run_judged(args.baseline, args.judge, metric_filter,
+                                   limit=args.limit)
         print(json.dumps(summary, ensure_ascii=False, indent=2))
 
     return 0

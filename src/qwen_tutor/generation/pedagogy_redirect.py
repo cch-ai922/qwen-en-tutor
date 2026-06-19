@@ -125,6 +125,17 @@ async def _generate_one(
             temperature=temperature,
         )
         messages = _parse_messages(raw)
+        # Extract violation_turn_idx from the same JSON the teacher emitted
+        # (prompts now require it as a top-level field).
+        _vti_data = extract_first_json(raw)
+        violation_turn_idx: int | None = None
+        if isinstance(_vti_data, dict):
+            _vti_val = _vti_data.get("violation_turn_idx")
+            if isinstance(_vti_val, (int, float)):
+                try:
+                    violation_turn_idx = int(_vti_val)
+                except (TypeError, ValueError):
+                    violation_turn_idx = None
     except Exception as exc:  # noqa: BLE001
         append_failure(
             failures_path,
@@ -151,6 +162,7 @@ async def _generate_one(
             **generation_meta_base,
             "pedagogy_trigger": trigger,
             "variant": variant,
+            "violation_turn_idx": violation_turn_idx,
         },
     )
     return SFTExample(

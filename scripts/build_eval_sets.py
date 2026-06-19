@@ -98,6 +98,18 @@ REDIRECT_AXIS = {
 
 # Seed-id regex: 12 hex chars, optionally suffixed with _vN
 SEED_ID_RE = re.compile(r"_?([0-9a-f]{12})(?:_v\d+)?$")
+# Source-dialogue variant suffix matcher: many generators emit `_v0`, `_v1`,
+# etc., for multiple dialogues sharing the same seed. Including the variant
+# (or "v0" when no suffix is present) in probe IDs prevents the silent
+# duplication bug where two variants collapse to the same probe ID.
+VARIANT_SUFFIX_RE = re.compile(r"_v(\d+)$")
+
+
+def extract_variant_tag(source_dialogue_id: str) -> str:
+    """Return ``"v<N>"`` if the source dialogue ID ends in ``_v<N>``, else
+    ``"v0"`` (the default first/only variant)."""
+    m = VARIANT_SUFFIX_RE.search(source_dialogue_id)
+    return f"v{m.group(1)}" if m else "v0"
 
 
 def in_eval_pool(seed_id: str, pct: int = 20) -> bool:
@@ -207,14 +219,104 @@ def build_locale_leakage(eval_seed_ids: set[str], data_root: Path) -> list[dict[
     return out
 
 
+# Generator-structural constants — the redirect prompt (see
+# src/qwen_tutor/generation/prompts_compact.py) instructs the teacher to
+# place the violation at turn index in [PROBE_MIN_TURN, PROBE_MAX_TURN].
+# These mirror PROBE_MIN_TURN/PROBE_MAX_TURN in prompts.py for
+# min_turns=10 / max_turns=16.
+_PROBE_MIN_TURN = 5
+_PROBE_MAX_TURN = 14
+
+# The tutor's redirect turn typically uses one of a small set of
+# acknowledge-and-pivot phrases. See the redirect-stream prompt rules:
+# "Tutor briefly acknowledges with a GENERIC phrase ('Oh, interesting!',
+# 'I see!', 'That sounds nice!') then weaves a {country}-appropriate
+# alternative or pivots back." Detection is best-effort: ~70% coverage on
+# the held-out set; remaining records use a structural fallback.
+_PIVOT_RE = re.compile(
+    # Phrases below are the generator's instructed redirect signatures
+    # ("acknowledge + bridge"). Bare "Oh, " or "By the way, " alone is too
+    # noisy — those appear in normal acknowledgments too. We require the
+    # acknowledgment to be paired with an explicit pivot phrase.
+    "|".join([
+        r"\boh,?\s+interesting\b",
+        r"\boh,?\s+i see\b",
+        r"\bi see\b\.?\s*(?:that sounds|well,?\s|but )",
+        r"\banyway,?\s+(?:how about|let|let's|why)",
+        r"\bby the way,?\s+(?:have you|do you|would you|how about|let's|let me)",
+        r"\bspeaking of\b",
+        r"\bthat sounds (?:nice|worrying|interesting|fun|cool)\b",
+        r"\blet'?s (?:get )?back to (?:the )?(?:lesson|topic|class|english|book|book)",
+        r"\b(?:well|but),?\s+(?:in )?(?:china|here|locally)\b",
+        r"\bhave you tried\b",
+        r"\bjianbing\b|\bbaozi\b|\bnoodle soup\b",  # in-locale alternatives mentioned
+        r"\bi'?m (?:just )?(?:the|your) (?:tutor|teacher|shop owner|vendor|doctor|host|guide)\b",
+        r"\bi (?:can'?t|cannot|won'?t|will not) (?:swap|switch|be the|act as)\b",
+        r"\bi (?:must|need to|should) (?:stay|keep|focus) (?:in|on|with)\b",
+    ]),
+    re.IGNORECASE,
+)
+
+
+def _find_redirect_violation_idx(
+    msgs: list[dict[str, Any]],
+    metadata_hint: int | None = None,
+) -> tuple[int | None, str]:
+    """For a redirect-stream dialogue, find the user-turn index of the
+    violation. Strategy (preferring authoritative metadata over heuristics):
+      0. If ``metadata_hint`` is provided AND points to a user turn in the
+         plausible window, use it directly. This is the clean path —
+         redirect generators that emit ``generation.violation_turn_idx`` in
+         their record metadata land here.
+      1. Otherwise scan assistant turns starting from index 3 (the first
+         tutor turn is usually a greeting and won't carry a pivot
+         signature). The first match against ``_PIVOT_RE`` is the
+         redirect; its immediately-preceding user turn (ai - 1) is the
+         violation.
+      2. Fallback: pick the user turn at ``_PROBE_MIN_TURN`` (the
+         generator-instructed earliest violation position).
+      3. Return ``(None, "no_user_in_range")`` if no usable user turn.
+
+    Returns ``(user_idx, reason)`` where reason ∈ {"metadata", "pivot",
+    "fallback", "no_user_in_range"}.
+    """
+    if metadata_hint is not None and 0 <= metadata_hint < len(msgs):
+        if msgs[metadata_hint].get("role") == "user":
+            return metadata_hint, "metadata"
+    user_turns = [i for i, m in enumerate(msgs) if m.get("role") == "user"]
+    # Search the full plausible window (after a 1-pair greeting) — the
+    # generator's instructed window is [5,14] but it sometimes places the
+    # violation slightly earlier; over-broad scanning lets the early-out
+    # take the first match, which is reliably the actual redirect.
+    for ai, m in enumerate(msgs):
+        if m.get("role") != "assistant" or ai < 3 or ai > _PROBE_MAX_TURN + 1:
+            continue
+        if _PIVOT_RE.search(m.get("content", "") or ""):
+            cand = ai - 1
+            if cand in user_turns:
+                return cand, "pivot"
+    for ui in user_turns:
+        if ui >= _PROBE_MIN_TURN:
+            return ui, "fallback"
+    return None, "no_user_in_range"
+
+
 def build_redirect_probe(eval_seed_ids: set[str], data_root: Path,
                          cap_per_axis_level: int = 10) -> list[dict[str, Any]]:
     """For each (stream, level), pick held-out SFT dialogues. Extract the
-    context up to and including the user's abuse turn; the baseline must
-    produce the assistant's redirect turn next.
+    context up to and including the user's violation turn; the baseline
+    must produce the assistant's redirect turn next.
 
-    For single-shot redirect streams: the abuse turn is the LAST user turn
-    in the dialogue (the immediately-preceding context shapes the abuse).
+    Detection (see ``_find_redirect_violation_idx``): the generator places
+    the violation at turn index ∈ [_PROBE_MIN_TURN, _PROBE_MAX_TURN]
+    (5..14), with the tutor redirect at the following turn carrying
+    generic acknowledge-and-pivot language. We detect the redirect turn
+    by its pivot signature and take the preceding user turn as the
+    truncation point. ~70% of records hit the signature; the rest fall
+    back to the earliest plausible violation position.
+
+    Each kept record records ``expected.detection_reason`` so downstream
+    analysis can separate signature-matched records from fallbacks.
     """
     out: list[dict[str, Any]] = []
     for stream in REDIRECT_STREAMS:
@@ -228,23 +330,32 @@ def build_redirect_probe(eval_seed_ids: set[str], data_root: Path,
                 if not sid or sid not in eval_seed_ids:
                     continue
                 msgs = d.get("messages", [])
-                # Find the last user turn — that's the abuse turn we want
-                # the baseline to respond to.
-                last_user_idx = None
-                for i, m in enumerate(msgs):
-                    if m["role"] == "user":
-                        last_user_idx = i
-                if last_user_idx is None or last_user_idx < 1:
+                # Prefer the teacher-emitted violation_turn_idx (added to
+                # metadata.generation by the redirect generators after the
+                # 2026-06-19 prompt fix). Falls back to the pivot detector
+                # for legacy records that don't carry the field.
+                meta = d.get("metadata", {}) or {}
+                gen_meta = (meta.get("generation") or {}) if isinstance(meta, dict) else {}
+                meta_hint = gen_meta.get("violation_turn_idx") if isinstance(gen_meta, dict) else None
+                if not isinstance(meta_hint, int):
+                    meta_hint = None
+                user_idx, reason = _find_redirect_violation_idx(msgs, metadata_hint=meta_hint)
+                if user_idx is None or user_idx < 1:
                     continue
-                context = msgs[: last_user_idx + 1]
+                context = msgs[: user_idx + 1]
+                v = extract_variant_tag(d["id"])
                 rec = {
-                    "id": f"redirect_probe_{stream}_{sid}_{level}",
+                    "id": f"redirect_probe_{stream}_{sid}_{v}_{level}",
                     "test_set": "redirect_probe",
                     "cefr_level": level,
                     "locale": d.get("metadata", {}).get("locale", "china"),
                     "system_prompt": d.get("system_prompt", ""),
                     "context_messages": context,
-                    "expected": {"axis": axis, "stream": stream},
+                    "expected": {
+                        "axis": axis,
+                        "stream": stream,
+                        "detection_reason": reason,
+                    },
                     "source": {
                         "seed_id": sid,
                         "source_dialogue_id": d["id"],
@@ -313,8 +424,9 @@ def build_persistent_probe(eval_seed_ids: set[str], data_root: Path,
                 if sentinel_turn_idx is None or sentinel_turn_idx < 2:
                     continue
                 context = msgs[:sentinel_turn_idx]
+                v = extract_variant_tag(d["id"])
                 rec = {
-                    "id": f"persistent_probe_{stream}_{sid}_{level}",
+                    "id": f"persistent_probe_{stream}_{sid}_{v}_{level}",
                     "test_set": "persistent_probe",
                     "cefr_level": level,
                     "locale": d.get("metadata", {}).get("locale", "china"),
@@ -391,8 +503,9 @@ def build_persistent_fp_probe(eval_seed_ids: set[str], data_root: Path,
                 # at even, TUTOR at odd). So msgs[:5] is 5 messages
                 # (indices 0..4 = U,T,U,T,U) and msgs[5] is the TUTOR
                 # turn we want the model to produce. Correct.
+                v = extract_variant_tag(d["id"])
                 rec = {
-                    "id": f"persistent_fp_probe_normal_{sid}_{level}_p{pos}",
+                    "id": f"persistent_fp_probe_normal_{sid}_{v}_{level}_p{pos}",
                     "test_set": "persistent_fp_probe",
                     "cefr_level": level,
                     "locale": d.get("metadata", {}).get("locale", "china"),
@@ -508,9 +621,10 @@ def build_persistent_offposition_probe(eval_seed_ids: set[str],
                     if new_msgs[new_sentinel_idx].get("role") != "assistant":
                         continue
                     context = new_msgs[:new_sentinel_idx]
+                    v = extract_variant_tag(d["id"])
                     rec = {
                         "id": (f"persistent_offposition_probe_{stream}_"
-                               f"{sid}_{level}_p{target_pos}"),
+                               f"{sid}_{v}_{level}_p{target_pos}"),
                         "test_set": "persistent_offposition_probe",
                         "cefr_level": level,
                         "locale": locale,

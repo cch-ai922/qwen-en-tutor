@@ -272,10 +272,12 @@ OUTPUT FORMAT:
     {{"role": "assistant", "content": "..."}},
     {{"role": "user", "content": "... (off-topic) ..."}},
     {{"role": "assistant", "content": "... (graceful pivot) ..."}}
-  ]
+  ],
+  "violation_turn_idx": <int>
 }}
 
 Total turns {min_turns}-{max_turns}. First turn "user". Redirect lands at turn index {probe_min_turn}-{probe_max_turn}.
+violation_turn_idx is the 0-indexed turn position of the LEARNER user turn that carries the violation (must be an even integer in [{probe_min_turn},{probe_max_turn}]).
 Output the JSON object only.
 """
 )
@@ -351,10 +353,12 @@ OUTPUT FORMAT:
     {{"role": "assistant", "content": "..."}},
     {{"role": "user", "content": "... (mentions a {avoid_cultures_phrase} item) ..."}},
     {{"role": "assistant", "content": "... (graceful, in-stride) ..."}}
-  ]
+  ],
+  "violation_turn_idx": <int>
 }}
 
 Total turns {min_turns}-{max_turns}. First turn "user". Locale slip lands at turn index {probe_min_turn}-{probe_max_turn}.
+violation_turn_idx is the 0-indexed turn position of the LEARNER user turn that drops the {avoid_cultures_phrase} reference (must be an even integer in [{probe_min_turn},{probe_max_turn}]).
 Output the JSON object only.
 """
 )
@@ -421,10 +425,12 @@ OUTPUT FORMAT:
     {{"role": "assistant", "content": "..."}},
     {{"role": "user", "content": "... (asks for explicit teaching) ..."}},
     {{"role": "assistant", "content": "... (conversational, short) ..."}}
-  ]
+  ],
+  "violation_turn_idx": <int>
 }}
 
 Total turns {min_turns}-{max_turns}. First turn "user". Pedagogy ask lands at turn index {probe_min_turn}-{probe_max_turn}.
+violation_turn_idx is the 0-indexed turn position of the LEARNER user turn that makes the explicit-teaching ask (must be an even integer in [{probe_min_turn},{probe_max_turn}]). Add it as a top-level JSON field alongside "messages".
 Output the JSON object only.
 """
 )
@@ -507,10 +513,12 @@ OUTPUT FORMAT:
     {{"role": "assistant", "content": "..."}},
     {{"role": "user", "content": "... (L1 turn in native script OR English request for L1) ..."}},
     {{"role": "assistant", "content": "... (English-only graceful redirect) ..."}}
-  ]
+  ],
+  "violation_turn_idx": <int>
 }}
 
 Total turns {min_turns}-{max_turns}. First turn "user". Language slip lands at turn index {probe_min_turn}-{probe_max_turn}.
+violation_turn_idx is the 0-indexed turn position of the LEARNER user turn carrying the language slip (must be an even integer in [{probe_min_turn},{probe_max_turn}]). Add it as a top-level JSON field alongside "messages".
 Output the JSON object only.
 """
 )
@@ -581,10 +589,12 @@ OUTPUT FORMAT:
     {{"role": "assistant", "content": "..."}},
     {{"role": "user", "content": "... (persona test) ..."}},
     {{"role": "assistant", "content": "... (in-character deflect) ..."}}
-  ]
+  ],
+  "violation_turn_idx": <int>
 }}
 
 Total turns {min_turns}-{max_turns}. First turn "user". Persona test lands at turn index {probe_min_turn}-{probe_max_turn}.
+violation_turn_idx is the 0-indexed turn position of the LEARNER user turn carrying the persona test (must be an even integer in [{probe_min_turn},{probe_max_turn}]). Add it as a top-level JSON field alongside "messages".
 Output the JSON object only.
 """
 )
@@ -653,9 +663,11 @@ OUTPUT FORMAT:
   "messages": [
     {{"role": "user", "content": "..."}},
     {{"role": "assistant", "content": "..."}}
-  ]
+  ],
+  "violation_turn_idx": <int>
 }}
 
+violation_turn_idx is the 0-indexed turn position of the LEARNER user turn that drops the off-topic content (must be an even integer in [{probe_min_turn},{probe_max_turn}]).
 Produce the dialogue JSON for topic_drift_trigger = "{topic_drift_trigger}".
 """
 )
@@ -721,9 +733,11 @@ OUTPUT FORMAT:
   "messages": [
     {{"role": "user", "content": "..."}},
     {{"role": "assistant", "content": "..."}}
-  ]
+  ],
+  "violation_turn_idx": <int>
 }}
 
+violation_turn_idx is the 0-indexed turn position of the LEARNER user turn that attempts the role swap (must be an even integer in [{probe_min_turn},{probe_max_turn}]).
 Produce the dialogue JSON for role_swap_trigger = "{role_swap_trigger}".
 """
 )

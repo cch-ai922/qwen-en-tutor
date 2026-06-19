@@ -33,9 +33,10 @@ the eventual PDF rebuild.
 |---|---|
 | GPU + driver | NVIDIA RTX 3060 12 GB (or larger). CUDA 12.x. |
 | Python venv | Set up per main [README.md](../README.md#2-one-time-offline-bundle-on-a-connected-machine) |
-| Teacher model GGUF | `vendor/models/Qwen3.5-9B-UD-Q4_K_XL.gguf` served via `llama-server` on `127.0.0.1:8080` |
+| Teacher model GGUF | `vendor/models/GGUF/Qwen3.5-9B-UD-Q4_K_XL.gguf` served via `llama-server` on `127.0.0.1:8080` |
 | Student base | `vendor/models/Qwen_3.5_0.8B-Base` (HuggingFace format, for training) |
 | Baseline checkpoints | `vendor/models/Qwen_3.5_0.8B`, `Qwen_3.5_4B` (for B2 / B3 zero-shot eval) |
+| Judge ensemble GGUFs (§4.7) | `vendor/models/GGUF/prometheus-7b-v2.0.Q4_K_M.gguf`, `Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf`, `gemma-2-9b-it-Q5_K_M.gguf`. Cross-family ensemble; no Qwen judges (eliminates teacher self-preference bias). |
 | Pandoc + MiKTeX | For the LaTeX paper build; see [latex/README.md](latex/README.md). Installers vendored under [../vendor/installers/](../vendor/installers/) |
 
 All commands below assume you are in the `qwen-en-tutor/` directory
@@ -46,6 +47,21 @@ cd qwen-en-tutor
 .\.venv\Scripts\Activate.ps1
 ```
 
+**Windows-specific environment**: every training and generation launch
+must set `PYTHONUTF8=1` (TRL ≥ 1.5 reads `deepseekv3.jinja` without an
+encoding kwarg and dies on Windows `cp1252`):
+
+```powershell
+$env:PYTHONUTF8 = "1"
+```
+
+**Teacher launch command (canonical)** — from `vendor/llama_cpp/`:
+
+```powershell
+llama-server.exe -m ..\models\GGUF\Qwen3.5-9B-UD-Q4_K_XL.gguf `
+  -ngl 80 -c 32768 --host 0.0.0.0 --port 8080 --log-verbose --log-prefix
+```
+
 ---
 
 ## 2. TL;DR sequence
@@ -53,11 +69,13 @@ cd qwen-en-tutor
 | # | Script | Why | Wall-clock |
 |---|---|---|---|
 | 1 | `run_generation.py` | Build SFT + DPO + eval corpora from teacher | ~24–48 h cumulative |
-| 2 | `setup_paper_ablation_data.py` | Materialize A3/A4 subset dirs (hardlinks) | seconds |
-| 3 | `run_training.py` (× 3) + `run_sentinel_chain.py` (× 2) | Train A1 / A3 / A4 adapters | ~5–8 h per condition |
-| 4 | `build_eval_sets.py` | Freeze 4 held-out test sets | minutes |
-| 5 | `run_paper_eval.py` (× 8 baselines) | Generate responses on test sets | ~6–10 h total |
-| 6 | `run_paper_score.py` (mechanical + judged) | Score and aggregate | ~6–10 h (judge ensemble dominates) |
+| 1b | `regen_redirect_streams.py` | Re-emit single-shot redirect streams so `metadata.generation.violation_turn_idx` is present (used by Stage 4 to ground-truth the violation turn instead of relying on a pivot heuristic) | ~3–4 h |
+| 2 | `setup_paper_ablation_data.py` | Materialize A3/A4/A5 subset dirs (hardlinks) | seconds |
+| 2b | `regen_persistent_a5.py` | A5 only: regen persistent streams with `QWEN_TUTOR_PERSISTENT_FORCED_VARIANT=1` (V2-only, sentinel fixed at turn 7) | ~2 h |
+| 3 | `run_training.py` (× 4) + `run_sentinel_chain.py` (× 3) | Train A1 / A3 / A4 / A5 adapters | ~5–8 h per condition |
+| 4 | `build_eval_sets.py` | Freeze **six** held-out test sets (Tutor-Scenario, Redirect-Probe, Persistent-Probe, **Persistent-FP-Probe**, **Persistent-OffPosition-Probe**, Locale-Leakage) | minutes |
+| 5 | `run_paper_eval.py` (× 9 baselines: A1, A2, A3, A4, A5, B1, B2, B3, B4) | Generate responses on test sets | ~6–10 h total |
+| 6 | `run_paper_score.py` (mechanical + judged) | Score with cross-family ensemble (Prometheus + Llama-3.1 + Gemma-2) and aggregate | ~6–10 h (judge swaps dominate) |
 | 7 | `run_merge.py` + `run_gguf_export.py` | (Optional) deploy artifact | minutes |
 | 8 | `scripts/build_paper_latex.ps1` | Rebuild PDF with real numbers | minutes |
 
@@ -110,12 +128,31 @@ Materializes per-condition subset directories from `data/sft_filtered/`.
 Uses hardlinks where possible (zero disk cost).
 
 ```powershell
-python scripts/setup_paper_ablation_data.py --conditions a3,a4
+python scripts/setup_paper_ablation_data.py --conditions a3,a4,a5
 # -> data/sft_filtered_a3/   (normal + generic redirect + persistent only)
 # -> data/sft_filtered_a4/   (normal + 7 single-shot redirects, no persistent)
+# -> data/sft_filtered_a5/   (all 12 streams, but persistent come from
+#                             data/sft_filtered_a5_persistent/ — V2-only)
 ```
 
 A1 and A2 use `data/sft_filtered/` directly — no setup needed.
+
+**A5 pre-step (V2-only persistent regen)**. A5 keeps all 12 streams but
+forces every persistent dialogue to use the V2 ("medium") structure
+with sentinel at turn 7 — this isolates the trigger-position
+decorrelation contribution (§3.4). The setup script reads persistent
+streams from `data/sft_filtered_a5_persistent/`, which is built by:
+
+```powershell
+# Teacher must be up. PYTHONUTF8=1 and the forced-variant env var are
+# set at the top of regen_persistent_a5.py automatically.
+python scripts/regen_persistent_a5.py
+# -> data/sft_raw_a5_persistent/<axis>_<level>.jsonl  (V2 only)
+# -> data/sft_filtered_a5_persistent/<axis>_<level>_passed.jsonl
+```
+
+Then run `setup_paper_ablation_data.py --conditions a5` to hardlink
+everything into `data/sft_filtered_a5/`.
 
 The script is idempotent: re-run it any time `data/sft_filtered/`
 changes (e.g. after a top-up round).
@@ -171,6 +208,25 @@ No sentinel chain needed because the persistent streams are dropped.
 python scripts/run_training.py --config config/paper/training_a4_no_persistent.yaml --stages train_sft,on_policy_gen,filter_dpo,train_dpo
 ```
 
+### Condition A5 — fixed-turn-7 persistent (decorrelation ablation)
+
+A5 trains on all 12 streams but the persistent streams come from
+the V2-only regen (`data/sft_filtered_a5/` per Stage 2). Same training
+recipe as A1 — the only difference is the input data. **A1 vs A5 is
+the direct test of the trigger-position decorrelation contribution
+(§3.4) — A1 vs A4 is the weaker "does persistence training help at all?"
+contrast.**
+
+```powershell
+python scripts/run_training.py --config config/paper/training_a5_fixed_turn_7.yaml --stages train_sft
+
+python scripts/run_sentinel_chain.py --condition a5 `
+    --sft-adapter outputs/paper/a5/sft `
+    --sft-filtered-dir data/sft_filtered_a5
+
+python scripts/run_training.py --config config/paper/training_a5_fixed_turn_7.yaml --stages on_policy_gen,filter_dpo,train_dpo
+```
+
 ### Condition A2 — SFT-only
 
 A2 reuses A1's SFT adapter; no separate training step is needed.
@@ -190,20 +246,36 @@ Plan one overnight per condition.
 
 ## 6. Stage 4 — Freeze evaluation sets
 
-Builds the four held-out JSONL files every baseline is scored on.
+Builds the six held-out JSONL files every baseline is scored on. The
+sentinel-related probe set was expanded from one to three to make
+precision and false-positive rate well-defined (§4.8).
 
 ```powershell
 python scripts/build_eval_sets.py
-# -> eval_sets/tutor_scenario.jsonl       (N=224)
-# -> eval_sets/redirect_probe.jsonl       (N=143)
-# -> eval_sets/persistent_probe.jsonl     (N varies; target ~120 after topup)
-# -> eval_sets/locale_leakage.jsonl       (N=224, scenario-overlapping)
+# -> eval_sets/tutor_scenario.jsonl                (N=224)
+# -> eval_sets/redirect_probe.jsonl                (N=143; uses
+#                                                   metadata.violation_turn_idx
+#                                                   from Stage 1b regen)
+# -> eval_sets/persistent_probe.jsonl              (positives, target ~140)
+# -> eval_sets/persistent_fp_probe.jsonl           (negatives at trained
+#                                                   sentinel positions
+#                                                   {5,7,9,11}, target ~240)
+# -> eval_sets/persistent_offposition_probe.jsonl  (positives at off-grid
+#                                                   positions {13,15}, target ~60)
+# -> eval_sets/locale_leakage.jsonl                (N=224, scenario-overlapping)
 # -> eval_sets/_split_manifest.json
 ```
 
 The split is hash-deterministic on `seed_id` (`sha256(seed_id)[:8] % 100 < 20`),
 so this is a once-per-corpus operation. Re-run only if the seed pool
-changes.
+changes, OR after Stage 1b regen lands new `violation_turn_idx`
+metadata in `data/sft_raw/`.
+
+Each probe record's ID now includes a variant tag (`_v<N>`) so that
+SFT records sharing a seed but differing in variant don't collapse to
+the same probe ID. Records may carry `expected.detection_reason` ∈
+{`metadata`, `pivot`, `fallback`} indicating how the redirect-probe
+violation turn was identified.
 
 ---
 
@@ -224,6 +296,7 @@ python scripts/run_paper_eval.py --baseline paper_a1 --test-set all
 python scripts/run_paper_eval.py --baseline paper_a2 --test-set all
 python scripts/run_paper_eval.py --baseline paper_a3 --test-set all
 python scripts/run_paper_eval.py --baseline paper_a4 --test-set all
+python scripts/run_paper_eval.py --baseline paper_a5 --test-set all
 ```
 
 Outputs land in `eval_results/<baseline>/<test_set>.jsonl`. Re-runnable:
@@ -247,39 +320,65 @@ Two scoring passes per baseline.
 
 ### Mechanical pass (cheap, no judge)
 
-Computes sentinel-firing F1 and locale-leakage rate via regex.
+Computes the full sentinel suite (recall, FP-rate, precision, F1,
+OffPosition recall, per-position fire-rate breakdowns) over
+Persistent-Probe ∪ Persistent-FP-Probe ∪ Persistent-OffPosition-Probe,
+plus locale-leakage rate via gazetteer regex.
 
 ```powershell
-foreach ($b in 'qwen3_5_0_8b_base','qwen3_5_0_8b_instruct','qwen3_5_4b_instruct','qwen3_5_9b_teacher','paper_a1','paper_a2','paper_a3','paper_a4') {
+foreach ($b in 'qwen3_5_0_8b_base','qwen3_5_0_8b_instruct','qwen3_5_4b_instruct','qwen3_5_9b_teacher','paper_a1','paper_a2','paper_a3','paper_a4','paper_a5') {
     python scripts/run_paper_score.py --baseline $b --metrics mechanical
 }
 ```
 
 ### Judged pass (slow, needs judge ensemble)
 
-Naturalness, CEFR adherence, and redirect F1 are scored by a 3-judge
-ensemble. Run each judge in turn — only one judge fits in VRAM
-alongside the baseline at a time.
+Naturalness, CEFR adherence, and redirect-axis F1 are scored by a
+**cross-family** 3-judge ensemble — Prometheus 7B (rubric protocol),
+Llama-3.1-8B-Instruct (instruct JSON), and Gemma-2-9B-it (instruct
+JSON). The ensemble is deliberately Qwen-free to eliminate
+self-preference bias against the Qwen-family teacher (§4.7).
+
+Each judge has its own GGUF. Only one judge fits in VRAM at a time,
+so swap models between rounds. Use `--limit 30` for a quick first-pass
+smoke before committing to the full ~600-record judging per judge.
 
 ```powershell
-foreach ($b in 'qwen3_5_0_8b_base','qwen3_5_0_8b_instruct','qwen3_5_4b_instruct','qwen3_5_9b_teacher','paper_a1','paper_a2','paper_a3','paper_a4') {
-  foreach ($j in 'qwen3_5_9b_teacher','qwen3_5_4b_instruct','qwen3_5_0_8b_instruct') {
-    python scripts/run_paper_score.py --baseline $b --metrics judged --judge $j
-  }
+# Round 1: Prometheus. Stop existing llama-server, then:
+# llama-server -m vendor/models/GGUF/prometheus-7b-v2.0.Q4_K_M.gguf -ngl 80 -c 32768 --host 0.0.0.0 --port 8080
+foreach ($b in 'qwen3_5_0_8b_base','qwen3_5_0_8b_instruct','qwen3_5_4b_instruct','qwen3_5_9b_teacher','paper_a1','paper_a2','paper_a3','paper_a4','paper_a5') {
+    python scripts/run_paper_score.py --baseline $b --metrics judged --judge prometheus_7b_judge
+}
+
+# Round 2: Llama-3.1. Stop llama-server, then:
+# llama-server -m vendor/models/GGUF/Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf -ngl 80 -c 32768 --host 0.0.0.0 --port 8080
+foreach ($b in '<same list>') {
+    python scripts/run_paper_score.py --baseline $b --metrics judged --judge llama31_8b_judge
+}
+
+# Round 3: Gemma-2. Stop llama-server, then:
+# llama-server -m vendor/models/GGUF/gemma-2-9b-it-Q5_K_M.gguf -ngl 80 -c 32768 --host 0.0.0.0 --port 8080
+foreach ($b in '<same list>') {
+    python scripts/run_paper_score.py --baseline $b --metrics judged --judge gemma2_9b_judge
 }
 ```
+
+The scorer probes `/v1/models` before each round and warns if the
+loaded GGUF doesn't match the judge name — catches accidental
+model-loaded-vs-judge-asked mismatches.
 
 ### Aggregate
 
 Combines per-judge scores into the ensemble median + Krippendorff's
-alpha used in Table 4.
+alpha used in Table 7.
 
 ```powershell
 python scripts/run_paper_score.py --aggregate `
-    --baselines paper_a1,paper_a2,paper_a3,paper_a4,qwen3_5_0_8b_base,qwen3_5_0_8b_instruct,qwen3_5_4b_instruct,qwen3_5_9b_teacher
+    --baselines paper_a1,paper_a2,paper_a3,paper_a4,paper_a5,qwen3_5_0_8b_base,qwen3_5_0_8b_instruct,qwen3_5_4b_instruct,qwen3_5_9b_teacher
 ```
 
-Output: `scores/aggregate.json` — the source for Table 4 numbers in
+Output: `outputs/paper/score/aggregated/<baseline>.json` — the source
+for Table 7 numbers in
 [sections/05_results_scaffold.md](sections/05_results_scaffold.md).
 
 ---
@@ -346,19 +445,26 @@ If the data and adapters from a previous run are already on disk, you
 only need Stages 4 → 6:
 
 ```powershell
+$env:PYTHONUTF8 = "1"
 python scripts/build_eval_sets.py
 
-foreach ($b in 'qwen3_5_0_8b_base','qwen3_5_0_8b_instruct','qwen3_5_4b_instruct','qwen3_5_9b_teacher','paper_a1','paper_a2','paper_a3','paper_a4') {
+# 9 baselines × 6 test sets generation; teacher GPU resident for B4 only
+foreach ($b in 'qwen3_5_0_8b_base','qwen3_5_0_8b_instruct','qwen3_5_4b_instruct','qwen3_5_9b_teacher','paper_a1','paper_a2','paper_a3','paper_a4','paper_a5') {
     python scripts/run_paper_eval.py --baseline $b --test-set all
     python scripts/run_paper_score.py --baseline $b --metrics mechanical
-    foreach ($j in 'qwen3_5_9b_teacher','qwen3_5_4b_instruct','qwen3_5_0_8b_instruct') {
-        python scripts/run_paper_score.py --baseline $b --metrics judged --judge $j
-    }
+}
+
+# Judged scoring: one llama-server-swap per judge round (see Stage 6).
+# Then for each round (after starting llama-server with the right GGUF):
+foreach ($b in '<list above>') {
+    python scripts/run_paper_score.py --baseline $b --metrics judged --judge <judge_name>
 }
 
 python scripts/run_paper_score.py --aggregate `
-    --baselines paper_a1,paper_a2,paper_a3,paper_a4,qwen3_5_0_8b_base,qwen3_5_0_8b_instruct,qwen3_5_4b_instruct,qwen3_5_9b_teacher
+    --baselines paper_a1,paper_a2,paper_a3,paper_a4,paper_a5,qwen3_5_0_8b_base,qwen3_5_0_8b_instruct,qwen3_5_4b_instruct,qwen3_5_9b_teacher
 ```
 
 Then rebuild the PDF per Stage 8. Wall-clock for the full B1–B4 +
-A1–A4 fill-in: about 12–20 hours of mostly overnight work.
+A1–A5 fill-in: about 16–24 hours of mostly overnight work (the extra
+condition + the expanded eval set add ~25% vs. the old 4-condition
+single-probe matrix).
