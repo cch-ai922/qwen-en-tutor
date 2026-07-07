@@ -19,7 +19,18 @@ config, and expected number.
 | **A4** | Drop 4 persistent streams | `data/sft_filtered_a4/` | `config/paper/training_a4_no_persistent.yaml` |
 | **A5** | Persistence fixed at turn 7 (position decorrelation) | `data/sft_filtered_a5/` | `config/paper/training_a5_fixed_turn_7.yaml` |
 | **B1–B4** | Prompt-only baselines (no training): 0.8B base, 0.8B instruct, 4B instruct, 9B teacher | — | matched deployment system prompt |
-| Cross-family | Llama-3.2-1B (base + instruct) A1/A3 | as above | `config/paper/training_llama*_a{1,3}_*.yaml` |
+| Cross-family | Llama-3.2-1B-**Instruct** A1/A3 (the reported cross-family result) | as above | `config/paper/training_llamaINST_a{1,3}_*.yaml` |
+
+> **Cross-family uses Llama-3.2-1B-Instruct, not Base.** Paper 1's cross-family
+> replication (§6.3) trains from **Llama-3.2-1B-Instruct**: the matched untrained
+> control reaches recall 0.25, full SFT on that identical base reaches 0.91,
+> isolating training as the sole variable. An earlier attempt on
+> Llama-3.2-1B-*Base* could not learn clean turn-termination in one epoch (see
+> `paper/sections/06_discussion.md`), so Base was dropped for Paper 1. The two
+> `config/paper/training_llama_a{1,3}_*.yaml` (Base) configs are retained only as
+> that failed-attempt record and back **no** reported Paper 1 number — do not use
+> them to reproduce Paper 1. (Paper 2's off-tutor H-gen result legitimately uses
+> Llama-3.2-1B-Base on a *different* synthetic task; see `REPRODUCE_paper2.md`.)
 
 Base model: **Qwen3.5-0.8B-Base**, QLoRA r=16/α=32, 2 epochs SFT + 1 epoch DPO,
 seeds {42, 123, 7}.

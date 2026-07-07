@@ -1,6 +1,6 @@
 # =============================================================================
-# paper/training_llama_a3_no_specialized.yaml
-#   Cross-family A3 (Llama-3.2-1B-Base) — GENERIC-SFT baseline
+# paper/training_llamaINST_a3_no_specialized.yaml
+#   Cross-family A3 (Llama-3.2-1B-Instruct) — GENERIC-SFT baseline
 # =============================================================================
 #
 # CROSS-FAMILY REPLICATION (§6.3). Mirrors the Qwen A3 condition: A1's full mix
