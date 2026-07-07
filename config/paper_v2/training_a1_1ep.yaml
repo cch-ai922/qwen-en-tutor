@@ -1,0 +1,111 @@
+# =============================================================================
+# paper/training_a1_1ep.yaml  -  Condition A1, MATCHED-BUDGET (1 epoch)
+# =============================================================================
+#
+# Purpose: the matched-budget decorrelation test (§5.3.1 / §6.2 / §6.5).
+# The headline A1 (4-variant + typed sentinel) trained 2 epochs and shows
+# premature-firing 0.107, but it is the ONLY 2-epoch condition — A5/A6/A7
+# are 1-epoch, so the low premature rate is confounded with training budget.
+# This config retrains A1 on the IDENTICAL data at 1 EPOCH to disentangle
+# design from budget:
+#   - if 1-epoch A1 premature ~= A5's 0.56 -> the 0.107 was an epoch effect,
+#     decorrelation gives no matched-budget benefit;
+#   - if materially lower -> a residual decorrelation benefit survives.
+#
+# IMPORTANT: writes to a SEPARATE path (outputs/paper_v2/a1_1ep/) so the
+# existing 2-epoch A1 adapter (outputs/paper_v2/a1/sft) is NOT overwritten.
+# SFT-only; no DPO is run for this diagnostic.
+#
+# Run with:
+#   python scripts/run_training.py --training-config config/paper_v2/training_a1_1ep.yaml --stages train_sft
+# -----------------------------------------------------------------------------
+
+base_model:
+  model_id: "./vendor/models/Qwen_3.5_0.8B-Base"
+  tokenizer_id: "./vendor/models/Qwen_3.5_0.8B-Base"
+  trust_remote_code: true
+  attn_implementation: "sdpa"
+  torch_dtype: "bfloat16"
+  quantization:
+    enabled: true
+    load_in_4bit: true
+    bnb_4bit_quant_type: "nf4"
+    bnb_4bit_compute_dtype: "bfloat16"
+    bnb_4bit_use_double_quant: true
+  gradient_checkpointing: true
+
+lora:
+  r: 16
+  lora_alpha: 32
+  lora_dropout: 0.05
+  bias: "none"
+  task_type: "CAUSAL_LM"
+  target_modules:
+    - q_proj
+    - k_proj
+    - v_proj
+    - o_proj
+    - gate_proj
+    - up_proj
+    - down_proj
+
+sft:
+  # SEPARATE output path — does NOT overwrite the 2-epoch A1 at a1/sft.
+  output_dir: "outputs/paper_v2/a1_1ep/sft"
+  num_train_epochs: 1                     # matched-budget: 1 epoch (vs A1's 2)
+  max_steps: -1
+  per_device_train_batch_size: 1
+  per_device_eval_batch_size: 1
+  gradient_accumulation_steps: 8
+  learning_rate: 2.0e-4
+  warmup_ratio: 0.05
+  lr_scheduler_type: "cosine"
+  weight_decay: 0.01
+  max_seq_length: 1792
+  packing: false
+  bf16: true
+  fp16: false
+  optim: "paged_adamw_8bit"
+  logging_steps: 1
+  logging_first_step: true
+  log_level: "info"
+  eval_strategy: "no"
+  # Checkpoint every 100 optimizer steps (per request) so a restart during
+  # the multi-hour run loses at most ~100 steps of work.
+  save_strategy: "steps"
+  save_steps: 100
+  save_total_limit: 3
+  load_best_model_at_end: false
+  report_to: "none"
+  seed: 42
+
+  data:
+    # IDENTICAL data to the 2-epoch A1 — same dir, untrimmed 4-variant
+    # persistent, axis-specific sentinel. Only the epoch count differs.
+    sft_filtered_dir: "data/sft_filtered"
+    eval_filtered_dir: "data/eval_filtered"
+    holdout_dir: "data/holdout"
+    mix_ratio_sft: 0.80
+    mix_ratio_eval: 0.20
+    use_all_data: true
+    validation_split: 0.05
+    shuffle_seed: 42
+
+logging:
+  wandb_project: "qwen-en-tutor"
+  wandb_entity: null
+  wandb_run_name_prefix: "paper-v2-a1-1ep"
+
+eval_callback:
+  enabled: false
+
+evaluation:
+  holdout_dir: data/holdout
+  n_per_level: 3
+  concurrency: 2
+  intermediate_adapter_path: outputs/paper_v2/a1_1ep/sft
+  final_adapter_path: outputs/paper_v2/a1_1ep/sft
+
+comparison:
+  threshold: 0.05
+  fail_on_regression: false

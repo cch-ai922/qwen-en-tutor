@@ -1,0 +1,2 @@
+{"custom_id": "pedagogy_redirect_explanation_7e6ca1fb9753", "error": "JSONDecodeError: Expecting property name enclosed in double quotes: line 22 column 7 (char 2373)", "level": "C1", "stage": "pedagogy_redirect", "seed_id": "7e6ca1fb9753", "pedagogy_trigger": "explanation", "variant": 0}
+{"custom_id": "pedagogy_redirect_vocab_list_f99a57fbc725", "error": "JSONDecodeError: Expecting property name enclosed in double quotes: line 27 column 5 (char 2685)", "level": "C2", "stage": "pedagogy_redirect", "seed_id": "f99a57fbc725", "pedagogy_trigger": "vocab_list", "variant": 0}

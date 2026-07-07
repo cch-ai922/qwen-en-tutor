@@ -1,0 +1,125 @@
+# AUTO-GENERATED (multiseed trim study). Identical to training_a1_1ep_trim.yaml except seed=7 + separate output path.
+# =============================================================================
+# paper/training_a1_1ep_trim.yaml  -  Condition A1, MATCHED-BUDGET (1 epoch),
+#                                     POST-SENTINEL-TRIMMED persistent data.
+# =============================================================================
+#
+# Purpose: settle the trim-vs-design confound exposed by a1_1ep (§5.3.1).
+#
+# a1_1ep (4-variant + typed, 1 epoch, UNTRIMMED) showed premature firing 0.208
+# — far below A5/A6/A7 (0.56-0.69, all 1-epoch). But A1 is the ONLY condition
+# whose persistent training records keep the benign turns AFTER the sentinel;
+# A5/A6/A7 were trimmed to end exactly at the sentinel. So "decorrelation
+# benefit" is confounded with the trim: trimmed records put the sentinel
+# always-last, which can teach a spurious "fire when deep / at end" cue.
+#
+# This run fills the missing 2x2-with-trim cell: A1's data (4-variant + typed)
+# but TRIMMED like A5/A6/A7. Compared against:
+#   - A5 (fix7 + typed, trimmed, 1ep):  isolates DECORRELATION (4var vs fix7)
+#   - a1_1ep (4var + typed, UNTRIMMED): isolates the TRIM
+# Outcome:
+#   - a1_1ep_trim premature ~0.56-0.69  -> trim was the driver, decorrelation null
+#   - a1_1ep_trim premature ~0.21       -> trim irrelevant, design synergy real
+#   - in between                        -> both contribute
+#
+# SEPARATE output path (outputs/paper_v2/a1_1ep_trim/) — overwrites NOTHING.
+# Trains on data/sft_filtered_a1_trim (a COPY of data/sft_filtered with only
+# the persistent_*_passed.jsonl trimmed; the original train data is untouched).
+# SFT-only; no DPO. Identical hyperparameters/seed to a1_1ep — ONLY the
+# persistent-stream trim differs.
+#
+# Run with:
+#   python scripts/run_training.py --training-config config/paper_v2/training_a1_1ep_trim.yaml --stages train_sft
+# -----------------------------------------------------------------------------
+
+base_model:
+  model_id: "./vendor/models/Qwen_3.5_0.8B-Base"
+  tokenizer_id: "./vendor/models/Qwen_3.5_0.8B-Base"
+  trust_remote_code: true
+  attn_implementation: "sdpa"
+  torch_dtype: "bfloat16"
+  quantization:
+    enabled: true
+    load_in_4bit: true
+    bnb_4bit_quant_type: "nf4"
+    bnb_4bit_compute_dtype: "bfloat16"
+    bnb_4bit_use_double_quant: true
+  gradient_checkpointing: true
+
+lora:
+  r: 16
+  lora_alpha: 32
+  lora_dropout: 0.05
+  bias: "none"
+  task_type: "CAUSAL_LM"
+  target_modules:
+    - q_proj
+    - k_proj
+    - v_proj
+    - o_proj
+    - gate_proj
+    - up_proj
+    - down_proj
+
+sft:
+  # SEPARATE output path — overwrites nothing.
+  output_dir: "outputs/paper_v2/a1_1ep_trim_s7/sft"
+  # SCHEDULE-MATCHED to a1_s7 (untrim, 2-epoch cosine over 794 steps): we
+  # harvest checkpoint-600 (=1.51 epoch) from BOTH so the seed-7 trim-vs-untrim
+  # pair shares an identical LR trajectory + step count; ONLY the data (trim)
+  # differs. Do NOT read the final adapter for the paper number — use ckpt-600.
+  num_train_epochs: 2
+  max_steps: -1
+  per_device_train_batch_size: 1
+  per_device_eval_batch_size: 1
+  gradient_accumulation_steps: 8
+  learning_rate: 2.0e-4
+  warmup_ratio: 0.05
+  lr_scheduler_type: "cosine"
+  weight_decay: 0.01
+  max_seq_length: 1792
+  packing: false
+  bf16: true
+  fp16: false
+  optim: "paged_adamw_8bit"
+  logging_steps: 1
+  logging_first_step: true
+  log_level: "info"
+  eval_strategy: "no"
+  save_strategy: "steps"
+  save_steps: 100
+  save_total_limit: 3
+  load_best_model_at_end: false
+  report_to: "none"
+  seed: 7
+
+  data:
+    # A1's data but persistent streams TRIMMED to end at the sentinel — the
+    # ONLY difference from a1_1ep (which uses data/sft_filtered, untrimmed).
+    sft_filtered_dir: "data/sft_filtered_a1_trim"
+    eval_filtered_dir: "data/eval_filtered"
+    holdout_dir: "data/holdout"
+    mix_ratio_sft: 0.80
+    mix_ratio_eval: 0.20
+    use_all_data: true
+    validation_split: 0.05
+    shuffle_seed: 7
+
+logging:
+  wandb_project: "qwen-en-tutor"
+  wandb_entity: null
+  wandb_run_name_prefix: "paper-v2-a1-1ep-trim-s7"
+
+eval_callback:
+  enabled: false
+
+evaluation:
+  holdout_dir: data/holdout
+  n_per_level: 3
+  concurrency: 2
+  intermediate_adapter_path: outputs/paper_v2/a1_1ep_trim_s7/sft
+  final_adapter_path: outputs/paper_v2/a1_1ep_trim_s7/sft
+
+comparison:
+  threshold: 0.05
+  fail_on_regression: false

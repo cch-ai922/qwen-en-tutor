@@ -1,0 +1,89 @@
+# config/paper_v2/training_a8_count_sentinel_trim.yaml — Condition A8-trim
+# (paper_v3 H3, the decisive trim-robustness test)
+#
+# Identical to training_a8_count_sentinel.yaml EXCEPT the count-annotated
+# persistent data is TRIMMED to end at the [SESSION_END: <axis>, strike=3] turn.
+#
+# The point: A1/A5/A6/A7 all show trimming EXPLODES premature firing
+# (+0.44..+0.58). H3 predicts the explicit count supervision makes firing
+# trim-ROBUST — i.e. A8-trim premature stays low, unlike A1-trim's 0.783. This
+# config is the cell that tests it.
+#
+# Build order:
+#   1. count persistent (if not already):
+#        python scripts/convert_typed_to_count.py \
+#          --src-dir data/sft_filtered \
+#          --dst-dir data/sft_filtered_a8_count_persistent
+#   2. trim the count persistent to end at the strike=3 marker:
+#        (trim_persistent_post_sentinel.py detects "[SESSION_END" so the
+#         strike=3 form is truncated correctly; point it at a dir containing
+#         the count persistent, or copy them into an a8-persistent dir it scans)
+#   3. assemble data/sft_filtered_a8_count_trim (base copy + trimmed count
+#      persistent overwrites), then train --stages train_sft.
+#
+# SEPARATE output path — overwrites nothing.
+
+base_model:
+  model_id: "./vendor/models/Qwen_3.5_0.8B-Base"
+  tokenizer_id: "./vendor/models/Qwen_3.5_0.8B-Base"
+  trust_remote_code: true
+  attn_implementation: "sdpa"
+  torch_dtype: "bfloat16"
+  quantization:
+    enabled: true
+    load_in_4bit: true
+    bnb_4bit_quant_type: "nf4"
+    bnb_4bit_compute_dtype: "bfloat16"
+    bnb_4bit_use_double_quant: true
+  gradient_checkpointing: true
+
+lora:
+  r: 16
+  lora_alpha: 32
+  lora_dropout: 0.05
+  bias: "none"
+  task_type: "CAUSAL_LM"
+  target_modules:
+    - q_proj
+    - k_proj
+    - v_proj
+    - o_proj
+    - gate_proj
+    - up_proj
+    - down_proj
+
+sft:
+  output_dir: "outputs/paper_v2/a8_count_trim/sft"
+  num_train_epochs: 1
+  max_steps: -1
+  per_device_train_batch_size: 1
+  per_device_eval_batch_size: 1
+  gradient_accumulation_steps: 8
+  learning_rate: 2.0e-4
+  warmup_ratio: 0.05
+  lr_scheduler_type: "cosine"
+  weight_decay: 0.01
+  max_seq_length: 1792
+  packing: false
+  bf16: true
+  fp16: false
+  optim: "paged_adamw_8bit"
+  logging_steps: 1
+  logging_first_step: true
+  log_level: "info"
+  eval_strategy: "no"
+  save_strategy: "steps"
+  save_steps: 100
+  save_total_limit: 3
+  load_best_model_at_end: false
+  report_to: "none"
+  seed: 42
+  data:
+    sft_filtered_dir: "data/sft_filtered_a8_count_trim"
+    eval_filtered_dir: "data/eval_filtered"
+    holdout_dir: "data/holdout"
+    mix_ratio_sft: 0.80
+    mix_ratio_eval: 0.20
+    use_all_data: true
+    validation_split: 0.05
+    shuffle_seed: 42

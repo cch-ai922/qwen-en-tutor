@@ -1,0 +1,98 @@
+# config/paper_v2/training_a8_count_sentinel.yaml — Condition A8 (paper_v3 H3)
+#
+# COUNT-ANNOTATED MARKER, Design B (count-tag every strike).
+# Identical to A1 (4-variant position, typed marker, 1 epoch, SFT-only, seed 42)
+# EXCEPT the four persistent streams carry an explicit running strike count:
+#     1st strike : ...redirect text  [STRIKE: persistent_<axis>, 1]
+#     2nd strike : ...redirect text  [STRIKE: persistent_<axis>, 2]
+#     3rd strike : ...one sentence    [SESSION_END: persistent_<axis>, strike=3]
+#
+# Hypothesis (paper_v3 §3.6 H3): externalising the latent strike count as a
+# supervised target at every strike turn neutralises the trim-induced premature
+# firing that afflicts bare/typed markers (A1-trim 0.783; A5/A6/A7 0.56-0.69).
+# A8 is trained on UNTRIMMED persistent data (post-sentinel benign turns kept),
+# so A8-vs-A1 isolates the count annotation with trim held constant; a matched
+# A8-trim retrain (training_a8_count_sentinel_trim.yaml) tests whether the count
+# annotation makes firing trim-ROBUST.
+#
+# Build order (all CPU, no teacher regen):
+#   1. python scripts/convert_typed_to_count.py \
+#        --src-dir data/sft_filtered \
+#        --dst-dir data/sft_filtered_a8_count_persistent
+#   2. assemble full dir: copy data/sft_filtered -> data/sft_filtered_a8_count,
+#      then overwrite persistent_*_passed.jsonl with the count versions
+#      (same assemble pattern as scripts/build_untrim_a5a6a7.py::assemble).
+#   3. train: python scripts/run_training.py \
+#        --config config/paper_v2/training_a8_count_sentinel.yaml \
+#        --stages train_sft
+#   4. eval:  python scripts/run_paper_eval.py --baseline paper_a8 ...
+#
+# SEPARATE output path — overwrites nothing.
+
+base_model:
+  model_id: "./vendor/models/Qwen_3.5_0.8B-Base"
+  tokenizer_id: "./vendor/models/Qwen_3.5_0.8B-Base"
+  trust_remote_code: true
+  attn_implementation: "sdpa"
+  torch_dtype: "bfloat16"
+  quantization:
+    enabled: true
+    load_in_4bit: true
+    bnb_4bit_quant_type: "nf4"
+    bnb_4bit_compute_dtype: "bfloat16"
+    bnb_4bit_use_double_quant: true
+  gradient_checkpointing: true
+
+lora:
+  r: 16
+  lora_alpha: 32
+  lora_dropout: 0.05
+  bias: "none"
+  task_type: "CAUSAL_LM"
+  target_modules:
+    - q_proj
+    - k_proj
+    - v_proj
+    - o_proj
+    - gate_proj
+    - up_proj
+    - down_proj
+
+sft:
+  output_dir: "outputs/paper_v2/a8_count/sft"
+  num_train_epochs: 1                     # matched-budget: 1 epoch (== A1 1ep)
+  max_steps: -1
+  per_device_train_batch_size: 1
+  per_device_eval_batch_size: 1
+  gradient_accumulation_steps: 8
+  learning_rate: 2.0e-4
+  warmup_ratio: 0.05
+  lr_scheduler_type: "cosine"
+  weight_decay: 0.01
+  max_seq_length: 1792
+  packing: false
+  bf16: true
+  fp16: false
+  optim: "paged_adamw_8bit"
+  logging_steps: 1
+  logging_first_step: true
+  log_level: "info"
+  eval_strategy: "no"
+  save_strategy: "steps"
+  save_steps: 100
+  save_total_limit: 3
+  load_best_model_at_end: false
+  report_to: "none"
+  seed: 42
+  data:
+    sft_filtered_dir: "data/sft_filtered_a8_count"
+    eval_filtered_dir: "data/eval_filtered"
+    holdout_dir: "data/holdout"
+    mix_ratio_sft: 0.80
+    mix_ratio_eval: 0.20
+    use_all_data: true
+    validation_split: 0.05
+    shuffle_seed: 42
+
+# SFT-only for the paper_v3 boundary study; no DPO stage is run
+# (invoke run_training.py with --stages train_sft).

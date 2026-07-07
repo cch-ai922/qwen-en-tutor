@@ -1,0 +1,81 @@
+% =========================================================================
+% main.tex -- WORKSHOP (8-page BEA/ACL) version of the qwen-en-tutor paper.
+%
+% This is the condensed 8-page workshop build. Section bodies are
+% auto-generated from paper_workshop/sections/*.md by
+% scripts/build_workshop_latex.ps1. The full-length version lives in
+% ../paper/.
+% =========================================================================
+
+\documentclass[11pt]{article}
+\usepackage[hyperref]{acl}
+
+\usepackage{times}
+\usepackage{latexsym}
+\usepackage{booktabs}
+\usepackage{array}
+\usepackage{microtype}
+\usepackage{inconsolata}
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{graphicx}
+\graphicspath{{figures/}}
+\usepackage{url}
+\usepackage{hyperref}
+
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+
+% ---- Pandoc compatibility shims ---------------------------------------
+\providecommand{\real}[1]{#1}
+\providecommand{\tightlist}{%
+  \setlength{\itemsep}{0pt}\setlength{\parskip}{0pt}}
+\providecommand{\pandocbounded}[1]{#1}
+
+% Compact spacing so the 8-page budget holds.
+\usepackage{titlesec}
+\titlespacing*{\section}{0pt}{0.6em}{0.2em}
+\titlespacing*{\subsection}{0pt}{0.4em}{0.1em}
+
+\title{What Must Be Trained and What Can Be Prompted:\\
+A Per-Capability Study of Tutor Redirect Behavior}
+
+\author{Miles Yung \\
+  Independent Research \\
+  \texttt{milesyung2026@gmail.com}}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+Deploying a small language model as an English tutor forces a question a
+flat ``good-dialogue'' corpus never does: \emph{which} tutor behaviors can
+be elicited by an explicit system prompt, and which must be demonstrated
+through fine-tuning? We answer this per-capability under a
+\textbf{matched-prompt} protocol --- the identical fully-specified prompt
+given to a fine-tuned 0.8B student and to prompt-only baselines up to a 9B
+teacher. Within a single model family (Qwen) a sharp boundary emerges.
+Behaviors one clause elicits --- locale fidelity, role-swap deflection,
+topic re-anchoring --- reach prompt-only parity. Behaviors the prompt
+\emph{describes but cannot install} do not: on persistence (firing a
+session-end sentinel on the third same-axis violation) the 9B teacher
+reaches \(\leq\)0.06 recall zero/few-shot and only 0.63 with native
+chain-of-thought (below the student's 0.83); on pedagogical withholding,
+prompt-only models manage 0.09--0.45 versus the student's 0.61. A
+cross-family probe (Llama-3.1-8B) corroborates the boundary's direction. All
+experiments run on one RTX 3060 12GB GPU.
+\end{abstract}
+
+\input{sections/01_introduction}
+\input{sections/02_related_work}
+\input{sections/03_method}
+\input{sections/04_experimental_setup}
+\input{sections/05_results}
+\input{sections/06_discussion_conclusion}
+
+\bibliography{references}
+
+\appendix
+\input{sections/07_appendix}
+
+\end{document}

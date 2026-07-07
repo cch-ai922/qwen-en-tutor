@@ -1,0 +1,43 @@
+\section{Related Work}\label{related-work}
+
+\textbf{Synthetic instruction data.} Teacher-to-student bootstrapping
+was popularised by Self-Instruct \citep{wang2023selfinstruct} and
+Evol-Instruct / WizardLM \citep{xu2023wizardlm}; UltraChat
+\citep{ding2023ultrachat} extends to multi-turn dialogue, and Tulu-3
+\citep{lambert2024tulu3} composes datasets from sub-pools. These target
+\emph{general} instruction-following with a uniform recipe and do not
+ask which taught behaviors a prompt already elicits.
+
+\textbf{LLM-as-judge filtering.} Prometheus \citep{kim2024prometheus},
+JudgeLM \citep{zhu2023judgelm}, and PandaLM \citep{wang2023pandalm}
+propose dedicated judges; a strand documents position, length, and
+self-preference bias
+\citep{saito2023verbosity, panickssery2024selfpreference}, mitigated by
+multi-judge consensus. Our pairwise eval (§5) follows this with a
+cross-family constraint so no judge shares the teacher's lineage; we add
+a \emph{negative} result about a judged metric (context-blind redirect
+F1).
+
+\textbf{Tutor and educational LLMs.} EduChat \citep{dan2023educhat} and
+MathDial \citep{macina2023mathdial} target educational dialogue;
+CEFR-aligned corpora (EFCAMDAT \citep{geertzen2014efcamdat}, TLE
+\citep{berzak2016tle}) are \emph{learner-produced}, not tutor-side. None
+asks, per behavior, whether the deployment prompt already suffices.
+MathDial's scaffolding moves are the closest analogue to our
+pedagogical-withholding axis.
+
+\textbf{Safety, persona, and shortcut learning.} Adversarial safety data
+\citep{parrish2022bbq, mazeika2024harmbench, zou2023advbench} and
+persona consistency \citep{zhang2018personas, deshpande2023toxicity}
+mostly treat redirection as \emph{single-turn}. Our three-strike
+persistence is multi-turn and carries a \emph{shortcut-learning}
+\citep{geirhos2020shortcut, mccoy2019hans} risk: a positionally-regular
+sentinel invites a position-as-trigger shortcut, which our decorrelation
+construction (§3) targets.
+
+\textbf{Positioning.} The prompting-vs-fine-tuning question has been
+examined for \emph{general} alignment
+\citep{zhou2023lima, ouyang2022instructgpt, min2022rethinking}; we
+localize it to the \emph{per-behavior} level for a deployed task model,
+under a matched-prompt protocol giving the same prompt to trained and
+prompt-only models alike.

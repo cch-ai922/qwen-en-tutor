@@ -1,0 +1,232 @@
+\begin{thebibliography}{25}
+\providecommand{\natexlab}[1]{#1}
+
+\bibitem[{Berzak et~al.(2016)Berzak, Kenney, Spadine, Wang, Lam, Mori, Garza,
+  and Katz}]{berzak2016tle}
+Yevgeni Berzak, Jessica Kenney, Carolyn Spadine, Jing~Xian Wang, Lucia Lam,
+  Keiko~Sophie Mori, Sebastian Garza, and Boris Katz. 2016.
+\newblock \href {https://doi.org/10.18653/v1/P16-1070} {Universal dependencies
+  for learner {E}nglish}.
+\newblock In \emph{Proceedings of the 54th Annual Meeting of the Association
+  for Computational Linguistics (Volume 1: Long Papers)}, pages 737--746,
+  Berlin, Germany.
+\newblock The Treebank of Learner English (TLE). VERIFY pages/DOI against the
+  ACL Anthology (P16-1070).
+
+\bibitem[{Dan et~al.(2023)Dan, Lei, Gu, Li, Yin, Lin, Ye, Tie, Zhou, Wang,
+  Zhou, Zhou, Chen, Zhou, He, and Qiu}]{dan2023educhat}
+Yuhao Dan, Zhikai Lei, Yiyang Gu, Yong Li, Jianghao Yin, Jiaju Lin, Linhao Ye,
+  Zhiyan Tie, Yougen Zhou, Yilei Wang, Aimin Zhou, Ze~Zhou, Qin Chen, Jie Zhou,
+  Liang He, and Xipeng Qiu. 2023.
+\newblock Educhat: A large-scale language model-based chatbot system for
+  intelligent education.
+\newblock \emph{arXiv preprint arXiv:2308.02773}.
+
+\bibitem[{Deshpande et~al.(2023)Deshpande, Murahari, Rajpurohit, Kalyan, and
+  Narasimhan}]{deshpande2023toxicity}
+Ameet Deshpande, Vishvak Murahari, Tanmay Rajpurohit, Ashwin Kalyan, and
+  Karthik Narasimhan. 2023.
+\newblock Toxicity in {ChatGPT}: Analyzing persona-assigned language models.
+\newblock In \emph{Findings of the Association for Computational Linguistics:
+  EMNLP 2023}, pages 1236--1270, Singapore. Association for Computational
+  Linguistics.
+
+\bibitem[{Dettmers et~al.(2023)Dettmers, Pagnoni, Holtzman, and
+  Zettlemoyer}]{dettmers2023qlora}
+Tim Dettmers, Artidoro Pagnoni, Ari Holtzman, and Luke Zettlemoyer. 2023.
+\newblock Qlora: Efficient finetuning of quantized llms.
+\newblock In \emph{Advances in Neural Information Processing Systems 36
+  (NeurIPS 2023)}.
+\newblock ArXiv:2305.14314.
+
+\bibitem[{Ding et~al.(2023)Ding, Chen, Xu, Qin, Zheng, Hu, Liu, Sun, and
+  Zhou}]{ding2023ultrachat}
+Ning Ding, Yulin Chen, Bokai Xu, Yujia Qin, Zhi Zheng, Shengding Hu, Zhiyuan
+  Liu, Maosong Sun, and Bowen Zhou. 2023.
+\newblock Enhancing chat language models by scaling high-quality instructional
+  conversations.
+\newblock In \emph{Proceedings of the 2023 Conference on Empirical Methods in
+  Natural Language Processing (EMNLP)}, Singapore. Association for
+  Computational Linguistics.
+\newblock ArXiv:2305.14233.
+
+\bibitem[{Geertzen et~al.(2014)Geertzen, Alexopoulou, and
+  Korhonen}]{geertzen2014efcamdat}
+Jeroen Geertzen, Theodora Alexopoulou, and Anna Korhonen. 2014.
+\newblock Automatic linguistic annotation of large scale l2 databases: The
+  ef-cambridge open language database (efcamdat).
+\newblock In \emph{Selected Proceedings of the 2012 Second Language Research
+  Forum (SLRF)}, Somerville, MA. Cascadilla Proceedings Project.
+
+\bibitem[{Geirhos et~al.(2020)Geirhos, Jacobsen, Michaelis, Zemel, Brendel,
+  Bethge, and Wichmann}]{geirhos2020shortcut}
+Robert Geirhos, J{\"o}rn-Henrik Jacobsen, Claudio Michaelis, Richard Zemel,
+  Wieland Brendel, Matthias Bethge, and Felix~A. Wichmann. 2020.
+\newblock \href {https://doi.org/10.1038/s42256-020-00257-z} {Shortcut learning
+  in deep neural networks}.
+\newblock \emph{Nature Machine Intelligence}, 2(11):665--673.
+
+\bibitem[{Hu et~al.(2022)Hu, Shen, Wallis, Allen-Zhu, Li, Wang, Wang, and
+  Chen}]{hu2022lora}
+Edward~J. Hu, Yelong Shen, Phillip Wallis, Zeyuan Allen-Zhu, Yuanzhi Li, Shean
+  Wang, Lu~Wang, and Weizhu Chen. 2022.
+\newblock Lora: Low-rank adaptation of large language models.
+\newblock In \emph{The Tenth International Conference on Learning
+  Representations (ICLR)}.
+\newblock ArXiv:2106.09685.
+
+\bibitem[{Kim et~al.(2024)Kim, Suk, Longpre, Lin, Shin, Welleck, Neubig, Lee,
+  Lee, and Seo}]{kim2024prometheus}
+Seungone Kim, Juyoung Suk, Shayne Longpre, Bill~Yuchen Lin, Jamin Shin, Sean
+  Welleck, Graham Neubig, Moontae Lee, Kyungjae Lee, and Minjoon Seo. 2024.
+\newblock Prometheus 2: An open source language model specialized in evaluating
+  other language models.
+\newblock In \emph{Proceedings of the 2024 Conference on Empirical Methods in
+  Natural Language Processing (EMNLP)}, pages 4334--4353, Miami, Florida, USA.
+  Association for Computational Linguistics.
+
+\bibitem[{Lambert et~al.(2024)Lambert, Morrison, Pyatkin, Huang, Ivison,
+  Brahman, Miranda, Liu, Dziri, Lyu, Gu, Malik, Graf, Hwang, Chen, Klein,
+  Schwettmann, and Hajishirzi}]{lambert2024tulu3}
+Nathan Lambert, Jacob Morrison, Valentina Pyatkin, Shengyi Huang, Hamish
+  Ivison, Faeze Brahman, Lester James~V. Miranda, Alisa Liu, Nouha Dziri, Shane
+  Lyu, Yuling Gu, Saumya Malik, Victoria Graf, Jena~D. Hwang, Jiangjie Chen,
+  Christopher Klein, Sarah Schwettmann, and Hannaneh Hajishirzi. 2024.
+\newblock Tulu 3: Pushing frontiers in open language model post-training.
+\newblock \emph{arXiv preprint arXiv:2411.15124}.
+
+\bibitem[{Macina et~al.(2023)Macina, Daheim, Chowdhury, Sinha, Kapur, Gurevych,
+  and Sachan}]{macina2023mathdial}
+Jakub Macina, Nico Daheim, Sankalan~Pal Chowdhury, Tanmay Sinha, Manu Kapur,
+  Iryna Gurevych, and Mrinmaya Sachan. 2023.
+\newblock Mathdial: A dialogue tutoring dataset with rich pedagogical
+  properties grounded in math reasoning problems.
+\newblock In \emph{Findings of the Association for Computational Linguistics:
+  EMNLP 2023}, pages 5602--5621, Singapore. Association for Computational
+  Linguistics.
+
+\bibitem[{Mazeika et~al.(2024)Mazeika, Phan, Yin, Zou, Wang, Mu, Sakhaee, Li,
+  Basart, Li, Forsyth, and Hendrycks}]{mazeika2024harmbench}
+Mantas Mazeika, Long Phan, Xuwang Yin, Andy Zou, Zifan Wang, Norman Mu, Elham
+  Sakhaee, Nathaniel Li, Steven Basart, Bo~Li, David Forsyth, and Dan
+  Hendrycks. 2024.
+\newblock Harmbench: A standardized evaluation framework for automated red
+  teaming and robust refusal.
+\newblock In \emph{Proceedings of the 41st International Conference on Machine
+  Learning (ICML)}, volume 235 of \emph{Proceedings of Machine Learning
+  Research}, pages 35181--35224. PMLR.
+
+\bibitem[{McCoy et~al.(2019)McCoy, Pavlick, and Linzen}]{mccoy2019hans}
+R.~Thomas McCoy, Ellie Pavlick, and Tal Linzen. 2019.
+\newblock Right for the wrong reasons: Diagnosing syntactic heuristics in
+  natural language inference.
+\newblock In \emph{Proceedings of the 57th Annual Meeting of the Association
+  for Computational Linguistics (ACL)}, pages 3428--3448, Florence, Italy.
+  Association for Computational Linguistics.
+
+\bibitem[{Min et~al.(2022)Min, Lyu, Holtzman, Artetxe, Lewis, Hajishirzi, and
+  Zettlemoyer}]{min2022rethinking}
+Sewon Min, Xinxi Lyu, Ari Holtzman, Mikel Artetxe, Mike Lewis, Hannaneh
+  Hajishirzi, and Luke Zettlemoyer. 2022.
+\newblock Rethinking the role of demonstrations: What makes in-context learning
+  work?
+\newblock In \emph{Proceedings of the 2022 Conference on Empirical Methods in
+  Natural Language Processing (EMNLP)}.
+
+\bibitem[{Ouyang et~al.(2022)Ouyang, Wu, Jiang, Almeida, Wainwright, Mishkin,
+  Zhang, Agarwal, Slama, Ray, Schulman, Hilton, Kelton, Miller, Simens, Askell,
+  Welinder, Christiano, Leike, and Lowe}]{ouyang2022instructgpt}
+Long Ouyang, Jeffrey Wu, Xu~Jiang, Diogo Almeida, Carroll~L. Wainwright, Pamela
+  Mishkin, Chong Zhang, Sandhini Agarwal, Katarina Slama, Alex Ray, John
+  Schulman, Jacob Hilton, Fraser Kelton, Luke Miller, Maddie Simens, Amanda
+  Askell, Peter Welinder, Paul Christiano, Jan Leike, and Ryan Lowe. 2022.
+\newblock Training language models to follow instructions with human feedback.
+\newblock In \emph{Advances in Neural Information Processing Systems
+  (NeurIPS)}.
+
+\bibitem[{Panickssery et~al.(2024)Panickssery, Bowman, and
+  Feng}]{panickssery2024selfpreference}
+Arjun Panickssery, Samuel~R. Bowman, and Shi Feng. 2024.
+\newblock Llm evaluators recognize and favor their own generations.
+\newblock In \emph{Advances in Neural Information Processing Systems 37
+  (NeurIPS 2024)}.
+\newblock ArXiv:2404.13076.
+
+\bibitem[{Parrish et~al.(2022)Parrish, Chen, Nangia, Padmakumar, Phang,
+  Thompson, Htut, and Bowman}]{parrish2022bbq}
+Alicia Parrish, Angelica Chen, Nikita Nangia, Vishakh Padmakumar, Jason Phang,
+  Jana Thompson, Phu~Mon Htut, and Samuel Bowman. 2022.
+\newblock Bbq: A hand-built bias benchmark for question answering.
+\newblock In \emph{Findings of the Association for Computational Linguistics:
+  ACL 2022}, pages 2086--2105, Dublin, Ireland. Association for Computational
+  Linguistics.
+
+\bibitem[{Saito et~al.(2023)Saito, Wachi, Wataoka, and
+  Akimoto}]{saito2023verbosity}
+Keita Saito, Akifumi Wachi, Koki Wataoka, and Youhei Akimoto. 2023.
+\newblock Verbosity bias in preference labeling by large language models.
+\newblock \emph{arXiv preprint arXiv:2310.10076}.
+
+\bibitem[{Wang et~al.(2024)Wang, Yu, Zeng, Yang, Wang, Chen, Jiang, Xie, Wang,
+  Xie, Ye, Zhang, and Zhang}]{wang2023pandalm}
+Yidong Wang, Zhuohao Yu, Zhengran Zeng, Linyi Yang, Cunxiang Wang, Hao Chen,
+  Chaoya Jiang, Rui Xie, Jindong Wang, Xing Xie, Wei Ye, Shikun Zhang, and Yue
+  Zhang. 2024.
+\newblock Pandalm: An automatic evaluation benchmark for llm instruction tuning
+  optimization.
+\newblock In \emph{The Twelfth International Conference on Learning
+  Representations (ICLR)}.
+\newblock ArXiv:2306.05087.
+
+\bibitem[{Wang et~al.(2023)Wang, Kordi, Mishra, Liu, Smith, Khashabi, and
+  Hajishirzi}]{wang2023selfinstruct}
+Yizhong Wang, Yeganeh Kordi, Swaroop Mishra, Alisa Liu, Noah~A. Smith, Daniel
+  Khashabi, and Hannaneh Hajishirzi. 2023.
+\newblock \href {https://doi.org/10.18653/v1/2023.acl-long.754} {Self-instruct:
+  Aligning language models with self-generated instructions}.
+\newblock In \emph{Proceedings of the 61st Annual Meeting of the Association
+  for Computational Linguistics (Volume 1: Long Papers)}, pages 13484--13508,
+  Toronto, Canada. Association for Computational Linguistics.
+
+\bibitem[{Xu et~al.(2024)Xu, Sun, Zheng, Geng, Zhao, Feng, Tao, and
+  Jiang}]{xu2023wizardlm}
+Can Xu, Qingfeng Sun, Kai Zheng, Xiubo Geng, Pu~Zhao, Jiazhan Feng, Chongyang
+  Tao, and Daxin Jiang. 2024.
+\newblock Wizardlm: Empowering large pre-trained language models to follow
+  complex instructions.
+\newblock In \emph{The Twelfth International Conference on Learning
+  Representations (ICLR)}.
+\newblock ArXiv:2304.12244.
+
+\bibitem[{Zhang et~al.(2018)Zhang, Dinan, Urbanek, Szlam, Kiela, and
+  Weston}]{zhang2018personas}
+Saizheng Zhang, Emily Dinan, Jack Urbanek, Arthur Szlam, Douwe Kiela, and Jason
+  Weston. 2018.
+\newblock Personalizing dialogue agents: I have a dog, do you have pets too?
+\newblock In \emph{Proceedings of the 56th Annual Meeting of the Association
+  for Computational Linguistics (Volume 1: Long Papers)}, pages 2204--2213,
+  Melbourne, Australia. Association for Computational Linguistics.
+
+\bibitem[{Zhou et~al.(2023)Zhou, Liu, Xu, Iyer, Sun, Mao, Ma, Efrat, Yu, Yu,
+  Zhang, Ghosh, Lewis, Zettlemoyer, and Levy}]{zhou2023lima}
+Chunting Zhou, Pengfei Liu, Puxin Xu, Srinivasan Iyer, Jiao Sun, Yuning Mao,
+  Xuezhe Ma, Avia Efrat, Ping Yu, Lili Yu, Susan Zhang, Gargi Ghosh, Mike
+  Lewis, Luke Zettlemoyer, and Omer Levy. 2023.
+\newblock {LIMA}: Less is more for alignment.
+\newblock In \emph{Advances in Neural Information Processing Systems
+  (NeurIPS)}.
+
+\bibitem[{Zhu et~al.(2023)Zhu, Wang, and Wang}]{zhu2023judgelm}
+Lianghui Zhu, Xinggang Wang, and Xinlong Wang. 2023.
+\newblock Judgelm: Fine-tuned large language models are scalable judges.
+\newblock \emph{arXiv preprint arXiv:2310.17631}.
+
+\bibitem[{Zou et~al.(2023)Zou, Wang, Carlini, Nasr, Kolter, and
+  Fredrikson}]{zou2023advbench}
+Andy Zou, Zifan Wang, Nicholas Carlini, Milad Nasr, J.~Zico Kolter, and Matt
+  Fredrikson. 2023.
+\newblock Universal and transferable adversarial attacks on aligned language
+  models.
+\newblock \emph{arXiv preprint arXiv:2307.15043}.
+
+\end{thebibliography}

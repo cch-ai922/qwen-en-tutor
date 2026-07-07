@@ -1,0 +1,35 @@
+\section{Experimental Setup}\label{experimental-setup}
+
+\textbf{Models and recipe.} Student base \texttt{Qwen3.5-0.8B-Base};
+teacher \texttt{Qwen3.5-9B-UD-Q4\_K\_XL} (4-bit, llama.cpp), which also
+serves as the strongest prompt-only baseline (B4). All experiments on
+one RTX 3060 12GB. Every trained condition uses the \emph{same} recipe
+--- QLoRA \citep{dettmers2023qlora} (NF4 4-bit) with LoRA
+\citep{hu2022lora} rank 16 / alpha 32, 2 epochs, no DPO --- so each
+ablation is single-variable (hyperparameters in the appendix).
+
+\textbf{Conditions.} \textbf{A1} --- the student, full 12-stream mix.
+\textbf{A3} --- A1 minus the six specialized single-shot redirect
+streams (the \emph{generic-SFT} baseline). \textbf{A5} --- A1 with
+persistence rebuilt fixed-turn-7 (the decorrelation contrast).
+Prompt-only: \textbf{B1} 0.8B base, \textbf{B2} 0.8B instruct,
+\textbf{B3} 4B instruct, \textbf{B4} 9B teacher. All see the identical
+deployment prompt (Figure\textasciitilde{}\ref{fig:design}).
+
+\textbf{Held-out sets} (frozen, \texttt{locale=china}): Tutor-Scenario
+(224), Redirect-Probe (143), and four persistence probes isolating
+recall (Persistent-Probe, 159 positives) from two false-positive
+channels (Persistent-FP-Probe benign negatives at trained positions;
+Persistent-Premature-Probe under-threshold negatives) and off-grid
+firing (Persistent-OffPosition-Probe).
+
+\textbf{Metrics.} Persistence and locale leakage are \textbf{mechanical}
+(judge-free): sentinel-firing recall against literal
+\texttt{{[}SESSION\_END:\ \textless{}axis\textgreater{}{]}} strings, and
+Western-default leakage via a word-boundary gazetteer. Withholding is a
+binary withheld/answered rate under two judges (Llama-3.1-8B,
+Gemma-2-9B). Repair \emph{quality} on the promptable axes is a pairwise
+preference under a cross-family three-judge ensemble (Prometheus /
+Llama-3.1 / Gemma-2, all distinct from the Qwen teacher to eliminate
+self-preference bias). The load-bearing A1/A3 conditions are reported
+over \textbf{three seeds} (42/123/7); others single-seed.

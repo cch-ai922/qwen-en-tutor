@@ -239,72 +239,73 @@
   "test_set_sizes": {
     "tutor_scenario": 224,
     "locale_leakage": 224,
-    "redirect_probe": 169,
-    "persistent_probe": 142,
+    "redirect_probe": 207,
+    "persistent_probe": 159,
     "persistent_fp_probe": 240,
-    "persistent_offposition_probe": 60
+    "persistent_offposition_probe": 74,
+    "persistent_premature_probe": 318
   },
   "redirect_probe_by_axis_level": {
     "redirect": {
-      "A1": 6,
+      "A1": 10,
       "A2": 10,
-      "B1": 7,
+      "B1": 10,
       "B2": 10,
       "C1": 10,
       "C2": 10
     },
     "locale_redirect": {
-      "A1": 4,
-      "A2": 3,
-      "B1": 3,
-      "B2": 3,
-      "C1": 5,
-      "C2": 2
+      "A1": 5,
+      "A2": 1,
+      "B1": 6,
+      "B2": 4,
+      "C1": 6,
+      "C2": 3
     },
     "pedagogy_redirect": {
       "A1": 4,
       "A2": 3,
       "B1": 3,
-      "B2": 3,
+      "B2": 4,
       "C1": 5,
       "C2": 2
     },
     "language_redirect": {
-      "A1": 4,
+      "A1": 3,
       "A2": 3,
-      "B1": 3,
-      "B2": 2,
+      "B1": 5,
+      "B2": 3,
       "C1": 3,
-      "C2": 2
+      "C2": 4
     },
     "persona_redirect": {
-      "A1": 4,
-      "A2": 3,
-      "B1": 3,
-      "B2": 3,
-      "C1": 5,
+      "A1": 6,
+      "A2": 5,
+      "B1": 6,
+      "B2": 5,
+      "C1": 7,
       "C2": 2
     },
     "topic_redirect": {
-      "A1": 4,
-      "A2": 3,
-      "B1": 3,
-      "B2": 2,
-      "C1": 5,
-      "C2": 2
+      "A1": 5,
+      "A2": 6,
+      "B1": 5,
+      "B2": 4,
+      "C1": 8,
+      "C2": 3
     },
     "role_swap_redirect": {
-      "A1": 4,
-      "A2": 3,
-      "B1": 3,
-      "B2": 3,
-      "C1": 5,
-      "C2": 2
+      "A1": 2,
+      "A2": 2,
+      "B1": 2,
+      "B2": 5,
+      "C1": 4,
+      "C2": 3
     }
   },
   "persistent_probe_by_axis_level": {
     "persistent_off_topic": {
-      "A1": 1,
+      "A1": 2,
       "A2": 3,
       "B1": 10,
       "B2": 3,
@@ -312,28 +313,28 @@
       "C2": 4
     },
     "persistent_language_violation": {
-      "A1": 5,
-      "A2": 8,
+      "A1": 6,
+      "A2": 10,
       "B1": 2,
-      "B2": 4,
-      "C1": 3,
-      "C2": 6
+      "B2": 5,
+      "C1": 4,
+      "C2": 9
     },
     "persistent_persona_break": {
       "A1": 4,
       "A2": 10,
       "B1": 10,
       "B2": 10,
-      "C1": 8,
+      "C1": 10,
       "C2": 10
     },
     "persistent_role_swap": {
       "A1": 6,
-      "A2": 5,
+      "A2": 7,
       "B1": 5,
-      "B2": 8,
-      "C1": 7,
-      "C2": 8
+      "B2": 9,
+      "C1": 8,
+      "C2": 10
     }
   },
   "persistent_fp_probe_by_position": {
@@ -343,7 +344,17 @@
     "11": 60
   },
   "persistent_offposition_probe_by_position": {
-    "13": 30,
-    "15": 30
+    "13": 37,
+    "15": 37
+  },
+  "persistent_premature_probe_by_viol_pos": {
+    "viol1_p1": 67,
+    "viol1_p3": 33,
+    "viol1_p5": 23,
+    "viol1_p7": 36,
+    "viol2_p3": 67,
+    "viol2_p5": 33,
+    "viol2_p7": 23,
+    "viol2_p9": 36
   }
 }

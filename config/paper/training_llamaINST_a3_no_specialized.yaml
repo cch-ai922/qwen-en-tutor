@@ -1,0 +1,142 @@
+# =============================================================================
+# paper/training_llama_a3_no_specialized.yaml
+#   Cross-family A3 (Llama-3.2-1B-Base) — GENERIC-SFT baseline
+# =============================================================================
+#
+# CROSS-FAMILY REPLICATION (§6.3). Mirrors the Qwen A3 condition: A1's full mix
+# MINUS the 6 specialized single-shot redirect streams (locale, pedagogy,
+# language, persona, topic, role_swap). This is the generic-SFT baseline that
+# isolates the specialized-data effect. SFT-ONLY.
+#
+# Differs from training_llama_a1_full.yaml in EXACTLY two lines:
+#   - sft.output_dir             -> outputs/paper/llamaINST_a3/sft
+#   - sft.data.sft_filtered_dir  -> data/sft_filtered_a3   (pre-built subset)
+# Everything else (base, LoRA, hyperparameters, seed) is identical, so the
+# A1-vs-A3 comparison is single-variable within the Llama family.
+#
+# Run (after A1, GPU free, teacher stopped):
+#   $env:PYTHONUTF8 = "1"
+#   python scripts/run_training.py `
+#       --training-config config/paper/training_llama_a3_no_specialized.yaml `
+#       --stages train_sft
+# -----------------------------------------------------------------------------
+
+
+base_model:
+  model_id: "./vendor/models/Llama-3.2-1B-Instruct"
+  tokenizer_id: "./vendor/models/Llama-3.2-1B-Instruct"
+  trust_remote_code: false
+  attn_implementation: "sdpa"
+  torch_dtype: "bfloat16"
+  quantization:
+    enabled: true
+    load_in_4bit: true
+    bnb_4bit_quant_type: "nf4"
+    bnb_4bit_compute_dtype: "bfloat16"
+    bnb_4bit_use_double_quant: true
+  gradient_checkpointing: true
+
+
+lora:
+  r: 16
+  lora_alpha: 32
+  lora_dropout: 0.05
+  bias: "none"
+  task_type: "CAUSAL_LM"
+  target_modules:
+    - q_proj
+    - k_proj
+    - v_proj
+    - o_proj
+    - gate_proj
+    - up_proj
+    - down_proj
+
+
+sft:
+  output_dir: "outputs/paper/llamaINST_a3/sft"
+  # 2 epochs to match A1 (resumes from the 1-epoch checkpoint). See A1 config
+  # note: 1 epoch was insufficient for the rare <|eot_id|> token on Llama-Base.
+  num_train_epochs: 1
+  max_steps: -1
+  per_device_train_batch_size: 1
+  per_device_eval_batch_size: 1
+  gradient_accumulation_steps: 8
+  learning_rate: 2.0e-4
+  warmup_ratio: 0.05
+  lr_scheduler_type: "cosine"
+  weight_decay: 0.01
+  max_seq_length: 1792
+  packing: false
+  bf16: true
+  fp16: false
+  optim: "paged_adamw_8bit"
+  logging_steps: 1
+  logging_first_step: true
+  log_level: "info"
+  eval_strategy: "no"
+  save_strategy: "steps"
+  save_steps: 100
+  save_total_limit: 3
+  load_best_model_at_end: false
+  report_to: "none"
+  seed: 42
+
+  data:
+    # A3 = generic-SFT: normal + generic redirect + persistent ONLY (no
+    # specialized single-shot streams). Same pre-built subset the Qwen A3 uses.
+    sft_filtered_dir: "data/sft_filtered_a3"
+    eval_filtered_dir: "data/eval_filtered"
+    holdout_dir: "data/holdout"
+    mix_ratio_sft: 0.80
+    mix_ratio_eval: 0.20
+    use_all_data: true
+    validation_split: 0.05
+    shuffle_seed: 42
+
+
+dpo:
+  output_dir: "outputs/paper/llamaINST_a3/dpo"
+  num_train_epochs: 1
+  per_device_train_batch_size: 1
+  gradient_accumulation_steps: 8
+  learning_rate: 5.0e-6
+  beta: 0.1
+  loss_type: "sigmoid"
+  max_length: 2400
+  max_prompt_length: 1500
+  bf16: true
+  optim: "paged_adamw_8bit"
+  save_strategy: "no"
+  report_to: "none"
+  seed: 42
+  sft_adapter_path: "outputs/paper/llamaINST_a3/sft"
+  ref_model: null
+  data:
+    dpo_filtered_dir: "data/dpo_filtered"
+    validation_split: 0.05
+    shuffle_seed: 42
+    use_all_data: true
+
+on_policy:
+  enabled: false
+
+
+logging:
+  wandb_project: "qwen-en-tutor"
+  wandb_entity: null
+  wandb_run_name_prefix: "paper-llamaINST-a3-no-specialized"
+
+eval_callback:
+  enabled: false
+
+evaluation:
+  holdout_dir: data/holdout
+  n_per_level: 3
+  concurrency: 2
+  intermediate_adapter_path: outputs/paper/llamaINST_a3/sft
+  final_adapter_path: outputs/paper/llamaINST_a3/sft
+
+comparison:
+  threshold: 0.05
+  fail_on_regression: false

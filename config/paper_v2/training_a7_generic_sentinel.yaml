@@ -1,0 +1,119 @@
+# =============================================================================
+# paper/training_a7_generic_sentinel.yaml  -  Condition A7
+# =============================================================================
+#
+# Condition: identical to A2 (full 12-stream mix, 4-variant persistent
+# spread across turns 5/7/9/11) EXCEPT the 4 persistent streams use the
+# GENERIC sentinel ``[SESSION_END]`` instead of the axis-specific
+# ``[SESSION_END: persistent_<axis>]`` form. The deployment system
+# prompt is also switched (via QWEN_TUTOR_SENTINEL_FORMAT=generic) to
+# the generic [persistence] block.
+#
+# Together with A2/A5/A6, A7 completes a 2x2 design:
+#
+#                       4-variant persistent     fixed turn-7
+#   axis-specific:           A2                       A5
+#   generic [SESSION_END]:   A7  (this config)        A6
+#
+# Comparisons:
+#   - A2 vs A7:  axis-label effect with natural (4-variant) position spread
+#   - A5 vs A6:  axis-label effect with fixed turn-7 anchoring
+#   - A2 vs A5:  position-anchoring effect with the axis label held
+#   - A6 vs A7:  position-anchoring effect with the label held generic
+#
+# Training streams: same 12 streams as A1/A2 (full mix)
+# Pre-req before launching training:
+#   1. Convert A1/A2 persistent data to generic sentinel:
+#        python scripts/convert_a1_to_a7.py
+#                                       # writes data/sft_filtered_a7_persistent/
+#   2. Materialize the combined A7 SFT dir:
+#        python scripts/setup_paper_ablation_data.py --conditions a7
+#      This hardlinks normal + redirect streams from data/sft_filtered/
+#      and persistent streams from data/sft_filtered_a7_persistent/ into
+#      data/sft_filtered_a7/.
+#   3. At eval time, set QWEN_TUTOR_SENTINEL_FORMAT=generic for the
+#      paper_a7_sft baseline (orchestrator handles this via the
+#      requires_env field in run_paper_eval.BASELINES).
+# -----------------------------------------------------------------------------
+
+base_model:
+  model_id: "./vendor/models/Qwen_3.5_0.8B-Base"
+  tokenizer_id: "./vendor/models/Qwen_3.5_0.8B-Base"
+  trust_remote_code: true
+  attn_implementation: "sdpa"
+  torch_dtype: "bfloat16"
+  quantization:
+    enabled: true
+    load_in_4bit: true
+    bnb_4bit_quant_type: "nf4"
+    bnb_4bit_compute_dtype: "bfloat16"
+    bnb_4bit_use_double_quant: true
+  gradient_checkpointing: true
+
+lora:
+  r: 16
+  lora_alpha: 32
+  lora_dropout: 0.05
+  bias: "none"
+  task_type: "CAUSAL_LM"
+  target_modules:
+    - q_proj
+    - k_proj
+    - v_proj
+    - o_proj
+    - gate_proj
+    - up_proj
+    - down_proj
+
+sft:
+  output_dir: "outputs/paper_v2/a7/sft"
+  num_train_epochs: 1
+  max_steps: -1
+  per_device_train_batch_size: 1
+  per_device_eval_batch_size: 1
+  gradient_accumulation_steps: 8
+  learning_rate: 2.0e-4
+  warmup_ratio: 0.05
+  lr_scheduler_type: "cosine"
+  weight_decay: 0.01
+  max_seq_length: 1792
+  packing: false
+  bf16: true
+  fp16: false
+  optim: "paged_adamw_8bit"
+  logging_steps: 5
+  eval_strategy: "no"
+  save_strategy: "steps"
+  save_steps: 50
+  save_total_limit: 2
+  load_best_model_at_end: false
+  report_to: "none"
+  seed: 42
+  data:
+    sft_filtered_dir: "data/sft_filtered_a7"
+    eval_filtered_dir: "data/eval_filtered"
+    holdout_dir: "data/holdout"
+    mix_ratio_sft: 0.80
+    mix_ratio_eval: 0.20
+    use_all_data: true
+    validation_split: 0.05
+    shuffle_seed: 42
+
+logging:
+  wandb_project: "qwen-en-tutor"
+  wandb_entity: null
+  wandb_run_name_prefix: "paper-v2-a7-generic-sentinel"
+
+eval_callback:
+  enabled: false
+
+evaluation:
+  holdout_dir: data/holdout
+  n_per_level: 3
+  concurrency: 2
+  intermediate_adapter_path: outputs/paper_v2/a7/sft
+  final_adapter_path: outputs/paper_v2/a7/sft
+
+comparison:
+  threshold: 0.05
+  fail_on_regression: false

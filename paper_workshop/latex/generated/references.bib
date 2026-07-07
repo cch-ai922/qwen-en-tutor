@@ -1,0 +1,392 @@
+% =========================================================================
+% references.bib  —  BibTeX skeleton for the qwen-en-tutor paper
+% =========================================================================
+%
+% Citations referenced in the paper drafts (sections/02_related_work.md,
+% sections/03_method.md, sections/06_discussion.md). Venue, pages, and
+% DOIs have been verified against ACL Anthology / NeurIPS / ICML / arXiv
+% as of 2026-06. A few remaining preprint-only entries (JudgeLM, AdvBench,
+% Verbosity Bias, EduChat) are still arXiv-only; upgrade if they appear at
+% a venue before submission.
+% NOTE: BibTeX does not honour percent-sign comments the way LaTeX does --
+% it stops at any at-sign in column zero. Keep at-signs out of comment
+% bodies in this file or bibtex will try to parse them as entries.
+%
+% Grouped by topic to match §2 subsections.
+
+% ------------------------------------------------------------------------
+% Prompting vs. fine-tuning boundary (framing for §1, §2.5)
+% ------------------------------------------------------------------------
+@inproceedings{zhou2023lima,
+  title     = {{LIMA}: Less Is More for Alignment},
+  author    = {Zhou, Chunting and Liu, Pengfei and Xu, Puxin and Iyer, Srinivasan and Sun, Jiao and Mao, Yuning and Ma, Xuezhe and Efrat, Avia and Yu, Ping and Yu, Lili and Zhang, Susan and Ghosh, Gargi and Lewis, Mike and Zettlemoyer, Luke and Levy, Omer},
+  booktitle = {Advances in Neural Information Processing Systems (NeurIPS)},
+  year      = {2023},
+}
+
+@inproceedings{ouyang2022instructgpt,
+  title     = {Training Language Models to Follow Instructions with Human Feedback},
+  author    = {Ouyang, Long and Wu, Jeffrey and Jiang, Xu and Almeida, Diogo and Wainwright, Carroll L. and Mishkin, Pamela and Zhang, Chong and Agarwal, Sandhini and Slama, Katarina and Ray, Alex and Schulman, John and Hilton, Jacob and Kelton, Fraser and Miller, Luke and Simens, Maddie and Askell, Amanda and Welinder, Peter and Christiano, Paul and Leike, Jan and Lowe, Ryan},
+  booktitle = {Advances in Neural Information Processing Systems (NeurIPS)},
+  year      = {2022},
+}
+
+@inproceedings{min2022rethinking,
+  title     = {Rethinking the Role of Demonstrations: What Makes In-Context Learning Work?},
+  author    = {Min, Sewon and Lyu, Xinxi and Holtzman, Ari and Artetxe, Mikel and Lewis, Mike and Hajishirzi, Hannaneh and Zettlemoyer, Luke},
+  booktitle = {Proceedings of the 2022 Conference on Empirical Methods in Natural Language Processing (EMNLP)},
+  year      = {2022},
+}
+
+% ------------------------------------------------------------------------
+% §2.1 Synthetic instruction-tuning data
+% ------------------------------------------------------------------------
+
+@inproceedings{wang2023selfinstruct,
+  author    = {Yizhong Wang and Yeganeh Kordi and Swaroop Mishra and Alisa Liu and
+               Noah A. Smith and Daniel Khashabi and Hannaneh Hajishirzi},
+  title     = {Self-Instruct: Aligning Language Models with Self-Generated Instructions},
+  booktitle = {Proceedings of the 61st Annual Meeting of the Association for Computational Linguistics (Volume 1: Long Papers)},
+  pages     = {13484--13508},
+  address   = {Toronto, Canada},
+  publisher = {Association for Computational Linguistics},
+  doi       = {10.18653/v1/2023.acl-long.754},
+  year      = {2023}
+}
+
+@inproceedings{xu2023wizardlm,
+  author    = {Can Xu and Qingfeng Sun and Kai Zheng and Xiubo Geng and
+               Pu Zhao and Jiazhan Feng and Chongyang Tao and Daxin Jiang},
+  title     = {WizardLM: Empowering Large Pre-Trained Language Models to Follow Complex Instructions},
+  booktitle = {The Twelfth International Conference on Learning Representations (ICLR)},
+  year      = {2024},
+  note      = {arXiv:2304.12244}
+}
+
+@inproceedings{ding2023ultrachat,
+  author    = {Ning Ding and Yulin Chen and Bokai Xu and Yujia Qin and
+               Zhi Zheng and Shengding Hu and Zhiyuan Liu and Maosong Sun and Bowen Zhou},
+  title     = {Enhancing Chat Language Models by Scaling High-quality Instructional Conversations},
+  booktitle = {Proceedings of the 2023 Conference on Empirical Methods in Natural Language Processing (EMNLP)},
+  address   = {Singapore},
+  publisher = {Association for Computational Linguistics},
+  year      = {2023},
+  note      = {arXiv:2305.14233}
+}
+
+@inproceedings{kopf2023openassistant,
+  author    = {Andreas K{\"o}pf and Yannic Kilcher and Dimitri von R{\"u}tte and
+               Sotiris Anagnostidis and Zhi-Rui Tam and Keith Stevens and
+               Abdullah Barhoum and Nguyen Minh Duc and Oliver Stanley and
+               Rich{\'a}rd Nagyfi and Shahul ES and Sameer Suri and David Glushkov and
+               Arnav Dantuluri and Andrew Maguire and Christoph Schuhmann and
+               Huu Nguyen and Alexander Mattick},
+  title     = {OpenAssistant Conversations -- Democratizing Large Language Model Alignment},
+  booktitle = {Advances in Neural Information Processing Systems 36 (NeurIPS 2023) Datasets and Benchmarks Track},
+  year      = {2023},
+  note      = {arXiv:2304.07327}
+}
+
+@misc{chiang2023vicuna,
+  author    = {Wei-Lin Chiang and Zhuohan Li and Zi Lin and Ying Sheng and
+               Zhanghao Wu and Hao Zhang and Lianmin Zheng and Siyuan Zhuang and
+               Yonghao Zhuang and Joseph E. Gonzalez and Ion Stoica and Eric P. Xing},
+  title     = {Vicuna: An Open-Source Chatbot Impressing GPT-4 with 90\% ChatGPT Quality},
+  year      = {2023},
+  note      = {LMSYS Blog},
+  howpublished = {\url{https://lmsys.org/blog/2023-03-30-vicuna/}}
+}
+
+@article{lambert2024tulu3,
+  author    = {Nathan Lambert and Jacob Morrison and Valentina Pyatkin and
+               Shengyi Huang and Hamish Ivison and Faeze Brahman and
+               Lester James V. Miranda and Alisa Liu and Nouha Dziri and
+               Shane Lyu and Yuling Gu and Saumya Malik and Victoria Graf and
+               Jena D. Hwang and Jiangjie Chen and Christopher Klein and Sarah Schwettmann and
+               Hannaneh Hajishirzi},
+  title     = {Tulu 3: Pushing Frontiers in Open Language Model Post-Training},
+  journal   = {arXiv preprint arXiv:2411.15124},
+  year      = {2024}
+}
+
+@article{grattafiori2024llama3,
+  author    = {Aaron Grattafiori and Abhimanyu Dubey and Abhinav Jauhri and {others}},
+  title     = {The Llama 3 Herd of Models},
+  journal   = {arXiv preprint arXiv:2407.21783},
+  year      = {2024},
+  note      = {Cited for the Llama-3.1-8B-Instruct judge (\S4.7).}
+}
+
+% ------------------------------------------------------------------------
+% §2.2 LLM-as-judge filtering
+% ------------------------------------------------------------------------
+
+@inproceedings{kim2024prometheus,
+  author    = {Seungone Kim and Juyoung Suk and Shayne Longpre and Bill Yuchen Lin and
+               Jamin Shin and Sean Welleck and Graham Neubig and Moontae Lee and
+               Kyungjae Lee and Minjoon Seo},
+  title     = {Prometheus 2: An Open Source Language Model Specialized in Evaluating Other Language Models},
+  booktitle = {Proceedings of the 2024 Conference on Empirical Methods in Natural Language Processing (EMNLP)},
+  pages     = {4334--4353},
+  address   = {Miami, Florida, USA},
+  publisher = {Association for Computational Linguistics},
+  year      = {2024}
+}
+
+@article{zhu2023judgelm,
+  author    = {Lianghui Zhu and Xinggang Wang and Xinlong Wang},
+  title     = {JudgeLM: Fine-tuned Large Language Models are Scalable Judges},
+  journal   = {arXiv preprint arXiv:2310.17631},
+  year      = {2023}
+}
+
+@inproceedings{wang2023pandalm,
+  author    = {Yidong Wang and Zhuohao Yu and Zhengran Zeng and Linyi Yang and
+               Cunxiang Wang and Hao Chen and Chaoya Jiang and Rui Xie and
+               Jindong Wang and Xing Xie and Wei Ye and Shikun Zhang and Yue Zhang},
+  title     = {PandaLM: An Automatic Evaluation Benchmark for LLM Instruction Tuning Optimization},
+  booktitle = {The Twelfth International Conference on Learning Representations (ICLR)},
+  year      = {2024},
+  note      = {arXiv:2306.05087}
+}
+
+@inproceedings{zheng2023judging,
+  author    = {Lianmin Zheng and Wei-Lin Chiang and Ying Sheng and
+               Siyuan Zhuang and Zhanghao Wu and Yonghao Zhuang and
+               Zi Lin and Zhuohan Li and Dacheng Li and Eric P. Xing and
+               Hao Zhang and Joseph E. Gonzalez and Ion Stoica},
+  title     = {Judging LLM-as-a-Judge with MT-Bench and Chatbot Arena},
+  booktitle = {Advances in Neural Information Processing Systems 36 (NeurIPS 2023) Datasets and Benchmarks Track},
+  year      = {2023},
+  note      = {arXiv:2306.05685}
+}
+
+@article{saito2023verbosity,
+  author    = {Keita Saito and Akifumi Wachi and Koki Wataoka and Youhei Akimoto},
+  title     = {Verbosity Bias in Preference Labeling by Large Language Models},
+  journal   = {arXiv preprint arXiv:2310.10076},
+  year      = {2023}
+}
+
+@inproceedings{panickssery2024selfpreference,
+  author    = {Arjun Panickssery and Samuel R. Bowman and Shi Feng},
+  title     = {LLM Evaluators Recognize and Favor Their Own Generations},
+  booktitle = {Advances in Neural Information Processing Systems 37 (NeurIPS 2024)},
+  year      = {2024},
+  note      = {arXiv:2404.13076}
+}
+
+% ------------------------------------------------------------------------
+% §2.3 Tutor and educational LLMs
+% ------------------------------------------------------------------------
+
+@article{dan2023educhat,
+  author    = {Yuhao Dan and Zhikai Lei and Yiyang Gu and Yong Li and Jianghao Yin and
+               Jiaju Lin and Linhao Ye and Zhiyan Tie and Yougen Zhou and
+               Yilei Wang and Aimin Zhou and Ze Zhou and Qin Chen and Jie Zhou and
+               Liang He and Xipeng Qiu},
+  title     = {EduChat: A Large-Scale Language Model-based Chatbot System for Intelligent Education},
+  journal   = {arXiv preprint arXiv:2308.02773},
+  year      = {2023}
+}
+
+@inproceedings{macina2023mathdial,
+  author    = {Jakub Macina and Nico Daheim and Sankalan Pal Chowdhury and
+               Tanmay Sinha and Manu Kapur and Iryna Gurevych and Mrinmaya Sachan},
+  title     = {MathDial: A Dialogue Tutoring Dataset with Rich Pedagogical Properties Grounded in Math Reasoning Problems},
+  booktitle = {Findings of the Association for Computational Linguistics: EMNLP 2023},
+  pages     = {5602--5621},
+  address   = {Singapore},
+  publisher = {Association for Computational Linguistics},
+  year      = {2023}
+}
+
+@inproceedings{caines2023chatbots,
+  author    = {Andrew Caines and Luca Benedetto and Shiva Taslimipoor and
+               Christopher Davis and Yuan Gao and {\O}istein Andersen and
+               Zheng Yuan and Mark Elliott and Russell Moore and Christopher Bryant and
+               Marek Rei and Helen Yannakoudakis and Andrew Mullooly and Diane Nicholls and
+               Paula Buttery},
+  title     = {On the Application of Large Language Models for Language Teaching and Assessment Technology},
+  booktitle = {Proceedings of the AIED 2023 Workshop on Empowering Education with LLMs -- the Next-Gen Interface and Content Generation},
+  year      = {2023},
+  note      = {arXiv:2307.08393}
+}
+
+@inproceedings{tyen2022opendomain,
+  author    = {Gladys Tyen and Mark Brenchley and Andrew Caines and Paula Buttery},
+  title     = {Towards an Open-Domain Chatbot for Language Practice},
+  booktitle = {Proceedings of the 17th Workshop on Innovative Use of NLP for Building Educational Applications (BEA)},
+  pages     = {234--249},
+  year      = {2022}
+}
+
+@inproceedings{geertzen2014efcamdat,
+  author    = {Jeroen Geertzen and Theodora Alexopoulou and Anna Korhonen},
+  title     = {Automatic Linguistic Annotation of Large Scale L2 Databases: The EF-Cambridge Open Language Database (EFCAMDAT)},
+  booktitle = {Selected Proceedings of the 2012 Second Language Research Forum (SLRF)},
+  publisher = {Cascadilla Proceedings Project},
+  address   = {Somerville, MA},
+  year      = {2014}
+}
+
+@inproceedings{berzak2016tle,
+  author    = {Yevgeni Berzak and Jessica Kenney and Carolyn Spadine and Jing Xian Wang and
+               Lucia Lam and Keiko Sophie Mori and Sebastian Garza and Boris Katz},
+  title     = {Universal Dependencies for Learner {E}nglish},
+  booktitle = {Proceedings of the 54th Annual Meeting of the Association for
+               Computational Linguistics (Volume 1: Long Papers)},
+  pages     = {737--746},
+  address   = {Berlin, Germany},
+  doi       = {10.18653/v1/P16-1070},
+  year      = {2016},
+  note      = {The Treebank of Learner English (TLE). VERIFY pages/DOI against the ACL Anthology (P16-1070).}
+}
+
+@inproceedings{chen2018learningq,
+  author    = {Guanliang Chen and Jie Yang and Claudia Hauff and Geert-Jan Houben},
+  title     = {LearningQ: A Large-Scale Dataset for Educational Question Generation},
+  booktitle = {Proceedings of the 12th International AAAI Conference on Web and Social Media (ICWSM)},
+  year      = {2018}
+}
+
+% ------------------------------------------------------------------------
+% §2.4 Persona, safety, and adversarial dialogue data
+% ------------------------------------------------------------------------
+
+@inproceedings{parrish2022bbq,
+  author    = {Alicia Parrish and Angelica Chen and Nikita Nangia and
+               Vishakh Padmakumar and Jason Phang and Jana Thompson and
+               Phu Mon Htut and Samuel Bowman},
+  title     = {BBQ: A Hand-Built Bias Benchmark for Question Answering},
+  booktitle = {Findings of the Association for Computational Linguistics: ACL 2022},
+  pages     = {2086--2105},
+  address   = {Dublin, Ireland},
+  publisher = {Association for Computational Linguistics},
+  year      = {2022}
+}
+
+@inproceedings{mazeika2024harmbench,
+  author    = {Mantas Mazeika and Long Phan and Xuwang Yin and Andy Zou and
+               Zifan Wang and Norman Mu and Elham Sakhaee and Nathaniel Li and
+               Steven Basart and Bo Li and David Forsyth and Dan Hendrycks},
+  title     = {HarmBench: A Standardized Evaluation Framework for Automated Red Teaming and Robust Refusal},
+  booktitle = {Proceedings of the 41st International Conference on Machine Learning (ICML)},
+  series    = {Proceedings of Machine Learning Research},
+  volume    = {235},
+  pages     = {35181--35224},
+  publisher = {PMLR},
+  year      = {2024}
+}
+
+@article{zou2023advbench,
+  author    = {Andy Zou and Zifan Wang and Nicholas Carlini and Milad Nasr and
+               J. Zico Kolter and Matt Fredrikson},
+  title     = {Universal and Transferable Adversarial Attacks on Aligned Language Models},
+  journal   = {arXiv preprint arXiv:2307.15043},
+  year      = {2023}
+}
+
+@inproceedings{zhang2018personas,
+  author    = {Saizheng Zhang and Emily Dinan and Jack Urbanek and Arthur Szlam and
+               Douwe Kiela and Jason Weston},
+  title     = {Personalizing Dialogue Agents: I have a dog, do you have pets too?},
+  booktitle = {Proceedings of the 56th Annual Meeting of the Association for Computational Linguistics (Volume 1: Long Papers)},
+  pages     = {2204--2213},
+  address   = {Melbourne, Australia},
+  publisher = {Association for Computational Linguistics},
+  year      = {2018}
+}
+
+@inproceedings{deshpande2023toxicity,
+  author    = {Ameet Deshpande and Vishvak Murahari and Tanmay Rajpurohit and
+               Ashwin Kalyan and Karthik Narasimhan},
+  title     = {Toxicity in {ChatGPT}: Analyzing Persona-assigned Language Models},
+  booktitle = {Findings of the Association for Computational Linguistics: EMNLP 2023},
+  pages     = {1236--1270},
+  address   = {Singapore},
+  publisher = {Association for Computational Linguistics},
+  year      = {2023}
+}
+
+% ------------------------------------------------------------------------
+% Methods / techniques referenced in §3
+% ------------------------------------------------------------------------
+
+@inproceedings{rafailov2023dpo,
+  author    = {Rafael Rafailov and Archit Sharma and Eric Mitchell and
+               Stefano Ermon and Christopher D. Manning and Chelsea Finn},
+  title     = {Direct Preference Optimization: Your Language Model is Secretly a Reward Model},
+  booktitle = {Advances in Neural Information Processing Systems 36 (NeurIPS 2023)},
+  year      = {2023},
+  note      = {arXiv:2305.18290}
+}
+
+@inproceedings{hu2022lora,
+  author    = {Edward J. Hu and Yelong Shen and Phillip Wallis and Zeyuan Allen-Zhu and
+               Yuanzhi Li and Shean Wang and Lu Wang and Weizhu Chen},
+  title     = {LoRA: Low-Rank Adaptation of Large Language Models},
+  booktitle = {The Tenth International Conference on Learning Representations (ICLR)},
+  year      = {2022},
+  note      = {arXiv:2106.09685}
+}
+
+@inproceedings{dettmers2023qlora,
+  author    = {Tim Dettmers and Artidoro Pagnoni and Ari Holtzman and Luke Zettlemoyer},
+  title     = {QLoRA: Efficient Finetuning of Quantized LLMs},
+  booktitle = {Advances in Neural Information Processing Systems 36 (NeurIPS 2023)},
+  year      = {2023},
+  note      = {arXiv:2305.14314}
+}
+
+% ------------------------------------------------------------------------
+% Shortcut learning / spurious cues (added for §2.4 positioning of the
+% positional-shortcut defense). Verify venue/pages before camera-ready.
+% ------------------------------------------------------------------------
+
+@article{geirhos2020shortcut,
+  author    = {Robert Geirhos and J{\"o}rn-Henrik Jacobsen and Claudio Michaelis and
+               Richard Zemel and Wieland Brendel and Matthias Bethge and Felix A. Wichmann},
+  title     = {Shortcut Learning in Deep Neural Networks},
+  journal   = {Nature Machine Intelligence},
+  volume    = {2},
+  number    = {11},
+  pages     = {665--673},
+  doi       = {10.1038/s42256-020-00257-z},
+  year      = {2020}
+}
+
+@inproceedings{mccoy2019hans,
+  author    = {R. Thomas McCoy and Ellie Pavlick and Tal Linzen},
+  title     = {Right for the Wrong Reasons: Diagnosing Syntactic Heuristics in Natural Language Inference},
+  booktitle = {Proceedings of the 57th Annual Meeting of the Association for Computational Linguistics (ACL)},
+  pages     = {3428--3448},
+  address   = {Florence, Italy},
+  publisher = {Association for Computational Linguistics},
+  year      = {2019}
+}
+
+@inproceedings{gururangan2018artifacts,
+  author    = {Suchin Gururangan and Swabha Swayamdipta and Omer Levy and
+               Roy Schwartz and Samuel R. Bowman and Noah A. Smith},
+  title     = {Annotation Artifacts in Natural Language Inference Data},
+  booktitle = {Proceedings of the 2018 Conference of the North American Chapter of the Association for Computational Linguistics: Human Language Technologies (NAACL-HLT)},
+  pages     = {107--112},
+  address   = {New Orleans, Louisiana},
+  publisher = {Association for Computational Linguistics},
+  year      = {2018}
+}
+
+% ------------------------------------------------------------------------
+% Cross-family judge ensemble (paper §4.7). Verify venue/pages before
+% camera-ready.
+% ------------------------------------------------------------------------
+
+@article{gemmateam2024gemma2,
+  author    = {{Gemma Team} and Morgane Riviere and Shreya Pathak and Pier Giuseppe Sessa and
+               Cassidy Hardin and Surya Bhupatiraju and L{\'e}onard Hussenot and Thomas Mesnard and
+               Bobak Shahriari and Alexandre Ram{\'e} and Johan Ferret and others},
+  title     = {Gemma 2: Improving Open Language Models at a Practical Size},
+  journal   = {arXiv preprint arXiv:2408.00118},
+  year      = {2024}
+}

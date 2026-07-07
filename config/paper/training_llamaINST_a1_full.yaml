@@ -1,0 +1,173 @@
+# =============================================================================
+# paper/training_llama_a1_full.yaml  -  Cross-family A1 (Llama-3.2-1B-Base)
+# =============================================================================
+#
+# CROSS-FAMILY REPLICATION (§6.3 future-work item 4). Mirrors the Qwen A1
+# condition — full 12-stream SFT mix — but on a Llama base, to test whether SFT
+# installs persistence/withholding in a second family. SFT-ONLY (no DPO), to
+# match the load-bearing A1-vs-A3 contrast the boundary rests on.
+#
+# Run (GPU must be free; teacher server stopped):
+#   $env:PYTHONUTF8 = "1"
+#   python scripts/run_training.py `
+#       --training-config config/paper/training_llama_a1_full.yaml `
+#       --stages train_sft
+#
+# Base = Llama-3.2-1B-*Instruct* (parallel run). Instruct already emits
+# <|eot_id|> from its own post-training, so 1 epoch suffices for clean turn
+# termination (the Base 1-epoch run could not; see the Base config). Reintroduces
+# a base-vs-instruct asymmetry vs Qwen, reported as a footnote.
+# (orig note) Base = Llama-3.2-1B-*Base* — a clean base-vs-base match to the Qwen A1 student
+# (which also trained from a base checkpoint), so there is no train-from-instruct
+# asymmetry to caveat. The SFT formatter is family-aware (src/.../formatter.py):
+# it detects the Llama-3 chat markers (<|start_header_id|>assistant<|end_header_id|>
+# ... <|eot_id|>) and masks assistant spans correctly — verified against a real
+# record before training. The base tokenizer has no pad token (set to eos at load)
+# and eos=<|end_of_text|>, but the template ends turns with <|eot_id|>; the eval
+# generate path halts on both.
+# -----------------------------------------------------------------------------
+
+
+# -----------------------------------------------------------------------------
+# Base model + quantization
+# -----------------------------------------------------------------------------
+# Llama-3.2-1B-Base is architectures=["LlamaForCausalLM"] — NOT multimodal,
+# so model_loader.py routes it straight to AutoModelForCausalLM (no wrapper).
+# We keep sdpa for parity with the Qwen runs; flash_attention_2 is also safe on
+# Llama if you've verified it's built for this environment.
+base_model:
+  model_id: "./vendor/models/Llama-3.2-1B-Instruct"
+  tokenizer_id: "./vendor/models/Llama-3.2-1B-Instruct"
+  trust_remote_code: false                 # stock Llama arch; no remote code
+  attn_implementation: "sdpa"
+  torch_dtype: "bfloat16"
+  quantization:
+    enabled: true                          # 4-bit; comfortable on 12GB for 1B
+    load_in_4bit: true
+    bnb_4bit_quant_type: "nf4"
+    bnb_4bit_compute_dtype: "bfloat16"
+    bnb_4bit_use_double_quant: true
+  gradient_checkpointing: true
+
+
+# -----------------------------------------------------------------------------
+# LoRA adapter
+# -----------------------------------------------------------------------------
+# Same 7 target modules as Qwen (Llama uses identical projection names), same
+# rank/alpha/dropout, so the recipe is single-variable across families.
+lora:
+  r: 16
+  lora_alpha: 32
+  lora_dropout: 0.05
+  bias: "none"
+  task_type: "CAUSAL_LM"
+  target_modules:
+    - q_proj
+    - k_proj
+    - v_proj
+    - o_proj
+    - gate_proj
+    - up_proj
+    - down_proj
+
+
+# -----------------------------------------------------------------------------
+# SFT  (identical hyperparameters to Qwen A1: 2 epochs, eff. batch 8, lr 2e-4)
+# -----------------------------------------------------------------------------
+sft:
+  output_dir: "outputs/paper/llamaINST_a1/sft"
+  # 2 epochs. The 1-epoch Base run never learned to emit the rare <|eot_id|>
+  # turn-end token (P(eot)~0.002 at turn boundaries → generation never stops),
+  # so we resume from the 1-epoch checkpoint (step 397) for a 2nd epoch. This
+  # also epoch-matches the Qwen 2-epoch student. Resume is automatic (checkpoints
+  # carry optimizer/scheduler state).
+  num_train_epochs: 1
+  max_steps: -1
+  per_device_train_batch_size: 1
+  per_device_eval_batch_size: 1
+  gradient_accumulation_steps: 8
+  learning_rate: 2.0e-4
+  warmup_ratio: 0.05
+  lr_scheduler_type: "cosine"
+  weight_decay: 0.01
+  # Llama-3.2 tokenizer renders the ~1100-token Qwen-authored system prompt to a
+  # similar length. 1792 keeps the same ceiling as Qwen A1; a 1B Llama in 4-bit
+  # has more VRAM headroom than the 0.8B Qwen multimodal wrapper, so this is safe.
+  max_seq_length: 1792
+  packing: false
+  bf16: true
+  fp16: false
+  optim: "paged_adamw_8bit"
+  logging_steps: 1
+  logging_first_step: true
+  log_level: "info"
+  eval_strategy: "no"
+  save_strategy: "steps"
+  save_steps: 100
+  save_total_limit: 3
+  load_best_model_at_end: false
+  report_to: "none"
+  seed: 42
+
+  data:
+    # A1 = full mix, all filtered streams (same corpus as Qwen A1).
+    sft_filtered_dir: "data/sft_filtered"
+    eval_filtered_dir: "data/eval_filtered"
+    holdout_dir: "data/holdout"
+    mix_ratio_sft: 0.80
+    mix_ratio_eval: 0.20
+    use_all_data: true
+    validation_split: 0.05
+    shuffle_seed: 42
+
+
+# -----------------------------------------------------------------------------
+# DPO — NOT USED (SFT-only cross-family contrast). Retained as a no-op stub so
+# the config schema validates; do not pass train_dpo in --stages.
+# -----------------------------------------------------------------------------
+dpo:
+  output_dir: "outputs/paper/llamaINST_a1/dpo"
+  num_train_epochs: 1
+  per_device_train_batch_size: 1
+  gradient_accumulation_steps: 8
+  learning_rate: 5.0e-6
+  beta: 0.1
+  loss_type: "sigmoid"
+  max_length: 2400
+  max_prompt_length: 1500
+  bf16: true
+  optim: "paged_adamw_8bit"
+  save_strategy: "no"
+  report_to: "none"
+  seed: 42
+  sft_adapter_path: "outputs/paper/llamaINST_a1/sft"
+  ref_model: null
+  data:
+    dpo_filtered_dir: "data/dpo_filtered"
+    validation_split: 0.05
+    shuffle_seed: 42
+    use_all_data: true
+
+on_policy:
+  enabled: false
+
+
+# -----------------------------------------------------------------------------
+logging:
+  wandb_project: "qwen-en-tutor"
+  wandb_entity: null
+  wandb_run_name_prefix: "paper-llamaINST-a1-full"
+
+eval_callback:
+  enabled: false
+
+evaluation:
+  holdout_dir: data/holdout
+  n_per_level: 3
+  concurrency: 2
+  intermediate_adapter_path: outputs/paper/llamaINST_a1/sft
+  final_adapter_path: outputs/paper/llamaINST_a1/sft
+
+comparison:
+  threshold: 0.05
+  fail_on_regression: false

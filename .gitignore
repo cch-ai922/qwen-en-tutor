@@ -126,6 +126,11 @@ Thumbs.db
 # Project-specific
 data/
 !data/**/.gitkeep
+# Reproducibility: release the CANONICAL base SFT dataset (Paper 1 A1 trains on
+# this; ablation subsets are derivable via setup_paper_ablation_data.py). Other
+# data/ subdirs stay ignored (large + regenerable via scripts/run_generation.py).
+!data/sft_filtered/
+!data/sft_filtered/**
 checkpoints/
 wandb/
 *.ckpt
@@ -134,6 +139,10 @@ wandb/
 *.bin
 runs/
 outputs/
+# Reproducibility: release the score JSONs (the numbers behind every paper table).
+# Model weights (*.safetensors/*.bin above) remain ignored.
+!outputs/**/score/
+!outputs/**/score/**/*.json
 logs/
 
 # Offline-install bundle (pip wheels + HF model snapshots + GGUFs).
