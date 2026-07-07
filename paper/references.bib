@@ -15,6 +15,30 @@
 % Grouped by topic to match §2 subsections.
 
 % ------------------------------------------------------------------------
+% Prompting vs. fine-tuning boundary (framing for §1, §2.5)
+% ------------------------------------------------------------------------
+@inproceedings{zhou2023lima,
+  title     = {{LIMA}: Less Is More for Alignment},
+  author    = {Zhou, Chunting and Liu, Pengfei and Xu, Puxin and Iyer, Srinivasan and Sun, Jiao and Mao, Yuning and Ma, Xuezhe and Efrat, Avia and Yu, Ping and Yu, Lili and Zhang, Susan and Ghosh, Gargi and Lewis, Mike and Zettlemoyer, Luke and Levy, Omer},
+  booktitle = {Advances in Neural Information Processing Systems (NeurIPS)},
+  year      = {2023},
+}
+
+@inproceedings{ouyang2022instructgpt,
+  title     = {Training Language Models to Follow Instructions with Human Feedback},
+  author    = {Ouyang, Long and Wu, Jeffrey and Jiang, Xu and Almeida, Diogo and Wainwright, Carroll L. and Mishkin, Pamela and Zhang, Chong and Agarwal, Sandhini and Slama, Katarina and Ray, Alex and Schulman, John and Hilton, Jacob and Kelton, Fraser and Miller, Luke and Simens, Maddie and Askell, Amanda and Welinder, Peter and Christiano, Paul and Leike, Jan and Lowe, Ryan},
+  booktitle = {Advances in Neural Information Processing Systems (NeurIPS)},
+  year      = {2022},
+}
+
+@inproceedings{min2022rethinking,
+  title     = {Rethinking the Role of Demonstrations: What Makes In-Context Learning Work?},
+  author    = {Min, Sewon and Lyu, Xinxi and Holtzman, Ari and Artetxe, Mikel and Lewis, Mike and Hajishirzi, Hannaneh and Zettlemoyer, Luke},
+  booktitle = {Proceedings of the 2022 Conference on Empirical Methods in Natural Language Processing (EMNLP)},
+  year      = {2022},
+}
+
+% ------------------------------------------------------------------------
 % §2.1 Synthetic instruction-tuning data
 % ------------------------------------------------------------------------
 
@@ -85,12 +109,12 @@
   year      = {2024}
 }
 
-@article{touvron2024llama3,
+@article{grattafiori2024llama3,
   author    = {Aaron Grattafiori and Abhimanyu Dubey and Abhinav Jauhri and {others}},
   title     = {The Llama 3 Herd of Models},
   journal   = {arXiv preprint arXiv:2407.21783},
   year      = {2024},
-  note      = {Cited for iterative-DPO recipe with on-policy preference rounds.}
+  note      = {Cited for the Llama-3.1-8B-Instruct judge (\S4.7).}
 }
 
 % ------------------------------------------------------------------------
@@ -206,16 +230,17 @@
   year      = {2014}
 }
 
-@article{yannakoudakis2018tle,
-  author    = {Helen Yannakoudakis and {\O}istein E. Andersen and Ardeshir Geranpayeh and
-               Ted Briscoe and Diane Nicholls},
-  title     = {Developing an Automated Writing Placement System for ESL Learners},
-  journal   = {Applied Measurement in Education},
-  volume    = {31},
-  number    = {3},
-  pages     = {251--267},
-  doi       = {10.1080/08957347.2018.1464447},
-  year      = {2018}
+@inproceedings{berzak2016tle,
+  author    = {Yevgeni Berzak and Jessica Kenney and Carolyn Spadine and Jing Xian Wang and
+               Lucia Lam and Keiko Sophie Mori and Sebastian Garza and Boris Katz},
+  title     = {Universal Dependencies for Learner {E}nglish},
+  booktitle = {Proceedings of the 54th Annual Meeting of the Association for
+               Computational Linguistics (Volume 1: Long Papers)},
+  pages     = {737--746},
+  address   = {Berlin, Germany},
+  doi       = {10.18653/v1/P16-1070},
+  year      = {2016},
+  note      = {The Treebank of Learner English (TLE). VERIFY pages/DOI against the ACL Anthology (P16-1070).}
 }
 
 @inproceedings{chen2018learningq,

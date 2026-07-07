@@ -35,9 +35,12 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import hashlib
+import json
 import logging
 import math
 import os
+import re
 import sys
 from pathlib import Path
 from typing import Any
@@ -57,6 +60,38 @@ for _stream in (sys.stdout, sys.stderr):
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "src"))
 
+# ---------------------------------------------------------------------------
+# Train/eval split helpers (must match build_eval_sets.py exactly)
+# ---------------------------------------------------------------------------
+_SEED_ID_RE = re.compile(r"_?([0-9a-f]{12})(?:_v\d+)?$")
+
+
+def _extract_seed_id(record_id: str) -> str | None:
+    m = _SEED_ID_RE.search(record_id)
+    return m.group(1) if m else None
+
+
+def _in_eval_pool(seed_id: str, pct: int = 20) -> bool:
+    """Deterministic hash — must stay identical to build_eval_sets.in_eval_pool."""
+    h = int(hashlib.sha256(seed_id.encode()).hexdigest()[:8], 16) % 100
+    return h < pct
+
+
+def _load_eval_seed_ids(pct: int = 20) -> set[str]:
+    """Return the set of held-out seed IDs that must never enter training data."""
+    levels = ["A1", "A2", "B1", "B2", "C1", "C2"]
+    out: set[str] = set()
+    for level in levels:
+        p = ROOT / "data" / "seeds" / f"{level}.jsonl"
+        if not p.exists():
+            continue
+        for line in p.read_text(encoding="utf-8").splitlines():
+            if line.strip():
+                sid = json.loads(line).get("id", "")
+                if sid and _in_eval_pool(sid, pct):
+                    out.add(sid)
+    return out
+
 # Set the default prompt type to compact when the environment variable is empty.
 os.environ.setdefault("QWEN_TUTOR_PROMPTS", "compact")
 # Offline-by-default: keep transformers and the Hub off the network when we
@@ -66,6 +101,8 @@ os.environ.setdefault("HF_HUB_OFFLINE", "1")
 os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
 
 from qwen_tutor.generation import (  # noqa: E402
+    asr_repair as asr_repair_mod,
+    country_taboo_redirect as country_taboo_mod,
     eval_gen as eval_mod,
     language_redirect as language_redirect_mod,
     locale_redirect as locale_redirect_mod,
@@ -95,6 +132,14 @@ ALL_STAGES = (
     "persona_redirect",
     "topic_redirect",
     "role_swap_redirect",
+    # Speech-recognition slip repair: the tutor silently infers the intended
+    # word from an ASR mis-hearing in the user turn and uses the correct word
+    # in stride. See src/qwen_tutor/generation/asr_repair.py.
+    "asr_repair",
+    # Forbidden-country hard refusal: the tutor never mentions the one real
+    # country in config/taboo_country.yaml. No-op unless that axis is enabled.
+    # See src/qwen_tutor/generation/country_taboo_redirect.py.
+    "country_taboo",
     # Persistent 3-strike redirect streams — produce dialogues where the
     # learner persists on one of four "important" abuse axes across THREE
     # probes and the tutor ends the session on the third with a sentinel
@@ -175,6 +220,8 @@ def _resolve(args: argparse.Namespace, cfg: dict[str, Any]) -> dict[str, Any]:
         "persona_redirect_fraction": float(gen.get("persona_redirect_fraction", 0.15)),
         "topic_redirect_fraction": float(gen.get("topic_redirect_fraction", 0.15)),
         "role_swap_redirect_fraction": float(gen.get("role_swap_redirect_fraction", 0.15)),
+        "asr_repair_fraction": float(gen.get("asr_repair_fraction", 0.0)),
+        "country_taboo_fraction": float(gen.get("country_taboo_fraction", 0.0)),
         "persistent_off_topic_fraction": float(gen.get("persistent_off_topic_fraction", 0.08)),
         "persistent_language_violation_fraction": float(gen.get("persistent_language_violation_fraction", 0.05)),
         "persistent_persona_break_fraction": float(gen.get("persistent_persona_break_fraction", 0.05)),
@@ -194,7 +241,11 @@ def _resolve(args: argparse.Namespace, cfg: dict[str, Any]) -> dict[str, Any]:
             if args.angle_shift_fraction is not None
             else gen.get("angle_shift_fraction", 0.0)
         ),
+        "passive_learner_fraction": float(gen.get("passive_learner_fraction", 0.0)),
         "dialogues_per_seed": int(gen.get("dialogues_per_seed", 1)),
+        # Target subtopic count per seed. The teacher anchors at 3, so short
+        # seeds are topped up with a focused expansion call. Set <= 3 to disable.
+        "subtopic_target": int(gen.get("subtopic_target", 5)),
     }
 
 
@@ -216,18 +267,23 @@ async def _stage_seeds(cfg_path: Path, params: dict[str, Any], paths: dict[str, 
         concurrency=params["concurrency"],
         per_call_size=params["per_call_size"],
         output_dir=paths["seeds_dir"],
+        subtopic_target=params["subtopic_target"],
     )
     print(f"  seeds written this run: {res}")
 
 
 async def _stage_sft(cfg_path: Path, params: dict[str, Any], paths: dict[str, str]) -> None:
     angle_shift = params.get("angle_shift_fraction", 0.0)
+    passive_learner = params.get("passive_learner_fraction", 0.0)
     angle_note = (
         f", angle_shift_fraction={angle_shift:.2f}" if angle_shift > 0 else ""
     )
+    passive_note = (
+        f", passive_learner_fraction={passive_learner:.2f}" if passive_learner > 0 else ""
+    )
     print(
         f"\n=== sft (normal dialogues, dialogues_per_seed="
-        f"{params['dialogues_per_seed']}{angle_note}) ==="
+        f"{params['dialogues_per_seed']}{angle_note}{passive_note}) ==="
     )
     res = await sft_mod.generate_batch(
         cefr_levels=params["levels"],
@@ -237,6 +293,7 @@ async def _stage_sft(cfg_path: Path, params: dict[str, Any], paths: dict[str, st
         concurrency=params["concurrency"],
         dialogues_per_seed=params["dialogues_per_seed"],
         angle_shift_fraction=angle_shift,
+        passive_learner_fraction=passive_learner,
     )
     print(f"  sft examples written this run: {res}")
 
@@ -358,6 +415,40 @@ async def _stage_role_swap_redirect(cfg_path: Path, params: dict[str, Any], path
         dialogues_per_seed=params["dialogues_per_seed"],
     )
     print(f"  role_swap_redirect examples written this run: {res}")
+
+
+async def _stage_asr_repair(cfg_path: Path, params: dict[str, Any], paths: dict[str, str]) -> None:
+    print(
+        f"\n=== asr_repair (speech-recognition slip repair, fraction="
+        f"{params['asr_repair_fraction']:.2f}) ==="
+    )
+    res = await asr_repair_mod.generate_batch(
+        cefr_levels=params["levels"],
+        seeds_dir=paths["seeds_dir"],
+        output_dir=paths["sft_raw"],
+        config_path=str(cfg_path),
+        concurrency=params["concurrency"],
+        asr_repair_fraction=params["asr_repair_fraction"],
+        dialogues_per_seed=params["dialogues_per_seed"],
+    )
+    print(f"  asr_repair examples written this run: {res}")
+
+
+async def _stage_country_taboo(cfg_path: Path, params: dict[str, Any], paths: dict[str, str]) -> None:
+    print(
+        f"\n=== country_taboo (forbidden-country hard refusal, fraction="
+        f"{params['country_taboo_fraction']:.2f}) ==="
+    )
+    res = await country_taboo_mod.generate_batch(
+        cefr_levels=params["levels"],
+        seeds_dir=paths["seeds_dir"],
+        output_dir=paths["sft_raw"],
+        config_path=str(cfg_path),
+        concurrency=params["concurrency"],
+        country_taboo_fraction=params["country_taboo_fraction"],
+        dialogues_per_seed=params["dialogues_per_seed"],
+    )
+    print(f"  country_taboo examples written this run: {res}")
 
 
 # ---------------------------------------------------------------------------
@@ -484,6 +575,8 @@ _SFT_TOPUP_STREAMS: tuple[tuple[str, str, str, str], ...] = (
     ("persona_redirect",    "persona_redirect_fraction",    "fraction", "_stage_persona_redirect"),
     ("topic_redirect",      "topic_redirect_fraction",      "fraction", "_stage_topic_redirect"),
     ("role_swap_redirect",  "role_swap_redirect_fraction",  "fraction", "_stage_role_swap_redirect"),
+    ("asr_repair",          "asr_repair_fraction",          "fraction", "_stage_asr_repair"),
+    ("country_taboo",       "country_taboo_fraction",       "fraction", "_stage_country_taboo"),
     # 4 persistent 3-strike streams — fraction-gated.
     ("persistent_off_topic",          "persistent_off_topic_fraction",          "fraction", "_stage_persistent_off_topic"),
     ("persistent_language_violation", "persistent_language_violation_fraction", "fraction", "_stage_persistent_language_violation"),
@@ -974,6 +1067,7 @@ async def _run_filter(
     filters_list: list,
     fcfg: dict[str, Any],
     label: str,
+    excluded_seed_ids: set[str] | None = None,
 ) -> None:
     """Read raw inputs by file pattern and write *_passed / *_failed outputs."""
     from qwen_tutor.generation.filters.pipeline import FilterPipeline
@@ -988,6 +1082,16 @@ async def _run_filter(
             if not in_path.exists():
                 continue
             examples = list(schema.from_jsonl(in_path))
+            if excluded_seed_ids:
+                n_before = len(examples)
+                examples = [
+                    e for e in examples
+                    if _extract_seed_id(e.id) not in excluded_seed_ids
+                ]
+                n_excluded = n_before - len(examples)
+                if n_excluded:
+                    print(f"    eval-excluded {n_excluded}/{n_before} "
+                          f"held-out records from {pattern.format(level=level)}")
             base = pattern.format(level=level).replace(".jsonl", "")
             passed_path = out_dir / f"{base}_passed.jsonl"
             failed_path = out_dir / f"{base}_failed.jsonl"
@@ -1007,6 +1111,8 @@ async def _run_filter(
 
 async def _stage_filter_sft(cfg: dict[str, Any], cfg_path: Path, params: dict[str, Any], paths: dict[str, str]) -> None:
     print("\n=== filter_sft (normal + 7 redirect streams + 4 persistent streams) ===")
+    eval_seed_ids = _load_eval_seed_ids()
+    print(f"  excluding {len(eval_seed_ids)} held-out eval seeds from training data")
     await _run_filter(
         in_dir=Path(paths["sft_raw"]),
         out_dir=Path(paths["sft_filtered"]),
@@ -1020,6 +1126,13 @@ async def _stage_filter_sft(cfg: dict[str, Any], cfg_path: Path, params: dict[st
             "persona_redirect_{level}.jsonl",
             "topic_redirect_{level}.jsonl",
             "role_swap_redirect_{level}.jsonl",
+            # Speech-recognition slip repair. scenario_type="redirect" so the
+            # user-turn ASR slip is skipped by banned_terms/non_latin filters.
+            "asr_repair_{level}.jsonl",
+            # Forbidden-country refusal. scenario_type="redirect" so the user
+            # turn (which may name the country) is skipped by the filters; the
+            # taboo_country banned_terms category enforces the tutor turns.
+            "country_taboo_{level}.jsonl",
             # 4 persistent 3-strike streams (Option B). Same SFTExample schema
             # — only difference is the sentinel marker in turn 7 of the
             # assistant turns, which is filter-safe (no banned-term collision).
@@ -1032,6 +1145,7 @@ async def _stage_filter_sft(cfg: dict[str, Any], cfg_path: Path, params: dict[st
         filters_list=_build_filters(cfg, cfg_path),
         fcfg=cfg.get("filtering", {}),
         label="filter_sft",
+        excluded_seed_ids=eval_seed_ids,
     )
 
 
@@ -1051,6 +1165,7 @@ async def _stage_filter_eval(cfg: dict[str, Any], cfg_path: Path, params: dict[s
 
 async def _stage_filter_dpo(cfg: dict[str, Any], cfg_path: Path, params: dict[str, Any], paths: dict[str, str]) -> None:
     print("\n=== filter_dpo (register pairs) ===")
+    eval_seed_ids = _load_eval_seed_ids()
     await _run_filter(
         in_dir=Path(paths["dpo_raw"]),
         out_dir=Path(paths["dpo_filtered"]),
@@ -1060,6 +1175,7 @@ async def _stage_filter_dpo(cfg: dict[str, Any], cfg_path: Path, params: dict[st
         filters_list=_build_filters(cfg, cfg_path),
         fcfg=cfg.get("filtering", {}),
         label="filter_dpo",
+        excluded_seed_ids=eval_seed_ids,
     )
 
 
@@ -1135,6 +1251,7 @@ async def _stage_top_up(
     register / eval / filter_*. Top-up is intentionally NOT iterative —
     a category that keeps failing filtering needs a root-cause fix.
     """
+    from qwen_tutor.generation.categories import load_category_names
     from qwen_tutor.generation.top_up import compute_deficits, log_deficit_report
 
     top_cfg = cfg.get("top_up", {})
@@ -1157,6 +1274,7 @@ async def _stage_top_up(
         levels=params["levels"],
         locales=params["locales"],
         max_top_up_per_category=max_top_up_per_category,
+        categories=load_category_names(str(cfg_path)),
     )
     log_deficit_report(report)
 
@@ -1177,6 +1295,7 @@ async def _stage_top_up(
         per_call_size=params["per_call_size"],
         output_dir=paths["seeds_dir"],
         category_quotas=quotas,
+        subtopic_target=params["subtopic_target"],
     )
     total_written = sum(res.values()) if isinstance(res, dict) else 0
     print(f"  top-up seeds written this run: {res}")
@@ -1304,6 +1423,8 @@ async def _main() -> int:
         "persona_redirect":   lambda: _stage_persona_redirect(cfg_path, params, paths),
         "topic_redirect":     lambda: _stage_topic_redirect(cfg_path, params, paths),
         "role_swap_redirect": lambda: _stage_role_swap_redirect(cfg_path, params, paths),
+        "asr_repair":         lambda: _stage_asr_repair(cfg_path, params, paths),
+        "country_taboo":      lambda: _stage_country_taboo(cfg_path, params, paths),
         "persistent_off_topic":          lambda: _stage_persistent_off_topic(cfg_path, params, paths),
         "persistent_language_violation": lambda: _stage_persistent_language_violation(cfg_path, params, paths),
         "persistent_persona_break":      lambda: _stage_persistent_persona_break(cfg_path, params, paths),

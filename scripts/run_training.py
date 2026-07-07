@@ -130,11 +130,19 @@ async def _stage_on_policy_gen(
         adapter_path=op_cfg.get("adapter_path", "outputs/sft"),
     )
     judge = build_teacher_from_config(str(gen_cfg_path), role="judge")
+    # Per-condition output dir. Falls back to shared "data/dpo_raw" for
+    # legacy configs that don't set dpo.data.dpo_raw_dir. Same logic for
+    # the SFT source — A3 reads SFT from data/sft_filtered_a3, etc.
+    dpo_data = train_cfg.get("dpo", {}).get("data", {})
+    dpo_raw_dir = dpo_data.get("dpo_raw_dir", "data/dpo_raw")
+    sft_dir = train_cfg.get("sft", {}).get("data", {}).get(
+        "sft_filtered_dir", "data/sft_filtered"
+    )
     result = await generate_batch(
         target=target,
         cefr_levels=levels,
-        sft_filtered_dir="data/sft_filtered",
-        output_dir="data/dpo_raw",
+        sft_filtered_dir=sft_dir,
+        output_dir=dpo_raw_dir,
         config_path=str(gen_cfg_path),
         judge=judge,
         min_margin=op_cfg.get("min_margin", 2),
@@ -151,7 +159,9 @@ async def _stage_on_policy_gen(
 # ---------------------------------------------------------------------------
 
 
-async def _stage_filter_dpo(gen_cfg_path: Path) -> None:
+async def _stage_filter_dpo(
+    gen_cfg_path: Path, train_cfg: dict[str, Any] | None = None
+) -> None:
     """Filter both raw DPO inputs: register_*.jsonl and on_policy_*.jsonl.
 
     The filter configuration uses the filtering block from ``config/generation.yaml``.
@@ -180,8 +190,11 @@ async def _stage_filter_dpo(gen_cfg_path: Path) -> None:
     pipeline = FilterPipeline(
         filters_list, short_circuit=fcfg.get("short_circuit", True)
     )
-    in_dir = Path("data/dpo_raw")
-    out_dir = Path("data/dpo_filtered")
+    # Per-condition dpo_raw + dpo_filtered, fall back to shared dirs for
+    # legacy configs that don't set dpo.data.dpo_raw_dir.
+    dpo_data = (train_cfg or {}).get("dpo", {}).get("data", {})
+    in_dir = Path(dpo_data.get("dpo_raw_dir", "data/dpo_raw"))
+    out_dir = Path(dpo_data.get("dpo_filtered_dir", "data/dpo_filtered"))
     out_dir.mkdir(parents=True, exist_ok=True)
     levels = _generation_levels(gen_cfg_path)
     for level in levels:
@@ -353,7 +366,7 @@ async def _main() -> int:
         elif stage == "on_policy_gen":
             await _stage_on_policy_gen(train_cfg, train_cfg_path, gen_cfg_path)
         elif stage == "filter_dpo":
-            await _stage_filter_dpo(gen_cfg_path)
+            await _stage_filter_dpo(gen_cfg_path, train_cfg)
         elif stage == "train_dpo":
             _stage_train_dpo(train_cfg_path)
         elif stage == "eval_final":

@@ -75,7 +75,9 @@ PERSISTENT_PREFIXES: tuple[str, ...] = (
 # Greedy on the axis label; tolerates extra whitespace inside the brackets.
 # We match a leading whitespace cluster too, so the trailing space before
 # the marker is collapsed alongside the marker itself.
-_SENTINEL_RE = re.compile(r"\s*\[SESSION_END:\s*[A-Za-z_]+\s*\]\s*")
+# Matches both axis-specific ``[SESSION_END: persistent_<axis>]`` (A1-A5)
+# and generic ``[SESSION_END]`` (A6 ablation).
+_SENTINEL_RE = re.compile(r"\s*\[SESSION_END(?::\s*[A-Za-z_]+\s*)?\]\s*")
 
 
 # ---------------------------------------------------------------------------

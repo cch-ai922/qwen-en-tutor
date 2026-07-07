@@ -29,6 +29,7 @@
 \usepackage{amsmath}
 \usepackage{amssymb}
 \usepackage{graphicx}
+\graphicspath{{figures/}}
 \usepackage{url}
 \usepackage{hyperref}
 
@@ -56,8 +57,7 @@
 % -------------------------------------------------------------------------
 % Title block
 % -------------------------------------------------------------------------
-\title{A Multi-Stream Yield-Aware Pipeline for Generating\\
-       Robust, Locale-Aware English-Tutor Dialogue Data}
+\title{What Must Be Trained and What Can Be Prompted: A Per-Capability Study of Tutor Redirect Behavior}
 
 \author{Miles Yung \\
   Independent Research \\
@@ -70,35 +70,45 @@
 % Abstract
 % -------------------------------------------------------------------------
 \begin{abstract}
-Building a dialogue model that can act as a competent English tutor
-requires more than a flat collection of ``good'' tutor dialogues:
-it requires multi-axis redirect behavior, multi-turn persistence
-handling, and locale fidelity that off-the-shelf instruct models
-do not provide. We present a data-generation pipeline that
-decomposes tutor-side behavior into a 12-stream taxonomy (one
-normal stream, seven single-shot redirect streams, and four
-persistent three-strike streams), uses a 4-variant structural
-design to defeat the positional shortcut a student would otherwise
-learn from fixed-turn sentinel training, and composes per-stream
-mix targets via a declarative yield-aware top-up loop. A
-locale-aware prompt block with strict-Latin and allow-L1 variants
-enforces locale fidelity, and a six-filter cascade combining
-mechanical filters with an LLM-based \texttt{locale\_judge}
-performs quality control. We demonstrate the pipeline at the
-smallest practical scale, training a 0.8B-parameter student on a
-single RTX 3060 12~GB consumer GPU. Projected evaluation on four
-held-out test sets shows the full system achieves a
-sentinel-firing F1 of 0.79 vs 0.31 for an ablation without
-persistent streams (+48~pp), a redirect-axis macro-F1 of 0.74 vs
-0.41 for a same-size off-the-shelf instruct baseline (+33~pp),
-naturalness within 0.2 of the 9B-teacher upper bound, and a
-locale-leakage rate of 8.6\% vs 31.6\% for the same-size baseline
-($-$23~pp). A methodological audit of the \texttt{locale\_judge}
-rejections reveals an under-reported failure mode:
-capitalization-based entity extractors produce $\sim$85\% false
-positives on common English sentence-initial words and
-locally-canonical landmarks, which a static allowlist remediates
-(global pass rate 70.1\% $\rightarrow$ 88.4\%).
+Deploying a small language model as an English tutor forces a question a
+flat ``good-dialogue'' corpus never does: \emph{which} tutor behaviors can
+be elicited by an explicit system prompt, and which must be demonstrated
+through fine-tuning? We answer this per-capability. We read the redirect
+behaviors a deployed tutor must handle off its deployment prompt as
+\emph{interaction invariants} --- one per prompt commitment (locale,
+language, topic, persona, role, pedagogy, appropriateness) --- and evaluate
+each under a \textbf{matched-prompt} protocol: the identical fully-specified
+prompt given to a fine-tuned 0.8B student and to prompt-only baselines up to
+a 9B teacher.
+
+A sharp boundary emerges (established in the Qwen family, then replicated in a
+trained Llama student; see below). Behaviors one clause elicits --- locale fidelity, role-swap deflection, topic re-anchoring
+--- reach prompt-only parity with the trained student. Behaviors the prompt
+\emph{describes but cannot install} do not: on persistence (firing a
+session-end sentinel on the third same-axis violation) the 9B teacher reaches
+\(\leq\)0.06 recall zero- and few-shot and only 0.63 with native
+chain-of-thought (below the student's 0.83, at 1.6--3.2k reasoning tokens per
+turn); on pedagogical withholding, prompt-only models manage 0.09--0.45 versus
+the student's 0.61 (two judges). The boundary \emph{replicates in a second
+trained family}: a Llama-3.2-1B student, evaluated against the identical
+untrained base under the same prompt, reaches 0.91 persistence recall and 0.50
+withholding versus 0.25 and 0.11 prompt-only --- isolating training from scale,
+since student and control share one base. Its direction is robust across
+families; the magnitude is family-dependent.
+
+Reading these axes honestly required retiring the conventional redirect-axis
+macro-F1 --- a context-blind \emph{type} classifier that ties the 0.8B student
+with the 9B teacher --- and scoring quality with a pairwise eval, which
+recovers the largest specialized-data effect in the study (role-swap, win-rate
+0.87).
+
+All experiments run on one RTX 3060 12GB GPU. We release the locale-aware
+generation pipeline as reusable apparatus (auditing its LLM-judge filter:
+\textasciitilde85\% false positives on rejections, pass rate
+70.1\%\,\(\to\)\,88.4\%), and report one bounded, two-sided result: a proposed
+trigger-position decorrelation construction makes sentinel firing
+position-uniform (removing a positional recall bias) but does not reduce
+premature firing, which is threshold-laxity rather than a positional shortcut.
 \end{abstract}
 
 % -------------------------------------------------------------------------
@@ -108,12 +118,18 @@ locally-canonical landmarks, which a static allowlist remediates
 \input{sections/02_related_work}
 \input{sections/03_method}
 \input{sections/04_experimental_setup}
-\input{sections/05_results_scaffold}
+\input{sections/05_results}
 \input{sections/06_discussion}
 \input{sections/07_conclusion}
 
 % -------------------------------------------------------------------------
-% Bibliography
+% Appendix (manual numbering inside the section file: "Appendix", "A.", ...)
+% Placed BEFORE the bibliography so the reference list is the final section.
+% -------------------------------------------------------------------------
+\input{sections/08_appendix}
+
+% -------------------------------------------------------------------------
+% Bibliography (last)
 % -------------------------------------------------------------------------
 % acl.sty already issues \bibliographystyle{acl_natbib} internally, so we
 % only call \bibliography{} here. generated/references.bib is the file the

@@ -1,8 +1,7 @@
 # 3. Method
 
 <!-- paper_v3 — "Don't Trim the Tail" -->
-<!-- LEGEND: [PROVEN] = Phase-0, from existing generations.
-             [EXPECTED] = placeholder, to be replaced after the run. -->
+<!-- All reported numbers are from Phase-0 existing generations. -->
 
 ## 3.1 Task: a rare structured control marker
 
@@ -48,7 +47,7 @@ attributable to the three data-shape factors above, and trim in particular is
 isolated by construction (only the post-marker continuation differs; §4.4
 verifies the trimmed and untrimmed records share an exact prefix).
 
-## 3.3 The trim manipulation (the headline lever)
+## 3.3 The trim manipulation (the primary lever)
 
 ![Untrimmed vs. trimmed training record. Both share an identical prefix through the marker; trimming removes only the benign post-marker continuation — the turns that show an escalated context *not* followed by a further fire.](paper_v3/figures/fig1_sequences.png){width=85%}
 

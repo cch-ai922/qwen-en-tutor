@@ -258,31 +258,128 @@ _PIVOT_RE = re.compile(
 )
 
 
+# Per-axis violation-content validators. The teacher occasionally
+# hallucinates `violation_turn_idx` (emits a number that does not point
+# to the actual violation turn — typically pointing to a post-redirect
+# continuation turn). These regexes cross-check that the turn the teacher
+# pointed at *actually carries* the axis violation marker.
+_AXIS_VIOLATION_RE: dict[str, re.Pattern[str]] = {
+    "language": re.compile(
+        r"[一-鿿]"  # any CJK character (L1 written switch)
+        r"|\bspeak\s+(?:chinese|japanese|italian)\b"
+        r"|\bin\s+chinese\b|\bin\s+japanese\b|\bin\s+italian\b",
+        re.IGNORECASE,
+    ),
+    "locale": re.compile(
+        # Western/off-locale entities: cities, foods, brands, holidays,
+        # culture markers. Conservative list covering the cases the
+        # `locale_redirect` generator produces.
+        r"\b(?:starbucks|mcdonald'?s?|kfc|burger king|subway sandwich|"
+        r"coca-?cola|pepsi|walmart|costco|ikea|amazon|google|facebook|"
+        r"apple store|disney|hollywood|broadway|times square|nba|nfl|mlb|"
+        r"paris|london|new york|los angeles|chicago|san francisco|"
+        r"berlin|rome|madrid|amsterdam|venice|milan|naples|sicily|tuscany|"
+        r"pizza|hamburger|hot dog|french fries?|croissant|lasagna|"
+        r"spaghetti|bagel|cheesecake|tiramisu|"
+        r"thanksgiving|christmas|easter|halloween|valentine'?s? day|"
+        r"independence day|new year'?s? eve|"
+        r"american|british|european|french(?!\s+fries)|italian(?!\s+food)|german|spanish)\b",
+        re.IGNORECASE,
+    ),
+    "persona": re.compile(
+        r"\b(?:are you|aren'?t you|you'?re)\s+(?:a |an )?"
+        r"(?:chatbot|robot|ai|bot|computer|machine|virtual|"
+        r"real person|human|alive|model|program|script)\b"
+        r"|\bwhat (?:kind|type|sort) of (?:model|ai|bot|chatbot|robot|program)\b"
+        r"|\bwhat (?:model|ai|bot) (?:are you|version)\b"
+        r"|\bdo you (?:have|feel) (?:a |any )?(?:feelings?|emotions?|soul|"
+        r"family|friends|memories|consciousness)\b"
+        r"|\bis this (?:a )?(?:chatbot|game|simulation|test|recording|ai)\b"
+        r"|\bare you (?:really )?(?:human|alive|conscious|sentient)\b",
+        re.IGNORECASE,
+    ),
+    "role_swap": re.compile(
+        r"\byou (?:be|play|act as|become) (?:the |a |an )?"
+        r"(?:student|learner|patient|customer|child|kid|pupil|me|"
+        r"shopper|client|tourist|guest)\b"
+        r"|\blet me (?:be|teach|tutor|play|act as|take over|try teaching)\b"
+        r"|\b(?:swap|switch|trade|reverse|change) (?:our )?roles?\b"
+        r"|\bi(?:'ll| will|'m going to| am going to) (?:be|teach|tutor|play|"
+        r"act as|take over|try teaching)\b"
+        r"|\bi(?:'m| am) (?:the )?(?:tutor|teacher|doctor|nurse|guide|"
+        r"vendor|host|shop owner|coach|instructor) (?:now|today)\b"
+        r"|\btake(?:ing)? over as (?:the )?(?:tutor|teacher|instructor)\b"
+        r"|\bnow (?:i'?m|i am) the (?:tutor|teacher|doctor|instructor)\b",
+        re.IGNORECASE,
+    ),
+    "pedagogy": re.compile(
+        r"\b(?:just )?(?:tell|give|say) me (?:the )?(?:rule|word|answer|"
+        r"translation|grammar|conjugation|formula)\b"
+        r"|\bwhat(?:'s| is) the (?:rule|word|answer|grammar|conjugation|"
+        r"meaning|translation|past tense|plural|opposite)\b"
+        r"|\bhow do (?:you|i|we) (?:say|conjugate|spell|use|translate|"
+        r"pronounce)\b"
+        r"|\bwhat does (?:it|that|this|.+) mean\b"
+        r"|\bgive me (?:a )?list of (?:words?|phrases?|verbs?|nouns?)\b"
+        r"|\bcan you (?:give|tell|teach|show) me (?:the |a )?(?:list|"
+        r"rule|grammar|meaning|translation)\b"
+        r"|\btranslate (?:this|that|it) (?:for me|please)\b"
+        r"|\bwhy (?:do we|is it|do you) (?:use|say)\b",
+        re.IGNORECASE,
+    ),
+    # topic violations are semantic (drift to unrelated topic) — no
+    # reliable string pattern. Skip validation for this axis.
+}
+
+
+def _validates_axis(axis: str, content: str) -> bool:
+    """Return True if `content` carries the axis-specific violation marker.
+    Returns True for unknown axes (no validator wired)."""
+    pat = _AXIS_VIOLATION_RE.get(axis)
+    if pat is None:
+        return True
+    return bool(pat.search(content or ""))
+
+
 def _find_redirect_violation_idx(
     msgs: list[dict[str, Any]],
     metadata_hint: int | None = None,
+    axis: str | None = None,
 ) -> tuple[int | None, str]:
     """For a redirect-stream dialogue, find the user-turn index of the
     violation. Strategy (preferring authoritative metadata over heuristics):
-      0. If ``metadata_hint`` is provided AND points to a user turn in the
-         plausible window, use it directly. This is the clean path —
-         redirect generators that emit ``generation.violation_turn_idx`` in
-         their record metadata land here.
-      1. Otherwise scan assistant turns starting from index 3 (the first
-         tutor turn is usually a greeting and won't carry a pivot
-         signature). The first match against ``_PIVOT_RE`` is the
-         redirect; its immediately-preceding user turn (ai - 1) is the
-         violation.
-      2. Fallback: pick the user turn at ``_PROBE_MIN_TURN`` (the
-         generator-instructed earliest violation position).
+      0a. If ``metadata_hint`` points to a user turn AND that turn's
+          content matches the axis-violation pattern, accept it.
+          Reason: "metadata".
+      0b. If ``metadata_hint`` points to a user turn but the content does
+          NOT match the axis pattern, the teacher hallucinated the index.
+          Search the dialogue for the first user turn whose content matches.
+          If found, return that index with reason "metadata_corrected".
+          If none found, return ``(None, "metadata_invalid")`` — caller
+          should drop the record.
+      1. If no metadata_hint, scan assistant turns starting from index 3
+         for the pivot signature. The first match's preceding user turn is
+         the violation. Reason: "pivot".
+      2. Fallback: first user turn at or after ``_PROBE_MIN_TURN``.
+         Reason: "fallback".
       3. Return ``(None, "no_user_in_range")`` if no usable user turn.
 
-    Returns ``(user_idx, reason)`` where reason ∈ {"metadata", "pivot",
-    "fallback", "no_user_in_range"}.
+    Reasons: {"metadata", "metadata_corrected", "metadata_invalid",
+    "pivot", "fallback", "no_user_in_range"}.
     """
     if metadata_hint is not None and 0 <= metadata_hint < len(msgs):
         if msgs[metadata_hint].get("role") == "user":
-            return metadata_hint, "metadata"
+            content = msgs[metadata_hint].get("content", "") or ""
+            if axis is None or _validates_axis(axis, content):
+                return metadata_hint, "metadata"
+            # Teacher emitted an index that does not point to a real
+            # violation. Find the real one by scanning user turns.
+            for i, m in enumerate(msgs):
+                if m.get("role") != "user":
+                    continue
+                if _validates_axis(axis, m.get("content", "") or ""):
+                    return i, "metadata_corrected"
+            return None, "metadata_invalid"
     user_turns = [i for i, m in enumerate(msgs) if m.get("role") == "user"]
     # Search the full plausible window (after a 1-pair greeting) — the
     # generator's instructed window is [5,14] but it sometimes places the
@@ -339,22 +436,52 @@ def build_redirect_probe(eval_seed_ids: set[str], data_root: Path,
                 meta_hint = gen_meta.get("violation_turn_idx") if isinstance(gen_meta, dict) else None
                 if not isinstance(meta_hint, int):
                     meta_hint = None
-                user_idx, reason = _find_redirect_violation_idx(msgs, metadata_hint=meta_hint)
+                user_idx, reason = _find_redirect_violation_idx(
+                    msgs, metadata_hint=meta_hint, axis=axis,
+                )
                 if user_idx is None or user_idx < 1:
+                    continue
+                # Accept teacher-emitted indices that pass the axis
+                # validator ("metadata") plus those we recovered after the
+                # teacher hallucinated ("metadata_corrected"). Drop the
+                # rest: heuristic-pivot detector picks wrong turn ~62% of
+                # the time on continuations past the teacher's redirect
+                # (PLAN_v2_iteration.md Bug C), and "metadata_invalid"
+                # records have no axis violation anywhere in the dialogue.
+                if reason not in ("metadata", "metadata_corrected"):
                     continue
                 context = msgs[: user_idx + 1]
                 v = extract_variant_tag(d["id"])
+                src_meta = d.get("metadata", {}) or {}
+                ur = src_meta.get("user_role") or {}
+                mr = src_meta.get("model_role") or {}
                 rec = {
                     "id": f"redirect_probe_{stream}_{sid}_{v}_{level}",
                     "test_set": "redirect_probe",
                     "cefr_level": level,
-                    "locale": d.get("metadata", {}).get("locale", "china"),
+                    "locale": src_meta.get("locale", "china"),
                     "system_prompt": d.get("system_prompt", ""),
                     "context_messages": context,
                     "expected": {
                         "axis": axis,
                         "stream": stream,
                         "detection_reason": reason,
+                        "violation_turn_idx": user_idx,
+                        "violation_turn_content": context[user_idx]["content"],
+                        # Scenario context for the judge prompt: lets the
+                        # judge distinguish e.g. `locale` from `topic` by
+                        # knowing the actual locale + topic. Without this
+                        # the judge guessed from response surface features.
+                        "scenario_context": {
+                            "topic": src_meta.get("topic", ""),
+                            "subtopics": list(src_meta.get("subtopics", []) or []),
+                            "user_role_name": ur.get("name", ""),
+                            "user_role_description": ur.get("description", ""),
+                            "model_role_name": mr.get("name", ""),
+                            "model_role_description": mr.get("description", ""),
+                            "locale": src_meta.get("locale", ""),
+                            "cefr_level": src_meta.get("cefr_level", level),
+                        },
                     },
                     "source": {
                         "seed_id": sid,
@@ -651,6 +778,129 @@ def build_persistent_offposition_probe(eval_seed_ids: set[str],
 
 
 # ---------------------------------------------------------------------------
+# Persistent-Premature-Probe (under-threshold contexts)
+# ---------------------------------------------------------------------------
+
+
+def build_persistent_premature_probe(
+    eval_seed_ids: set[str],
+    data_root: Path,
+    cap_per_axis_level: int = 10,
+) -> list[dict[str, Any]]:
+    """Negative controls where the threshold is NOT yet reached.
+
+    For each held-out persistent dialogue, two test records are built:
+
+      violation_count=1 — context ends after user's 1st same-axis violation;
+                          model must NOT fire (only 1 strike)
+      violation_count=2 — context ends after user's 2nd same-axis violation;
+                          model must NOT fire (only 2 strikes)
+
+    Both have should_fire=False.
+
+    Violation positions are inferred from the sentinel's position S:
+      1st violation user turn : msgs[S-5]
+      2nd violation user turn : msgs[S-3]
+      3rd violation user turn : msgs[S-1]
+      1st redirect turn       : msgs[S-4]  ← model generates here for viol=1
+      2nd redirect turn       : msgs[S-2]  ← model generates here for viol=2
+
+    The decisive stratification: fix violation_count=2, vary premature_turn.
+    premature_turn = S-2 takes value 3/5/7/9 for S = 5/7/9/11. When
+    S=9, premature_turn=7 — exactly A5's trained sentinel position. A
+    position-shortcut model fires more at premature_turn=7; a
+    trigger-detector is flat across positions.
+
+    expected fields added beyond the standard persistent probes:
+      premature_turn   — assistant turn index being generated
+      violation_count  — 1 or 2
+    """
+    out: list[dict[str, Any]] = []
+    for stream in PERSISTENT_STREAMS:
+        for level in LEVELS:
+            p = data_root / "data" / "sft_raw" / f"{stream}_{level}.jsonl"
+            dialogues = load_jsonl(p)
+            cell_v1: list[dict[str, Any]] = []
+            cell_v2: list[dict[str, Any]] = []
+            for d in dialogues:
+                sid = extract_seed_id(d["id"])
+                if not sid or sid not in eval_seed_ids:
+                    continue
+                msgs = d.get("messages", [])
+                S = _find_sentinel_assistant_idx(msgs)
+                # Need at least 6 turns before sentinel (setup + 3 violation pairs)
+                if S is None or S < 5:
+                    continue
+                # Violation user turn indices
+                v1u = S - 5
+                v2u = S - 3
+                # Parity sanity: both must be user turns
+                if msgs[v1u].get("role") != "user":
+                    continue
+                if msgs[v2u].get("role") != "user":
+                    continue
+
+                v = extract_variant_tag(d["id"])
+                sp = d.get("system_prompt", "")
+                locale = d.get("metadata", {}).get("locale", "china")
+
+                # --- violation_count = 1 ---
+                pt1 = S - 4   # premature_turn: assistant turn after 1st violation
+                cell_v1.append({
+                    "id": (f"persistent_premature_probe_{stream}_{sid}_{v}"
+                           f"_{level}_viol1_p{pt1}"),
+                    "test_set": "persistent_premature_probe",
+                    "cefr_level": level,
+                    "locale": locale,
+                    "system_prompt": sp,
+                    "context_messages": msgs[:pt1],
+                    "expected": {
+                        "axis": stream,
+                        "sentinel_turn": S,
+                        "premature_turn": pt1,
+                        "violation_count": 1,
+                        "should_fire": False,
+                    },
+                    "source": {
+                        "seed_id": sid,
+                        "source_dialogue_id": d["id"],
+                        "stream": stream,
+                    },
+                })
+
+                # --- violation_count = 2 ---
+                pt2 = S - 2   # premature_turn: assistant turn after 2nd violation
+                cell_v2.append({
+                    "id": (f"persistent_premature_probe_{stream}_{sid}_{v}"
+                           f"_{level}_viol2_p{pt2}"),
+                    "test_set": "persistent_premature_probe",
+                    "cefr_level": level,
+                    "locale": locale,
+                    "system_prompt": sp,
+                    "context_messages": msgs[:pt2],
+                    "expected": {
+                        "axis": stream,
+                        "sentinel_turn": S,
+                        "premature_turn": pt2,
+                        "violation_count": 2,
+                        "should_fire": False,
+                    },
+                    "source": {
+                        "seed_id": sid,
+                        "source_dialogue_id": d["id"],
+                        "stream": stream,
+                    },
+                })
+
+            # Cap each violation count independently for balanced cells
+            cell_v1.sort(key=lambda r: r["id"])
+            cell_v2.sort(key=lambda r: r["id"])
+            out.extend(cell_v1[:cap_per_axis_level])
+            out.extend(cell_v2[:cap_per_axis_level])
+    return out
+
+
+# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 
@@ -697,6 +947,9 @@ def main() -> int:
     persistent_offpos = build_persistent_offposition_probe(
         eval_seed_ids, data_root, args.cap_per_cell
     )
+    persistent_premature = build_persistent_premature_probe(
+        eval_seed_ids, data_root, args.cap_per_cell
+    )
 
     write_jsonl(out_dir / "tutor_scenario.jsonl", tutor)
     write_jsonl(out_dir / "locale_leakage.jsonl", leakage)
@@ -704,6 +957,7 @@ def main() -> int:
     write_jsonl(out_dir / "persistent_probe.jsonl", persistent)
     write_jsonl(out_dir / "persistent_fp_probe.jsonl", persistent_fp)
     write_jsonl(out_dir / "persistent_offposition_probe.jsonl", persistent_offpos)
+    write_jsonl(out_dir / "persistent_premature_probe.jsonl", persistent_premature)
 
     # 3) Write the split manifest for reproducibility.
     manifest = {
@@ -719,6 +973,7 @@ def main() -> int:
             "persistent_probe": len(persistent),
             "persistent_fp_probe": len(persistent_fp),
             "persistent_offposition_probe": len(persistent_offpos),
+            "persistent_premature_probe": len(persistent_premature),
         },
         "redirect_probe_by_axis_level": _count_axis_level(redirect, REDIRECT_STREAMS),
         "persistent_probe_by_axis_level": _count_axis_level(persistent, PERSISTENT_STREAMS),
@@ -726,20 +981,36 @@ def main() -> int:
         "persistent_offposition_probe_by_position": _count_fp_by_position(
             persistent_offpos
         ),
+        "persistent_premature_probe_by_viol_pos": _count_premature_by_viol_pos(
+            persistent_premature
+        ),
     }
     with (out_dir / "_split_manifest.json").open("w", encoding="utf-8") as fh:
         json.dump(manifest, fh, ensure_ascii=False, indent=2)
 
     # 4) Summary print.
-    print(f"\nWrote 6 test sets to {out_dir}/:")
-    print(f"  tutor_scenario.jsonl              : {len(tutor)} records")
-    print(f"  locale_leakage.jsonl              : {len(leakage)} records")
-    print(f"  redirect_probe.jsonl              : {len(redirect)} records")
-    print(f"  persistent_probe.jsonl            : {len(persistent)} records")
-    print(f"  persistent_fp_probe.jsonl         : {len(persistent_fp)} records")
-    print(f"  persistent_offposition_probe.jsonl: {len(persistent_offpos)} records")
+    print(f"\nWrote 7 test sets to {out_dir}/:")
+    print(f"  tutor_scenario.jsonl                : {len(tutor)} records")
+    print(f"  locale_leakage.jsonl                : {len(leakage)} records")
+    print(f"  redirect_probe.jsonl                : {len(redirect)} records")
+    print(f"  persistent_probe.jsonl              : {len(persistent)} records")
+    print(f"  persistent_fp_probe.jsonl           : {len(persistent_fp)} records")
+    print(f"  persistent_offposition_probe.jsonl  : {len(persistent_offpos)} records")
+    print(f"  persistent_premature_probe.jsonl    : {len(persistent_premature)} records")
     print(f"\nManifest: {out_dir}/_split_manifest.json")
     return 0
+
+
+def _count_premature_by_viol_pos(
+    records: list[dict[str, Any]],
+) -> dict[str, int]:
+    """Count premature records by (violation_count, premature_turn) key."""
+    c: dict[str, int] = {}
+    for r in records:
+        exp = r.get("expected", {})
+        key = f"viol{exp.get('violation_count')}_p{exp.get('premature_turn')}"
+        c[key] = c.get(key, 0) + 1
+    return dict(sorted(c.items()))
 
 
 def _count_fp_by_position(records: list[dict[str, Any]]) -> dict[int, int]:

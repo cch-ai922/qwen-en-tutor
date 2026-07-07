@@ -85,11 +85,56 @@ generation:
   # ``locales:`` in ``config/locale.yaml``.
   locales: ["china"] # multi-locale smoke    , "japan", "italy"
   concurrency: 2                       # number of concurrent llama-server requests
-  per_call_size: 5                     # batch size per seed call (reserve diversity headroom)
+  per_call_size: 5                     # seeds per teacher call. Each call is now
+                                       # HOMOGENEOUS (all one category), so this is
+                                       # also "how many distinct scenarios of one
+                                       # category the teacher diversifies in a single
+                                       # shot". Larger = more within-category variety
+                                       # per call, but watch the token budget.
+
+  # ---- life-domain categories (EDIT ME) --------------------------------------
+  # The category set the seed balancer cycles through. Add / remove / rename
+  # freely — this is the single source of truth (no longer a hard-coded enum).
+  # Seeds are round-robin balanced across these, and each teacher call requests
+  # one category at a time so the teacher spreads scenarios WITHIN a category
+  # (kills the near-duplicate seeds you got when each seed was drawn from a
+  # separate, mutually-blind call).
+  #
+  # Each entry is either a bare name or {name, description}. ``description`` is a
+  # soft guide shown to the teacher; ``{country}`` in it is substituted per
+  # locale. Omit the whole ``categories:`` key to fall back to the built-in
+  # defaults. "general" is reserved as a legacy default and should not be listed.
+  categories:
+    - name: food_and_dining
+      description: "meals, markets, restaurants, snacks, drinks, cooking, ordering, eating with others."
+    - name: family_and_relationships
+      description: "family members, friendships, gatherings, parenting, household routines."
+    - name: work_and_education
+      description: "school, university, jobs, internships, study, training, learning a skill."
+    - name: travel_and_transit
+      description: "getting around the city, public transport, taxis, day trips, longer travel within {country}."
+    - name: shopping_and_services
+      description: "stores, online orders, returns, repairs, deliveries, errands at counters."
+    - name: health_and_wellbeing
+      description: "clinics, pharmacy, exercise, sleep, light wellness; nothing graphic or clinical-prescriptive."
+    - name: home_and_neighborhood
+      description: "building, apartment, neighbors, household tasks, maintenance, local shops near home."
+    - name: hobbies_and_leisure
+      description: "sports, music, reading, crafts, games, weekend plans, parks, low-pressure hangouts."
+    - name: nature_and_weather
+      description: "weather small-talk, parks, gardens, seasons, outdoor walks, mild outdoor activities."
+    - name: civic_life
+      description: "paperwork, public services, neighborhood meetings, bus passes, registrations, lost-and-found."
 
   # How many SFT dialogue samples to draw per seed. In smoke mode this is 1,
   # producing only 2 SFT examples per (level, locale) pair (~12 normal SFT + redirects).
   dialogues_per_seed: 2               # 8h test 2026-06-03: 2 to keep wall-clock in budget
+
+  # Target subtopics per seed. The teacher anchors at 3 no matter the prompt,
+  # so seeds with fewer than the target get ONE focused expansion call that
+  # adds richer 5-10 word beats (capped at 6, the schema max). Set to 3 to
+  # disable expansion entirely.
+  subtopic_target: 5
 
   # ---- redirect / eval ratios ------------------------------------------------
   # Each seed always generates one normal SFT, but redirect and eval examples
@@ -145,6 +190,19 @@ generation:
   # a reset-to-topic. model_role is a platform-assigned character and must never
   # be abandoned.
   role_swap_redirect_fraction: 0.10
+  # asr_repair: the learner is transcribed by speech-to-text, which sometimes
+  # writes a different real word that sounds like the intended one ("by" for
+  # "buy", "for" for "four"). The tutor silently infers the meant word, uses
+  # the correct word naturally in its reply, and continues -- no quizzing, no
+  # spelling lesson. The slip lives in the user turn (masked in training and
+  # skipped by the filters), so the model only learns to PRODUCE the repair.
+  asr_repair_fraction: 0.10
+  # country_taboo: special HARD refusal axis -- the tutor must never mention
+  # the ONE real country configured in config/taboo_country.yaml or anything
+  # tied to it (name/adjective/cities/people/brands/history/events). INERT
+  # unless config/taboo_country.yaml is enabled with a real country; set this
+  # fraction > 0 only once that file is filled in.
+  country_taboo_fraction: 0.0
   # Persistent 3-strike redirect streams — train the model to handle
   # learners who persist on one of four "important" abuse axes across
   # multiple turns. Each axis-specific stream produces 10-turn dialogues
@@ -204,6 +262,13 @@ generation:
   # This option teaches the model that ``[learner]`` is a SOFT hint.
   # Default 0.0 = disabled. Use only intentionally.
   angle_shift_fraction: 0.1
+  # passive_learner_fraction: optional OPT-IN augmentation of the normal
+  # stream. If > 0, that fraction of normal seeds get a passive-learner
+  # dialogue: the learner is minimal/stuck ("I don't know", one-word replies)
+  # and the tutor PROACTIVELY leads so the conversation never stalls. Directly
+  # targets first-time users who don't know what to say. scenario_type stays
+  # "normal"; id prefix sft_passive_. Default 0.0 = disabled.
+  passive_learner_fraction: 0.1
 
   # ---- dialogue length ----------------------------------------------------
   # Total user+assistant turns for one SFT conversation (normal + redirect).

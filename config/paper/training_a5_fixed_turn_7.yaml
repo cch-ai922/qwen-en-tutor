@@ -120,7 +120,9 @@ dpo:
   sft_adapter_path: "outputs/paper/a5/sft"
   ref_model: null
   data:
-    dpo_filtered_dir: "data/dpo_filtered"
+    # Per-condition dirs — see training_a3_no_specialized.yaml header.
+    dpo_raw_dir: "data/dpo_raw_a5"
+    dpo_filtered_dir: "data/dpo_filtered_a5"
     validation_split: 0.05
     shuffle_seed: 42
     mix_ratio_register: 0.65

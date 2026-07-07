@@ -114,6 +114,7 @@ def compute_deficits(
     levels: list[str],
     locales: list[str],
     max_top_up_per_category: int,
+    categories: list[str] | None = None,
 ) -> tuple[dict[tuple[str, str], dict[str, int]], dict[str, Any]]:
     """Compute per-(level, locale, category) seed top-up needs.
 
@@ -140,9 +141,10 @@ def compute_deficits(
     quotas: dict[tuple[str, str], dict[str, int]] = defaultdict(dict)
     triple_reports: list[dict[str, Any]] = []
 
+    cats = categories or list(CATEGORIES)
     for level in levels:
         for locale in locales:
-            for category in CATEGORIES:
+            for category in cats:
                 key = (level, locale, category)
                 survivors = {
                     "sft": sft_counts.get(key, 0),

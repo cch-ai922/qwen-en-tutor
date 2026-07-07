@@ -115,13 +115,26 @@ foreach ($md in $sections) {
 
     # --natbib makes pandoc emit \citep{key} from [@key] so the bib
     # entries in references.bib resolve through bibtex+acl_natbib.bst.
-    & $pandoc `
-        --from='markdown+pipe_tables+raw_tex+tex_math_dollars' `
-        --to=latex `
-        --natbib `
-        --top-level-division=section `
-        --output=$outTex `
-        $tmpMd
+    # Pandoc emits a deprecation warning on stderr for some flag names which
+    # PowerShell would otherwise turn into a script-aborting NativeCommandError
+    # under $ErrorActionPreference='Stop'. Run with local Continue + stderr to
+    # null so warnings don't abort the build. Verify success by checking the
+    # output file's mtime.
+    $beforeMtime = if (Test-Path $outTex) { (Get-Item $outTex).LastWriteTimeUtc } else { [DateTime]::MinValue }
+    & {
+        $ErrorActionPreference = 'Continue'
+        $null = & $pandoc `
+            --from='markdown+pipe_tables+raw_tex+tex_math_dollars+tex_math_single_backslash' `
+            --to=latex `
+            --natbib `
+            --no-highlight `
+            --top-level-division=section `
+            --output=$outTex `
+            $tmpMd 2>$null
+    }
+    if (-not (Test-Path $outTex) -or (Get-Item $outTex).LastWriteTimeUtc -le $beforeMtime) {
+        throw "pandoc produced no fresh $outTex"
+    }
     if ($LASTEXITCODE -ne 0) {
         Write-Error "pandoc failed on $($md.Name) (exit $LASTEXITCODE)"
     }

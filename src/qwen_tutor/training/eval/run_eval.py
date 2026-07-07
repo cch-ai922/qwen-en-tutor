@@ -161,20 +161,21 @@ class HFTargetModelClient:
                 chat, tokenize=False, add_generation_prompt=True
             )
         inputs = self.tokenizer(prompt_text, return_tensors="pt").to(self.model.device)
-        # Stop tokens: chat-template models like Qwen3.5 end EACH TURN with
-        # `<|im_end|>` (id 248046 for Qwen3.5), not with the document EOS
-        # `<|endoftext|>` (id 248044). Passing only the document EOS lets
-        # the model run past the natural turn boundary into hallucinated
-        # `\nassistant\n` + `<think>` repeats until `max_new_tokens` is
-        # hit. Pass BOTH so the model halts at the first turn boundary.
+        # Stop tokens. For Qwen3.5 0.8B-Base:
+        #   tokenizer.eos_token_id = 248046  (<|im_end|>, turn-EOS)
+        #   model.config.eos_token_id = 248044  (<|endoftext|>, doc-EOS)
+        # A LoRA adapter doesn't fully retrain the base, so the model still
+        # often emits <|endoftext|> at turn ends instead of <|im_end|>.
+        # Halt on BOTH so generation stops at whichever token the trained
+        # model actually emits at the turn boundary.
         eos_ids: list[int] = [self.tokenizer.eos_token_id]
-        try:
-            im_end_id = self.tokenizer.convert_tokens_to_ids("<|im_end|>")
-            if isinstance(im_end_id, int) and im_end_id >= 0 \
-                    and im_end_id != self.tokenizer.eos_token_id:
-                eos_ids.append(im_end_id)
-        except Exception:  # noqa: BLE001
-            pass
+        for tok in ("<|im_end|>", "<|endoftext|>"):
+            try:
+                tid = self.tokenizer.convert_tokens_to_ids(tok)
+                if isinstance(tid, int) and tid >= 0 and tid not in eos_ids:
+                    eos_ids.append(tid)
+            except Exception:  # noqa: BLE001
+                pass
         with torch.no_grad():
             out = self.model.generate(
                 **inputs,
@@ -182,7 +183,7 @@ class HFTargetModelClient:
                 temperature=temperature,
                 top_p=0.95,
                 do_sample=temperature > 0,
-                pad_token_id=self.tokenizer.eos_token_id,
+                pad_token_id=self.tokenizer.pad_token_id,
                 eos_token_id=eos_ids,
             )
         new_tokens = out[0, inputs["input_ids"].shape[1] :]

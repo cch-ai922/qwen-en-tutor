@@ -7,27 +7,26 @@ control markers — tokens that end a session, invoke a tool, or trigger a refus
 on a semantic *threshold* condition. We show that the *shape* of the supervised
 fine-tuning data, not model scale, governs both *when* such a marker fires and
 *why* the model says it fires, and that two common curation choices have large,
-sometimes counter-intuitive effects. First, **trimming** each training sequence to
+sometimes counter-intuitive effects. First, *trimming* each training sequence to
 end at the marker — a practice that intuitively should sharpen marker learning —
-instead induces **premature firing**: across every position×marker design we test,
+instead induces *premature firing*: across every position×marker design we test,
 trimming raises the premature-firing rate by 0.44–0.58, a main effect far larger
-than the design choices it is usually bundled with. We show the mechanism is not a
-turn-position shortcut but threshold-laxity: trimming deletes the training examples
+than the design choices it is usually bundled with. We find the mechanism is not a
+turn-position shortcut but threshold-laxity: trimming removes the training examples
 in which the marker's trigger feature is present but *not* followed by firing,
-leaving the trigger perfectly predictive and destroying the model's ability to
+leaving the trigger nearly always predictive and impairing the model's ability to
 threshold on its magnitude; retaining a benign post-marker continuation restores
-correctly-timed firing. Second, a **typed** marker acts as a *semantic gate*:
-models trained to emit an axis-labeled marker attribute the correct violated
-invariant on 94–99% of fires and never emit a contentless marker, whereas generic
-markers carry no such signal — and attribution is robust to the trim that collapses
+correctly-timed firing. Second, a *typed* marker acts as a *semantic gate*: models
+trained to emit an axis-labeled marker attribute the correct violated invariant on
+the large majority of fires and never emit a contentless marker, whereas generic
+markers carry no such signal — and attribution survives the trim that collapses
 timing, showing *when* and *why* a marker fires are separable, separately-curated
-behaviors. This holds even under a *distractor* axis: with a second, sub-threshold
-violation present in the conversation, typed models still name the axis actually at
-threshold on 96–98% of fires (pulled to the distractor <2%), so the label forces a
-genuine per-axis semantic check rather than a generic "something is wrong" reflex. Finally, we propose **count-annotated markers**, which supervise the
-latent strike counter explicitly and are predicted to make firing trim-robust.
-These are cheap, architecture-independent data-curation principles for reliable
-control-token emission.
+behaviors, even when a second sub-threshold violation is present as a distractor.
+Third, the effect is not corpus-specific: it replicates in a different domain on a
+different model family (Llama-3.2), so the vulnerability is a general property of
+next-token training on trimmed sequences at a rare, count-triggered semantic
+marker, not an artifact of one dataset. These are cheap, low-overhead
+data-curation principles for reliable control-token emission.
 
 *Keywords:* large language models; supervised fine-tuning; data curation; control
 tokens; sequence truncation; threshold learning; tool calling; agentic systems.
@@ -55,13 +54,13 @@ This paper shows that both failure modes are governed by the **shape of the
 SFT data**, not by model scale, and that two common curation choices have large,
 measurable, and in one case counter-intuitive effects.
 
-**Contribution 1 (headline): the terminal-position / trim artifact.** A common
+**Contribution 1: the terminal-position / trim artifact.** A common
 practice when training a model to emit a rare marker is to *trim* each training
 sequence to end at the marker — it feels like it should sharpen marker learning
 by removing distracting continuation. We show it does the opposite. Trimming
 deletes every training example in which the marker's trigger feature is present
 but *not* followed by firing, leaving the trigger perfectly predictive of the
-marker and destroying the model's ability to threshold on the trigger's
+marker and impairing the model's ability to threshold on the trigger's
 magnitude. On a four-axis session-ending task, trimming raises premature-firing
 rate by **+0.44 to +0.58 across every design tested** — a main effect far larger
 than any other lever we study. Retaining the benign post-marker continuation

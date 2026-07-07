@@ -100,8 +100,13 @@ SESSION_END_AXES = (
     "persistent_persona_break",
     "persistent_role_swap",
 )
+# Accepts BOTH the axis-specific form ``[SESSION_END: persistent_<axis>]``
+# (A1-A5 training) and the generic form ``[SESSION_END]`` (A6 ablation,
+# paper §5.4.x).  When the generic form fires, group(1) is None — callers
+# that need the axis label should fall back to "generic" or to scenario
+# context.
 _SESSION_END_RE = re.compile(
-    r"\[SESSION_END:\s*(persistent_(?:off_topic|language_violation|persona_break|role_swap))\]"
+    r"\[SESSION_END(?::\s*(persistent_(?:off_topic|language_violation|persona_break|role_swap)))?\]"
 )
 
 
@@ -109,11 +114,15 @@ def detect_session_end(text: str) -> str | None:
     """Scan ``text`` for the persistent-redirect sentinel.
 
     Returns the axis label (e.g. ``"persistent_off_topic"``) when the
-    sentinel is present, or ``None`` if not. The dispatching layer should
-    call this on every tutor reply and end the session on a non-None return.
+    axis-specific sentinel is present, ``"generic"`` when the bare
+    ``[SESSION_END]`` form fires (A6 ablation), or ``None`` if neither.
+    The dispatching layer should call this on every tutor reply and end
+    the session on a non-None return.
     """
     m = _SESSION_END_RE.search(text)
-    return m.group(1) if m else None
+    if m is None:
+        return None
+    return m.group(1) or "generic"
 
 
 # ---------------------------------------------------------------------------

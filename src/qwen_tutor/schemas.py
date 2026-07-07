@@ -21,21 +21,15 @@ MessageRole = Literal["system", "user", "assistant"]
 # Soft life-domain tag for coverage balancing and per-category reporting.
 # Round-robin assigned at seed generation time. "general" is the default for
 # legacy on-disk seeds that pre-date this field.
-Category = Literal[
-    "food_and_dining",
-    "family_and_relationships",
-    "work_and_education",
-    "travel_and_transit",
-    "shopping_and_services",
-    "health_and_wellbeing",
-    "home_and_neighborhood",
-    "hobbies_and_leisure",
-    "nature_and_weather",
-    "civic_life",
-    "general",
-]
-# Categories that the seed quota-balancer cycles through. "general" is
-# intentionally excluded — it exists only as a legacy default.
+#
+# This is a FREE-FORM string, not a closed enum: the category set is
+# user-configurable via ``generation.categories`` in config/generation.yaml
+# (see qwen_tutor.generation.categories). The tuple + dict below are only
+# the built-in DEFAULTS used when config omits the ``categories`` key.
+Category = str
+# Default categories the seed quota-balancer cycles through when config does
+# not override them. "general" is intentionally excluded — it exists only as
+# a legacy default value for the ``category`` field.
 CATEGORIES: tuple[str, ...] = (
     "food_and_dining",
     "family_and_relationships",
@@ -48,6 +42,21 @@ CATEGORIES: tuple[str, ...] = (
     "nature_and_weather",
     "civic_life",
 )
+# Soft-guide descriptions for the built-in defaults, injected into the seed
+# prompt's "Category meaning" block. User-defined categories supply their own
+# descriptions in config; any without one fall back to the category name.
+DEFAULT_CATEGORY_DESCRIPTIONS: dict[str, str] = {
+    "food_and_dining": "meals, markets, restaurants, snacks, drinks, cooking, ordering, eating with others.",
+    "family_and_relationships": "family members, friendships, gatherings, parenting, household routines.",
+    "work_and_education": "school, university, jobs, internships, study, training, learning a skill.",
+    "travel_and_transit": "getting around the city, public transport, taxis, day trips, longer travel within {country}.",
+    "shopping_and_services": "stores, online orders, returns, repairs, deliveries, errands at counters.",
+    "health_and_wellbeing": "clinics, pharmacy, exercise, sleep, light wellness; nothing graphic or clinical-prescriptive.",
+    "home_and_neighborhood": "building, apartment, neighbors, household tasks, maintenance, local shops near home.",
+    "hobbies_and_leisure": "sports, music, reading, crafts, games, weekend plans, parks, low-pressure hangouts.",
+    "nature_and_weather": "weather small-talk, parks, gardens, seasons, outdoor walks, mild outdoor activities.",
+    "civic_life": "paperwork, public services, neighborhood meetings, bus passes, registrations, lost-and-found.",
+}
 RejectionAxis = Literal[
     "register_unnatural",
     "cefr_mismatch",
@@ -117,7 +126,9 @@ class ScenarioSeed(_Strict):
     # doesn't reject existing data.
     id: str | None = None
     topic: str
-    subtopics: list[str] = Field(min_length=3, max_length=5)
+    # 4-6 richer descriptive phrases (see the seed prompt). min stays 3 so
+    # legacy on-disk seeds with 3 terse subtopics still load.
+    subtopics: list[str] = Field(min_length=3, max_length=6)
     user_role: UserRole
     model_role: ModelRole
     setting: str
@@ -139,7 +150,7 @@ class ExampleMetadata(_Strict):
     """Shared scenario-level metadata for SFT and DPO examples."""
 
     topic: str
-    subtopics: list[str] = Field(min_length=3, max_length=5)
+    subtopics: list[str] = Field(min_length=3, max_length=6)
     user_role: UserRole
     model_role: ModelRole
     cefr_level: CEFRLevel

@@ -11,7 +11,7 @@ All conditions fine-tune the same **Qwen3.5 0.8B base** with QLoRA
 **1 epoch**, **seed 42**, via `scripts/run_training.py --stages train_sft`
 reading a per-condition YAML under `config/paper_v2/`. Using SFT-only at a single
 matched budget removes training-budget and DPO as confounds, isolating the
-data-shape factors. (The paper_v2 headline A1 was 2 epochs; we do **not** use it
+data-shape factors. (The paper_v2 primary A1 was 2 epochs; we do not use it
 here — we use the matched 1-epoch retrain `training_a1_1ep.yaml`, so every cell
 in this paper shares budget and seed.)
 
@@ -51,7 +51,7 @@ common source, not independent regenerations — so a cell-to-cell contrast is a
 clean single-factor manipulation. The chains, from the actual build scripts:
 
 **Marker (typed → generic):**
-- `scripts/convert_a1_to_a7.py` — takes A1/A2's 4-variant **typed** persistent
+- `scripts/convert_a1_to_a7.py` — takes A1's 4-variant **typed** persistent
   data (`data/sft_filtered`), string-replaces `[SESSION_END: persistent_<axis>]`
   → `[SESSION_END]`, and re-renders the deployment system prompt with the
   generic `[persistence]` block (`QWEN_TUTOR_SENTINEL_FORMAT=generic`). Produces
@@ -84,7 +84,7 @@ clean single-factor manipulation. The chains, from the actual build scripts:
 
 We document these chains explicitly because the untrimmed A5/A6/A7 are
 *reconstructed*, not trained-from-scratch matched pairs; the exact-prefix
-verification is the load-bearing check that the only thing changing between a
+verification is the central check that the only thing changing between a
 trimmed and untrimmed cell is the presence of the post-marker continuation.
 
 ## 4.5 Evaluation
@@ -122,11 +122,13 @@ each dir carrying a `_SOURCE.json` provenance record.
 - **mixed_violation_probe** (Phase 1) — `scripts/build_mixed_violation_probe.py`.
   Primary axis X escalates to threshold while distractor axis Y appears
   sub-threshold; n≈282 (141 fire_correct / 141 distractor_sub), all 12 X×Y pairs.
-  Built but **not yet generated** (awaits GPU).
+  Generated on the typed checkpoints (A1, A5) and scored by
+  `score_mixed_violation_probe.py` (§5.4; output
+  `outputs/paper_v3/score/mixed_violation.json`).
 
 ## 4.8 Statistical note
 
-All numbers are single training seed (seed 42). A robustness reseed (123/7) of
-the load-bearing cells is inherited from paper_v2 §4.10. The trim effect (~+0.5,
-§5) is far larger than plausible seed variance; the attribution effect (typed
-~0.96 vs generic undefined) is structural.
+All numbers are single training seed (seed 42). We additionally retrain the
+primary A1 trim/untrim pair at an independent seed (seed 7) and reproduce the
+trim effect (§5.1). The trim effect (~+0.5, §5) is far larger than plausible seed
+variance; the attribution effect (typed ~0.96 vs generic undefined) is structural.

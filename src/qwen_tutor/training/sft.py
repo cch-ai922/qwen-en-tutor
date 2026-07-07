@@ -422,7 +422,11 @@ def run_sft(config_path: str | Path = "config/training.yaml") -> str:
         callbacks=callbacks,
     )
 
-    trainer.train()
+    output_dir = Path(sft_cfg["output_dir"])
+    has_ckpt = output_dir.exists() and any(output_dir.glob("checkpoint-*"))
+    if has_ckpt:
+        logger.info("resuming from latest checkpoint in %s", output_dir)
+    trainer.train(resume_from_checkpoint=True if has_ckpt else None)
     trainer.save_model(sft_cfg["output_dir"])
     tokenizer.save_pretrained(sft_cfg["output_dir"])
     logger.info("SFT complete; adapter saved to %s", sft_cfg["output_dir"])

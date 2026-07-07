@@ -1,137 +1,104 @@
 # 1. Introduction
 
-Building a dialogue model that can act as a competent English tutor
-is a problem with three properties that make standard
-instruction-tuning data inadequate. First, **pedagogical
-appropriateness is level-specific**: vocabulary, grammar, and
-scaffolding shape that work for a C1 learner are wrong for an A1
-learner, and vice versa. Second, **safe-and-graceful redirect
-behavior is multi-axis**: a tutor is the keeper of several
-*interaction invariants* — the language of instruction, the lesson
-topic, the role structure, the tutor persona, the pedagogical
-contract, the locale frame — and a learner can violate any one of
-them, each calling for a structurally different repair. Third,
-**cultural fit matters**: a tutor deployed to learners in a
-non-Western locale must avoid Western-default references that the
-model's general pretraining corpus drives it towards.
+**Problem.** We ask, for each behavior a deployed English tutor needs,
+whether a sufficiently explicit system prompt is enough or the behavior
+must be demonstrated in fine-tuning. A deployed tutor is governed by a
+long system prompt that already *states* most of what it should do —
+stay in character, ground culture in the learner's locale, refuse role
+swaps, give one short example rather than a grammar lecture, escalate to
+a session-end signal under sustained abuse. If stating a behavior were
+sufficient, the data-side problem would be trivial.
 
-A small but visible body of recent work has produced English-tutor
-SFT datasets, typically as a flat collection of "good" tutor
-dialogues at one or two CEFR levels. None of the public corpora we
-are aware of separately covers the multi-axis redirect behaviors a
-deployed tutor must handle, and most do not address locale fidelity
-at all. The result is that a model fine-tuned on such corpora is
-pedagogically competent in the common case but brittle in the long
-tail: it fails (or fails gracefully but inconsistently) when the
-learner deviates from the canonical script.
+**Why it matters.** It is not trivial: the behaviors split cleanly into
+ones a prompt clause elicits and ones it only describes, and knowing
+which is which is exactly the decision a practitioner faces when building
+a task-specific model on consumer hardware — spend the data-collection
+and training budget only where a prompt will not do. The tutor setting
+makes this question both unavoidable and answerable, because each target
+behavior corresponds to a clause already present in a realistic
+deployment prompt (§3.5 reproduces ours): pedagogical appropriateness is
+level-specific, redirect behavior spans several *interaction invariants*
+(language of instruction, lesson topic, role structure, persona,
+pedagogical contract, locale frame), and cultural fit must resist the
+Western-default references pretraining drives toward. This lets us ask,
+clause by clause, whether the clause suffices.
 
-We present a data-generation pipeline aimed squarely at this long
-tail. The pipeline produces three artefacts from a single
-locally-served teacher model: a SFT corpus stratified across six
-CEFR levels and twelve behavior streams; a DPO preference-pair
-corpus mixing register-style pairs with student-vs-teacher
-on-policy pairs; and a `<think>`-mode evaluator-example corpus.
+**Gap in prior work.** The prompting-versus-fine-tuning question has been
+studied at the level of general alignment — that a small, high-quality
+demonstration set can install broad instruction-following
+[@zhou2023lima; @ouyang2022instructgpt], and that in-context demonstrations
+often convey format more than new capability [@min2022rethinking] — but not
+resolved *per behavior* for a deployed task model. Synthetic-instruction
+pipelines (§2.1) and tutor-LLM datasets (§2.3) target general
+instruction-following with a uniform recipe; none asks, per behavior,
+whether the deployment prompt already elicits what the data teaches.
+Single-turn safety and persona work (§2.4) treats redirection as
+one-prompt-one-refusal and does not address multi-turn persistence or the
+per-axis promptability of redirects.
 
-Two of our contributions are stated as *transferable design
-principles* that the tutor pipeline happens to instantiate, because
-we believe they apply beyond tutoring; the third is the practical
-pipeline that operationalizes them at consumer scale.
+We fill this gap with a **matched-prompt per-capability evaluation**: the
+same fully-specified deployment prompt — every redirect-axis instruction
+and the full three-strike persistence protocol — is supplied at evaluation
+to a fine-tuned 0.8B student and to a ladder of prompt-only baselines (0.8B
+base, 0.8B instruct, 4B instruct, and the 9B teacher that generated the
+training data). Holding the instruction fixed across conditions is what
+makes a prompt-only failure interpretable: it isolates whether the behavior
+is *promptable* at all (the full logic is in §5.1).
 
-## Contributions
+**Contribution.** Our contribution is a single one: **a per-capability map
+of the train-versus-prompt boundary** for tutor redirect behavior,
+established under a matched-prompt protocol that makes prompt-only failures
+interpretable. The behaviors separate along an interpretable line:
+*promptable* when a single clause both *describes* and *elicits* the
+behavior (locale fidelity, role-swap and topic re-anchoring at the level of
+response type — prompt-only reaches parity with the trained student), and
+*not promptable* when the behavior requires cross-turn state-tracking
+(multi-turn persistence) or the suppression of a strong competing prior
+(pedagogical withholding), which a clause can name but not produce.
 
-1. **An invariant-based taxonomy of tutor redirect behavior,
-   instantiated as a 12-stream SFT corpus.** We model a tutor not as
-   a producer of undifferentiated "good dialogue" but as the keeper
-   of a set of *interaction invariants*. A learner violation breaks
-   exactly one invariant, and the correct redirect is the *minimal
-   repair* that restores it; two violations occupy distinct axes
-   **iff their minimal repairs differ in shape**. This criterion
-   fixes the granularity of the taxonomy rather than leaving it to
-   intuition, and it turns the central claim — that a single generic
-   "redirect" stream is insufficient — into a *prediction* (distinct
-   invariants need distinct repairs) that we test directly in §5.4
-   rather than merely assert. We instantiate the taxonomy as one
-   normal stream, seven single-shot redirect streams (one per
-   invariant: locale, pedagogy, language, persona, topic, role swap,
-   and a generic appropriateness catch-all), and four persistent
-   3-strike streams (off-topic, language violation, persona break,
-   role swap), all stratified across CEFR levels A1–C2.
+In support of that map — not as separate contributions — we also report an
+evidenced negative result on the conventional metric (context-blind
+redirect-axis F1 is a *type* classifier that ties a 0.8B student with the
+9B teacher at 0.409, while a quality-aware pairwise eval finds the student
+preferred on every axis; §5.5, Appendix A), and release the reusable
+apparatus the study is built on: a locale-aware, yield-aware generation
+pipeline (§3, with a `locale_judge` FP audit, §6.4) and a *partially
+validated* trigger-position decorrelation construction (§5.3.1).
 
-2. **A trigger-position decorrelation construction for learning
-   rare structured markers, instantiated as a 4-variant persistent
-   design.** When a model must emit a rare structured marker
-   conditional on a *semantic* trigger, but that marker is
-   *positionally regular* in the training data, the model learns the
-   position as a proxy for the trigger — an instance of the
-   shortcut-learning failure mode (§2.4). Our persistent 3-strike
-   streams have exactly this structure: a sentinel must fire on the
-   third same-axis violation, but a fixed-turn design teaches "fire
-   at turn 7" instead. We decorrelate marker position from trigger
-   by drawing the sentinel turn from a *seeded pseudo-random
-   function of the record id* over the feasible, parity-constrained
-   position set {5, 7, 9, 11}. The seeding is not incidental: it is
-   forced by three pipeline invariants — resumability,
-   train/eval-split coherence, and turn-parity — that rule out naive
-   randomization (§3.4). The construction transfers to any setting
-   with a rare, semantically-triggered, positionally-regular marker
-   (refusal triggers, tool-call emission, agentic stop conditions).
+**Results.** Under the matched prompt, the two not-promptable behaviors
+fail prompt-only and are installed by SFT. Persistence resists zero-shot
+and few-shot prompting on the 9B teacher (recall $\leq 0.06$) and is only
+partially recovered by native chain-of-thought (0.63, still below the
+trained student's 0.83 and at 1.6–3.2k reasoning tokens per turn), while
+the no-specialized-data ablation fires 0% of the time. Withholding stays at
+0.09–0.45 prompt-only (9B teacher 0.45) against the trained student's 0.61
+(two judges, n=63), collapsing to near the untrained-base rate when the
+pedagogy stream is ablated. The promptable axes reach prompt-only parity.
 
-3. **A locale-aware, yield-aware generation pipeline that
-   operationalizes the taxonomy on consumer hardware.** The pipeline
-   contributes several practical components that we report but do
-   not claim as conceptual novelty: a two-variant locale-instruction
-   block (a strict-Latin default and an allow-L1 variant for the
-   `language_redirect` stream, without which that stream has a ~0%
-   pass rate); a six-filter cascade combining cheap mechanical
-   filters with an LLM-judge `locale_judge`; and a declarative,
-   yield-aware top-up loop that lets the operator specify per-stream
-   mix shares as either ratios or absolute floors without
-   recomputing arithmetic as yields shift. We further surface one
-   reusable methodological lesson from this pipeline: an audit of the
-   `locale_judge` reveals systematic false positives (~85% of its
-   rejections) on common English sentence-initial words and
-   locally-canonical landmarks, remediable with static allowlists
-   (global pass rate 70.1% $\to$ 88.4%; §6.5). We single this out because
-   it generalises to any capitalization-based entity filter, not
-   because the fix is deep.
+**The boundary replicates in a second trained family.** A Llama-3.2-1B
+student, evaluated against its *own* untrained base, lifts *both*
+not-promptable behaviors far above prompt-only — persistence 0.25→0.91 and
+withholding 0.11→0.50 — so the effect is training, not scale (student and
+control share one base). A larger Llama-3.1-8B prompt-only probe stays low
+even with chain-of-thought; the direction is robust across families, the
+magnitude family-dependent (§6.2). The load-bearing conditions (A1, A3) are
+reported over three seeds with mean$\pm$s.d., the withholding contrasts
+carry per-judge two-proportion tests, and the pairwise win-rates carry
+bootstrap CIs (§4.8, Table~\ref{tab:stat-summary}, §6.1).
 
-We demonstrate the pipeline empirically by training a 0.8B-parameter
-student on RTX 3060 12GB consumer hardware. Held-out evaluation
-across four test sets (Tutor-Scenario, Redirect-Probe,
-Persistent-Probe, and Locale-Leakage) shows that the full pipeline
-yields a student that (i) on the **fully-mechanical sentinel-firing
-metric** — our strongest evidence, since it consults no judge —
-sharply outperforms a same-size ablation trained without the
-4-variant persistent design; (ii) on **locale-leakage rate**, also
-mechanical, sharply outperforms a same-size off-the-shelf instruct
-model; (iii) on **redirect-axis F1** sharply outperforms the same
-baseline; and (iv) on **naturalness on Tutor-Scenario** approaches
-the 9B-teacher upper bound. (Numbers in §5.)
+**Scope and non-goals.** We focus on the *data side* and treat the
+training recipe as fixed (QLoRA SFT). We do not contribute to
+CEFR-leveling itself. We evaluate with a single base/teacher family
+(Qwen) — a genuine limitation (§6.2) — and at a single locale
+(`china`), which does *not* limit the central claim: persistence and
+withholding are structural behaviors independent of the locale backdrop,
+so the boundary for them is locale-independent by construction (§6.2).
+The 0.8B student on RTX 3060 12GB is a deliberate choice: the boundary is
+most consequential precisely where a large general-purpose model is not
+deployable.
 
-## Scope and explicit non-goals
-
-We focus on the *data side* of the tutor problem. We treat the
-training recipe as fixed (QLoRA SFT followed by DPO) and do not
-explore alternative training objectives. We do not contribute to
-the CEFR-leveling problem itself — we assume the teacher's CEFR
-adherence is well-calibrated and let the filter cascade catch
-egregious violations. We evaluate at a single locale (`china`); the
-pipeline supports multi-locale generation via `config/locale.yaml`
-but we leave the multi-locale empirical study to future work.
-
-The student size and hardware are also a deliberate scope choice:
-we run all experiments on a 0.8B base model trained with QLoRA on
-RTX 3060 12GB. This is a feature rather than a constraint. We
-believe a real argument for taxonomy-based tutor-data pipelines is
-that they let small consumer-deployable models do work that
-otherwise requires a much larger general-purpose model. We measure
-distillation effectiveness by comparing the trained student against
-the 9B teacher used to produce its training data.
-
-## Paper organisation
-
-§2 surveys related work on synthetic instruction data, LLM-judge
-filtering, persona/safety adversarial data, shortcut learning, and
-prior tutor-dataset work. §3 presents the pipeline. §4 specifies the
-experimental setup. §5 reports results and ablations. §6 discusses
-limitations and methodological lessons. §7 concludes.
+**Paper organization.** §2 surveys related work. §3 presents the
+pipeline and reproduces the deployment prompt (§3.5). §4 specifies the
+matched-prompt experimental setup. §5 reports the per-capability boundary
+results. §6 discusses limitations, confounds, and methodological lessons.
+§7 concludes.

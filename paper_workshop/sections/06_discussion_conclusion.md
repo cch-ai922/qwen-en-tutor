@@ -13,24 +13,30 @@ teacher — for matched per-capability instruments, which recover the largest
 specialized-data effect in the study (role-swap quality, win-rate 0.87) on an
 axis F1 called saturated parity.
 
-**Threats to validity.** *Single family* (Qwen) is the load-bearing
-generalization gap: whether a behavior is trainable-but-not-promptable could
-shift with a family's instruction-following strength. A cross-family
-*prompt-only* probe on **Llama-3.1-8B-Instruct** under the matched prompt
-confirms the boundary's *direction* holds outside Qwen (withholding 0.22–0.32
-vs trained 0.63; persistence recall 0.27 zero-shot, 0.55 with prompted CoT,
-vs trained 0.85), though the *magnitude* is family-dependent (Llama attains
-more prompt-only persistence than the Qwen teacher). A *trained* non-Qwen
-student is the definitive test and is left to future work. *Single locale*
+**Cross-family replication.** The boundary is not a Qwen artifact: it
+replicates in a second *trained* family. A Llama-3.2-1B student, evaluated
+against its *own* untrained base under the identical prompt, lifts both
+not-promptable behaviors far above prompt-only — persistence recall 0.25→0.91,
+withholding 0.11→0.50 (two judges) — isolating training from scale, since
+student and control share one base. A larger Llama-3.1-8B prompt-only probe
+stays low even with chain-of-thought (persistence 0.27→0.55; withholding
+0.22–0.32). The boundary's *direction* is robust across families; the
+*magnitude* is family-dependent (Llama trained withholding 0.50 vs Qwen 0.61,
+and Llama attains more prompt-only persistence than the Qwen teacher). One
+asymmetry: the Llama student trains from an instruct checkpoint, since
+Llama-3.2-1B-*Base* could not learn the rare turn-end token under LoRA-SFT.
+
+**Threats to validity.** *Single locale*
 does not threaten the central boundary: persistence and withholding are
 structural behaviors independent of the locale backdrop. *Judged-metric
 power*: the trained-vs-teacher withholding gap is directional at n=63; the
 strong claim is the teacher's absolute sub-50% compliance. *Decorrelation* is
 partially validated (fixes positional recall, not premature firing).
 
-**Future work**, in priority order: (i) a **trained cross-family student**
-(the load-bearing test, since family, not locale, is where the boundary could
-move); (ii) **larger-scale decorrelation**, where the positional route is
+**Future work**, in priority order: (i) **broader cross-family replication**
+(a third family, a base-checkpoint student, multi-locale) — the trained Llama
+student above establishes the boundary in a second family; breadth remains;
+(ii) **larger-scale decorrelation**, where the positional route is
 cheaper relative to the semantic one; (iii) a **better-powered pedagogy
 teacher comparison**; and (iv) transfer of the matched-prompt methodology to
 other rare, semantically-triggered markers (refusal-token and tool-call

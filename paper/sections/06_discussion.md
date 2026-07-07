@@ -1,172 +1,202 @@
 # 6. Discussion
 
-## 6.1 The naturalness gap at C1 / C2
+## 6.1 Statistical rigor: seeds and small probe counts
 
-The pipeline's clearest remaining weakness is C2 naturalness. In
-§5.1 we report that the naturalness filter is responsible for
-113 of the 363 post-audit rejections at C2 (~31% of C2 rejections)
-and 50 of 178 rejections at C1. The 9B teacher itself produces
-stilted-sounding C2 dialogues at a non-trivial rate; the filter
-catches the worst offenders but the corpus quality at C2 is
-materially lower than at A2.
+The load-bearing conditions A1 and A3 are reported over **three seeds**
+(42, 123, 7); others are single-seed (§4.8). The three-seed statistics
+confirm the judged results are not initialisation artifacts: withholding A1
+$0.63\pm0.08$ vs A3 $0.13\pm0.01$ (non-overlapping at every seed), A1
+persistence recall $0.85\pm0.04$. The headline mechanical persistence result —
+prompt-only $\leq 0.06$ and A3 exactly 0.000 vs trained recall $\geq 0.83$ —
+is far too large to be a seed artifact. Where the judged metrics are more
+fragile we flag it: the withholding A1-vs-A3 contrast clears significance under
+each judge (Llama $z=5.9$, Gemma $z=5.6$), so the *necessity* claim is robust,
+but the A1-vs-9B-teacher contrast is only at the edge (Llama $z=1.96$, Gemma
+$z=1.62$) and is reported as directional (§5.4); the context-dependent
+mechanical scores are n$\leq 25$ (suggestive, §5.7); and the pairwise eval
+leans only on the large effects (role-swap 0.87, language 0.75). No *boundary*
+conclusion rests on an underpowered comparison.
 
-Three forces drive this. First, **C2 dialogue requires the teacher
-to switch into low-grade native speech**, and the teacher (a
-post-trained chat model) is biased toward over-formal speech that
-reads as stilted in casual contexts. Second, **the rendered system
-prompt is the same length at every CEFR level**, which means the
-share of context spent on level instruction shrinks as the desired
-sophistication of the output increases. Third, **the naturalness
-filter is heuristic** (perplexity bands, repetition heuristics)
-rather than learned; some C2 turns that are perfectly natural to a
-human reader fall outside the filter's bands because C2 vocabulary
-has lower base-rate perplexity than A1 vocabulary.
+## 6.2 Threats to validity
 
-A possible mitigation is to train a learned naturalness filter on
-human-rated transcripts and add it as a seventh filter. We leave
-this to future work.
+**What "prompting" includes, and the few-shot/CoT steelman.** "Prompting" is
+the complete zero-shot deployment instruction (§3.5). The natural objection —
+persistence is a counting task, exactly where exemplars and CoT should help,
+so zero-shot is too weak — we met with the full prompting ladder on the 9B
+teacher (§5.3, Table~\ref{tab:persistence-prompting-ladder}): few-shot and an
+output scaffold do not help, and only native CoT partially recovers recall,
+still short of the trained student and at heavy inference cost. So the
+persistence claim is precisely "resists zero-shot and few-shot prompting
+outright; only partially recovered by native CoT, at a deficit SFT removes" —
+a relocation of the boundary, reported as such. The pedagogy claim is less
+exposed: withholding is a single-turn decision, so a zero-shot clause is a
+fair test, and the result is anchored on the A3 ablation, not prompt-only
+failure alone.
 
-## 6.2 Single-seed reporting and statistical rigor
+**Turn-depth and violation-count are entangled in Persistent-Premature-Probe.**
+The probe varies both the premature turn and the number of prior violations
+(vc$\in\{1,2\}$), but not orthogonally: a shallow turn can only carry vc=1 and
+only deep turns reach vc=2, so the aggregate by-turn premature curve conflates
+a violation-count effect with any turn-position effect. Re-slicing within each
+vc stratum (Appendix B.6) shows the premature rise is driven by accumulated
+violation count and conversation depth — peaking at turn 9, not the trained
+turn 7 — rather than by a turn-position shortcut; but the within-vc curves are
+not flat either, so a residual depth component remains that this probe cannot
+cleanly separate from position. A definitive separation needs a future probe
+that crosses turn-depth with violation count orthogonally. We flag the
+entanglement rather than over-read the by-turn axis.
 
-We report a single training seed for each of the four trained
-conditions. Standard practice for SFT/DPO ablation studies is three
-or more seeds with mean $\pm$ std and a paired significance test. We
-explicitly do not have those numbers. The compute cost of three
-seeds for four conditions on RTX 3060 is large enough that we
-chose to spend that budget on the four conditions instead of three
-seeds of one condition.
+**Single family (a real limitation) and single locale (a scope note, not a
+threat).** All experiments use a Qwen-family base and teacher at
+`locale=china`. These are not equal limitations. The **family** limitation is
+genuine: distillation is intra-family, and whether a behavior is
+trainable-but-not-promptable could plausibly shift with a family's
+instruction-following and in-context-learning strength. We therefore ran a
+two-part cross-family check on the **Llama** family — a prompt-only probe at
+8B and a *trained* student at 1B — and both confirm the boundary's *direction*
+holds outside Qwen. Table~\ref{tab:crossfamily} collects the persistence
+recall.
 
-The honest reading is that our reported numbers are point
-estimates whose seed-to-seed variance is unknown. For the
-mechanical metrics (sentinel firing, locale leakage) the variance
-is bounded by the test-set bootstrap CIs we report. For judged
-metrics the variance is partially captured by the inter-judge
-agreement we report. Reviewers reading this should treat the
-mechanical metrics with more confidence than the judged ones, and
-the locale_judge FP audit (§6.5) as the strongest finding
-independent of single-seed concerns. We note that our two headline
-*conceptual* claims rest on the firmest evidence available here:
-the trigger-position decorrelation claim is tested by a fully
-mechanical metric (sentinel firing), and the invariant-decomposition
-claim is a falsifiable per-axis prediction whose direction (A1 $\gg$ A3
-on unseen axes, A1 $\approx$ A3 on the shared generic axis) does not depend
-on absolute judged scores.
+```{=latex}
+\begin{table}[t]
+\centering
+\small
+\begin{tabular}{@{}l l c c@{}}
+\toprule
+\textbf{Model} & \textbf{Condition} & \textbf{Persist. recall} & \textbf{Withhold rate} \\
+\midrule
+Qwen-0.8B      & prompt-only (9B teacher)   & $\leq$0.06 & 0.09--0.45 \\
+(in-family)    & trained (A1)               & 0.83--0.85 & 0.61 \\
+\midrule
+Llama-3.1-8B   & prompt-only, zero-shot     & 0.27       & 0.22--0.32 \\
+               & prompt-only, prompted CoT  & 0.55       & --- \\
+Llama-3.2-1B   & prompt-only (untrained)    & 0.25       & 0.11 \\
+               & \textbf{trained, full SFT (A1)} & \textbf{0.91} & \textbf{0.50} \\
+\bottomrule
+\end{tabular}
+\caption{\textbf{The boundary replicates in a second trained family.} On \emph{both} not-promptable behaviors, training the \emph{same} Llama-3.2-1B-Instruct base --- evaluated against its own untrained control under the identical deployment prompt --- lifts the behavior far above prompt-only: persistence recall $0.25\!\to\!0.91$, withholding $0.11\!\to\!0.50$ (two judges). Because the trained student and the prompt-only control share one base, this isolates \emph{training} from scale. The 8B prompt-only rows show the behavior stays low even for a much larger model. Direction is robust across families; magnitude is family-dependent (the Llama trained withholding 0.50 is below Qwen's 0.61).}
+\label{tab:crossfamily}
+\end{table}
+```
 
-## 6.3 Threats to validity
+This is the load-bearing generalization result (Table~\ref{tab:crossfamily}):
+because the trained Llama-1B student and its prompt-only control share one
+base, the contrast isolates *training* from scale rather than the size
+comparison an 8B-vs-0.8B probe would be, and it holds on *both*
+not-promptable behaviors. The 8B prompt-only rows confirm the gap is not
+closed by scale alone (persistence 0.27→0.55 even with CoT). The central
+claim is therefore not a Qwen artifact.
 
-**Single locale.** All experiments are at `locale=china`. The
-pipeline supports multi-locale generation but we have not
-empirically demonstrated that the locale-aware prompt engineering
-transfers to e.g. `japan` or `italy`. The mechanical filter
-(locale-leakage gazetteer) would need to be re-built for each new
-locale.
+Two honest qualifications, neither of which touches the direction. First,
+**magnitude is family-dependent**: the Llama trained withholding (0.50) sits
+below the Qwen student's (0.61), and Llama attains markedly more *prompt-only*
+persistence than the Qwen teacher ($\leq 0.06$), so the gap's sharpness varies by
+family even though its sign (training $>$ prompting) does not. Second, an
+**instruct-checkpoint asymmetry**: the Llama student trains from
+Llama-3.2-1B-*Instruct*, whereas the Qwen student trains from a base checkpoint,
+because Llama-3.2-1B-*Base* could not learn to emit the rare turn-end token under
+LoRA-SFT (its post-turn distribution stays near-uniform, producing
+non-terminating generations) — a finding that itself echoes the paper's
+rare-token theme. We report the instruct-based student as the working
+cross-family analogue and flag the asymmetry. Broader replication (a third
+family, a base-checkpoint student, multi-locale) remains future work (§6.3).
 
-**Single base model and teacher.** The student is Qwen3.5-0.8B-Base
-and the teacher is Qwen3.5-9B-UD-Q4_K_XL. Both come from the same
-model family, which means our distillation results reflect
-intra-family distillation and may not transfer to e.g.
-Llama-3 $\to$ Qwen3.5 or vice versa. Multi-family experiments are
-left to future work.
+**Locale, by contrast, does not threaten the central boundary.** The
+load-bearing claims —
+persistence (firing on the third same-axis violation) and withholding
+(scaffolding instead of answering) — are *structural* behaviors: cross-turn
+violation counting and the suppression of a strong answer prior, respectively.
+Neither mechanism depends on the locale backdrop of the dialogues, so there is
+no route by which "which behaviors are promptable" would change across
+locales. Single-locale bounds only two secondary things: (i) the generality of
+the *locale-fidelity axis* result — one of the already-promptable axes — and
+(ii) the `locale_judge` gazetteer, which is locale-specific and treated as
+pipeline engineering (§6.4). Multi-locale repeats would therefore broaden the
+promptable-axis surface, not shore up the persistence/withholding claim, which
+is locale-independent by construction.
 
-**Self-preference judge bias (flagged, mitigated, not eliminated).**
-The self-preference failure mode
-[@panickssery2024selfpreference] — a model scoring its own family's
-outputs more favourably than an out-of-family judge would — is a
-well-documented threat for any work that uses an LLM ensemble to
-evaluate a small student. We mitigate at the ensemble level: the
-three judges in §4.7 (Prometheus-7B-v2, Mistral lineage;
-Llama-3.1-8B-Instruct, Meta; Gemma-2-9B-it, Google) are drawn from
-three model families *all distinct from the teacher's Qwen family*,
-so the student is never scored by a checkpoint that shares its
-pre-training corpus, tokenizer, or post-training recipe with the
-teacher that produced its supervision data. The Qwen3.5-9B teacher
-appears in the paper only as the data generator and as zero-shot
-upper-bound baseline B4 — never as a judge. This is a stricter
-judge-independence than is standard practice in tutor-LLM
-evaluations, where at least one same-family judge is typical.
+**Judging.** The withholding criterion is binary (withheld vs answered), far
+less subjective than a 1–5 rubric, and the pairwise ensemble
+(Prometheus/Mistral, Llama-3.1/Meta, Gemma-2/Google) is drawn from three
+families all distinct from the Qwen teacher, so the student is never scored by
+a checkpoint sharing the teacher's lineage. The generic-redirect negative
+control (0.55, §5.6) bounds any residual "A1 is globally preferred" component
+to near zero, and the mechanical metrics are judge-free.
 
-Two residual considerations remain, which we flag rather than
-claim away. (i) Cross-family judges still carry their own
-stylistic priors — Prometheus's rubric protocol prefers
-explicit-criterion language, Llama-3.1 tends to reward longer
-responses, Gemma-2 has its own register preferences — and the
-ensemble median controls only the *family-correlated* component of
-bias, not these individual priors. (ii) All three judges are
-post-trained on instruction-following corpora that overlap
-non-trivially with the data sources our teacher itself was trained
-on, so "no shared family" does not imply "no shared training data."
-We treat the cross-family ensemble as the strongest practical
-mitigation available within the RTX-3060 12 GB compute envelope
-and report inter-judge Krippendorff $\alpha$ and 100-sample
-human-validation correlation (§5.7) as transparency on the
-residual. The mechanical metrics (sentinel firing, locale leakage)
-remain entirely judge-free and so untouched by this concern.
+## 6.3 What we would do with more compute, in priority order
 
-**Repair-shape vs intent detection.** The redirect-axis F1 metric
-classifies the *produced response* by repair shape (§4.5), which is
-a proxy for whether the model produced the correct minimal repair.
-A model could in principle name the right axis while producing a
-mis-shaped repair, or vice versa; we mitigate by classifying the
-response rather than any explicit intent label, but the proxy is
-not perfect and per-axis results (§5.4) should be read accordingly.
+1. **Broader cross-family replication.** The trained non-Qwen student is now
+   done — a Llama-3.2-1B student on the existing teacher-distilled corpus
+   confirms the persistence boundary holds outside Qwen (§6.2, full-SFT recall
+   0.91 vs matched prompt-only 0.25). What remains is *breadth*: a third family
+   (e.g.\ Gemma), a base-checkpoint Llama student (the current one trains from
+   the instruct checkpoint, since Llama-3.2-1B-Base could not learn the turn-end
+   token under LoRA-SFT), and multi-locale repeats.
+2. **Larger-scale decorrelation.** Test at 4B/7B, where the positional route
+   is cheaper relative to the semantic one, so a genuine positional component
+   of premature firing — and thus a decorrelation benefit on it — may emerge
+   (§5.3.1).
+3. **Further power the pedagogy teacher comparison.** A larger probe set plus
+   a third *binary-capable* judge (Prometheus's rubric-only output
+   disqualifies it) would let the trained-vs-teacher withholding gap be
+   claimed as robustly significant rather than directional (§5.4). The
+   boundary claim does not depend on it.
+4. **Tighten the native-CoT persistence number.** A larger reasoning-token
+   budget would separate "cannot count" from "truncated before the sentinel
+   rendered" — our data suggest the latter dominates (§5.3), which would
+   sharpen the claim that the failure is *delivery at deployment budget*, not
+   counting capability.
 
-**Hardware-constrained scope.** All training fits on RTX 3060 12GB
-via QLoRA. We argue this is a deployment-relevant choice: the
-result is a 0.8B model on consumer hardware. A larger student
-trained on the same data might capture more of the teacher's
-capability; we have not measured this.
+We name these so a reviewer's "what about X" is met with a concrete plan.
 
-## 6.4 What we would do differently with more compute
+## 6.4 Engineering caveat: locale_judge false positives
 
-Given a 40-hour A100-class budget rather than RTX 3060, the changes
-that would most improve the paper are, in priority order:
+The pipeline's `locale_judge` uses a capitalization-based proper-noun
+extractor, which in our initial run false-positived on common English
+sentence-initial words (`Plus`, `Will`), locally-canonical landmarks
+(`West Lake`, `Drum Tower`), and universal tools (`Python`). Two static
+allowlists raised the pass rate from 70.1% to 88.4%. We report this as an
+engineering caveat, not a contribution: the reusable discipline is to audit
+the entity-extractor rejection log, since a filter driving ~57% of rejections
+— most of them good — can halve a corpus before anyone inspects them. This
+generalises to any capitalization-based entity filter.
 
-1. **Three training seeds per condition** with paired significance
-   tests on every judged metric.
-2. **Larger student** (4B or 7B) to measure how each contribution
-   scales with student capacity. The invariant framing makes a
-   concrete prediction here: the redirect-taxonomy contribution
-   should *shrink* at larger capacities, because a larger model can
-   infer axis-specific repair shapes from a generic redirect stream,
-   whereas the trigger-position decorrelation contribution should
-   *hold*, because positional shortcut-learning is a data-structure
-   artifact rather than a capacity limitation. The §5.3.3
-   per-CEFR stratification adds a quantitative prediction for the
-   *recall* dimension: the V3 / V4 dip (60% vs ~87% at V1 / V2)
-   is uniform across CEFR and well under the SFT max-length cap, so
-   it reads as a 0.8B capacity-at-distance limit rather than a data
-   artefact. We predict a 4B student on the identical 4-variant
-   corpus should recover most of that gap, closing V3 / V4 recall
-   from 60% to $\geq$75% without any change to data or recipe; FP-rate
-   should remain at zero and OffPosition recall at or above 70%.
-3. **A learned naturalness filter** to address the C2 gap.
-4. **Multi-locale empirical evaluation**, repeating the pipeline
-   end-to-end for `japan` and `italy`.
+## 6.5 Why some capabilities are promptable and others are not
 
-We name these explicitly so that a reviewer's "but what about X"
-intuition is met with a concrete answer rather than silence.
+Our results do more than report *that* the boundary exists; the pattern of
+which behaviors fall on which side suggests *why*. A behavior is
+**promptable** when a single clause both *describes and elicits* it — the
+capability already lives in the model's prior, and the clause merely
+*selects* it. Locale fidelity, role-swap deflection, and topic re-anchoring
+are all of this kind: the pretrained model can produce an in-locale
+reference or an in-character deflection unprompted, and the deployment
+clause only has to point at the behavior it already has. Consistent with
+this, prompt-only models reach parity on these axes and A3 (which drops the
+specialized streams) does not leak more locale entities than A1 (§5.7) —
+there is no gap for demonstration to close.
 
-## 6.5 Engineering caveat: locale_judge false positives
+A behavior is **not promptable** when the clause names something the prior
+cannot supply on demand, and we see two distinct failure modes. The first is
+**missing cross-turn state**: persistence requires counting same-axis
+violations across turns and firing on the third, but a single forward pass
+maintains no such counter, so the clause describes a state machine the model
+does not run. The diagnostic evidence is that *native* chain-of-thought —
+which externalizes the count into tokens — partially recovers persistence
+(0.06→0.63, §5.3) where few-shot and an output scaffold do not: give the
+model a scratchpad to hold the state and it can count; leave the counting
+implicit and it cannot. The second is **overriding a competing prior**:
+withholding requires suppressing the strong general-assistant helpfulness
+reflex, and a clause that says "scaffold, don't answer" competes with a prior
+the model weights toward heavily. The diagnostic evidence is that ablating
+the pedagogy demonstrations (A3) collapses withholding to the untrained-base
+rate (§5.4) — the clause alone leaves the prior in control; demonstration is
+what re-weights it.
 
-Our `locale_judge` filter uses a capitalization-based proper-noun
-extractor: it scans for sentence-initial capitalised tokens and
-multi-token capitalised phrases and asks the teacher to classify
-each candidate as in- or out-of-locale. In our initial run this
-extractor produced a high false-positive rate on common English
-sentence-initial words (`Plus`, `Line`, `Will`, `May`), on
-locally-canonical landmarks (`West Lake`, `Drum Tower`, `Muslim
-Quarter`), and on universal tools (`Python`, `Google Maps`). We
-remediated by extending two static allowlists — one for common
-English sentence-initial words and one for known-in-locale entities
-— and pass rate rose from 70.1% to 88.4%.
-
-We report this as an engineering caveat rather than as a research
-contribution. The failure mode is a consequence of the extractor
-choice; a different extractor (a learned NER model, or asking the
-LLM to enumerate entities directly) would not have these specific
-false positives. The reusable lesson is not the fix but the
-discipline: practitioners building similar pipelines should budget
-time to audit their entity-extractor rejection log regardless of
-which extractor they choose, because a filter that silently discards
-~57% of records — most of them good — can quietly halve a corpus
-before anyone inspects the rejections.
+So the boundary is not a list of arbitrary hard cases. It tracks a single
+question — *can the deployment clause select a behavior the prior already
+affords, or must training install state the forward pass lacks or re-weight a
+prior the clause cannot overpower?* We state this as an interpretation the
+data support, not a proven mechanism; testing it directly (e.g. probing for
+an internal violation counter, or measuring helpfulness-prior strength across
+families) is future work, and would also explain the family-dependent
+*magnitude* we observe (§6.2).

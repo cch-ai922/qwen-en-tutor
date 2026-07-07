@@ -8,12 +8,17 @@ script creates hardlinks under per-condition directories so the existing
 Conditions:
   A1  full system                 — uses data/sft_filtered (no setup needed)
   A2  SFT only                    — uses data/sft_filtered (no setup needed)
-  A3  no specialized redirects    — data/sft_filtered_a3/  (normal + generic
-                                   redirect + persistent only; drops the 6
-                                   specialized redirect streams)
-  A4  no persistent streams       — data/sft_filtered_a4/  (normal + 7
-                                   single-shot redirects; drops the 4
-                                   persistent streams)
+  A3  no redirects (specialized   — data/sft_filtered_a3/  (normal + generic
+      OR persistent)                redirect only; drops ALL 6 specialized
+                                   redirect streams AND all 4 persistent
+                                   redirect streams). Clean ablation baseline:
+                                   A3→A4 tests "do specialized single-turn
+                                   redirects help at all?".
+  A4  no persistent streams       — data/sft_filtered_a4/  (normal + generic
+                                   redirect + 6 specialized; drops the 4
+                                   persistent streams). Tests "does persistence
+                                   training add beyond single-turn redirects?"
+                                   (A4→A1 comparison).
   A5  fixed-turn-7 persistent     — data/sft_filtered_a5/  (full 12-stream
                                    mix, but the 4 persistent streams come
                                    from data/sft_filtered_a5_persistent/
@@ -24,6 +29,17 @@ Conditions:
                                    test of §3.4. Pre-req: regen persistent
                                    first (see training_a5_fixed_turn_7.yaml
                                    header).
+  A6  generic sentinel ablation   — data/sft_filtered_a6/  (full 12-stream
+                                   mix like A1, but the 4 persistent streams
+                                   come from data/sft_filtered_a6_persistent/,
+                                   regenerated with
+                                   QWEN_TUTOR_SENTINEL_FORMAT=generic so the
+                                   sentinel is ``[SESSION_END]`` with no axis
+                                   label). A1-vs-A6 tests whether the
+                                   axis-specific sentinel label is
+                                   load-bearing for the 0% FP rate, or
+                                   whether position-based learning alone is
+                                   sufficient.
 
 Run after any change to data/sft_filtered/ — the script clears the per-
 condition dir and re-links from scratch, so it's idempotent.
@@ -61,11 +77,29 @@ PERSISTENT = [
 
 # Per-condition stream membership
 CONDITIONS: dict[str, list[str]] = {
-    "a3": NORMAL + GENERIC_REDIRECT + PERSISTENT,  # no specialized redirects
+    # A3: clean "no redirect training" baseline — drops ALL 6 specialized AND
+    # all 4 persistent redirect streams. Only normal + generic redirect remain.
+    # Rationale: persistent_language_violation / persona_break / role_swap are
+    # multi-turn encodings of the same redirect behaviors as the specialized
+    # streams. Keeping them in A3 contaminates the A1-vs-A3 comparison with
+    # partial redirect signal. Drop both groups for a clean ladder:
+    #   A3 (none) → A4 (specialized only) → A1 (specialized + persistent).
+    "a3": NORMAL + GENERIC_REDIRECT,
     "a4": NORMAL + GENERIC_REDIRECT + SPECIALIZED_REDIRECTS,  # no persistent
     # A5: same streams as A1, but persistent streams come from a separate
     # fixed-turn-7 regen dir (handled below in setup_condition).
     "a5": NORMAL + GENERIC_REDIRECT + SPECIALIZED_REDIRECTS + PERSISTENT,
+    # A6: same streams as A1, but persistent streams come from the
+    # generic-sentinel regen dir (sft_filtered_a6_persistent/).
+    "a6": NORMAL + GENERIC_REDIRECT + SPECIALIZED_REDIRECTS + PERSISTENT,
+    # A7: same streams as A1 and same 4-variant persistent volume as A2,
+    # but persistent streams use generic [SESSION_END] (sourced from
+    # sft_filtered_a7_persistent/, converted from A1's persistent data
+    # by scripts/convert_a1_to_a7.py).
+    # Together with A6 this closes the 2x2 design:
+    #   A2: 4-variant + axis-specific   A5: fixed-7 + axis-specific
+    #   A7: 4-variant + generic         A6: fixed-7 + generic
+    "a7": NORMAL + GENERIC_REDIRECT + SPECIALIZED_REDIRECTS + PERSISTENT,
 }
 
 # Per-condition stream-specific source overrides. Streams listed here pull
@@ -75,6 +109,14 @@ CONDITIONS: dict[str, list[str]] = {
 CONDITION_STREAM_SRC: dict[str, dict[str, Path]] = {
     "a5": {
         stream: ROOT / "data" / "sft_filtered_a5_persistent"
+        for stream in PERSISTENT
+    },
+    "a6": {
+        stream: ROOT / "data" / "sft_filtered_a6_persistent"
+        for stream in PERSISTENT
+    },
+    "a7": {
+        stream: ROOT / "data" / "sft_filtered_a7_persistent"
         for stream in PERSISTENT
     },
 }
@@ -113,7 +155,7 @@ def setup_condition(condition: str, streams: list[str], dry_run: bool = False) -
                "streams": streams, "files_linked": 0, "missing": []}
     for stream in streams:
         src_dir = per_stream_src.get(stream, SRC_DIR)
-        matches = list(src_dir.glob(f"{stream}_*_passed.jsonl"))
+        matches = sorted(src_dir.glob(f"{stream}_*_passed.jsonl"))
         if not matches:
             summary["missing"].append(f"{stream} (looked in {src_dir})")
             continue
@@ -131,7 +173,7 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--conditions", default="a3,a4",
                         help="Comma-separated list of conditions to set up "
-                             "(choices: a3, a4, a5).")
+                             "(choices: a3, a4, a5, a6, a7).")
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()
 

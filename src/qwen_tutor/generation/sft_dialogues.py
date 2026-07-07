@@ -65,6 +65,19 @@ def _sft_angle_shift_id(seed_id: str, variant: int = 0) -> str:
     return f"sft_angle_{seed_id}_v{variant}"
 
 
+def _sft_passive_learner_id(seed_id: str, variant: int = 0) -> str:
+    """Passive-learner normal SFT variant id.
+
+    A normal dialogue where the learner is passive/minimal and the tutor
+    proactively leads. Same ``scenario_type="normal"``, stored alongside
+    normal dialogues in ``normal_<level>.jsonl``; the distinct id prefix
+    keeps resume behavior safe.
+    """
+    if variant == 0:
+        return f"sft_passive_{seed_id}"
+    return f"sft_passive_{seed_id}_v{variant}"
+
+
 def _parse_messages(raw: str) -> list[Message]:
     data = extract_first_json(raw)
     if not isinstance(data, dict) or "messages" not in data:
@@ -100,19 +113,26 @@ async def _generate_one(
     generation_meta: dict[str, Any],
     variant: int = 0,
     is_angle_shift: bool = False,
+    is_passive_learner: bool = False,
 ) -> SFTExample | None:
     """Generate a normal SFT dialogue. ``is_angle_shift=True`` swaps in the
     angle-shift prompt variant, which asks the teacher to write the learner
     from a different valid angle than ``user_role.description`` (same topic,
-    same model_role, no redirect). Output ``scenario_type`` stays ``"normal"``
-    -- these dialogues belong in the normal SFT stream, just with a broader
-    learner-persona distribution.
+    same model_role, no redirect). ``is_passive_learner=True`` swaps in the
+    passive-learner prompt variant, where the learner is minimal/stuck and the
+    tutor proactively leads the conversation. Output ``scenario_type`` stays
+    ``"normal"`` for both -- these dialogues belong in the normal SFT stream,
+    just with a broader learner-behavior distribution. The two flags are
+    mutually exclusive; ``is_passive_learner`` takes precedence if both set.
     """
     locale = seed.locale
     scenario_json = json.dumps(seed.model_dump(), ensure_ascii=False)
-    prompt_name = (
-        "dialogue_normal_angle_shift" if is_angle_shift else "dialogue_normal"
-    )
+    if is_passive_learner:
+        prompt_name = "dialogue_normal_passive_learner"
+    elif is_angle_shift:
+        prompt_name = "dialogue_normal_angle_shift"
+    else:
+        prompt_name = "dialogue_normal"
     template = render_prompt(prompt_name, locale_name=locale)
     prompt = template.format(
         scenario_json=scenario_json,
@@ -120,8 +140,15 @@ async def _generate_one(
         level_spec_with_locale_instruction=level_spec,
     )
     validate_prompt_has_locale_instruction(prompt, locale_name=locale)
-    id_fn = _sft_angle_shift_id if is_angle_shift else _sft_id
-    stage_name = "sft_normal_angle_shift" if is_angle_shift else "sft_normal"
+    if is_passive_learner:
+        id_fn = _sft_passive_learner_id
+        stage_name = "sft_normal_passive_learner"
+    elif is_angle_shift:
+        id_fn = _sft_angle_shift_id
+        stage_name = "sft_normal_angle_shift"
+    else:
+        id_fn = _sft_id
+        stage_name = "sft_normal"
     try:
         raw = await teacher.generate(
             system=prompt,
@@ -141,14 +168,16 @@ async def _generate_one(
             seed_id=seed_id,
             variant=variant,
             angle_shift=is_angle_shift,
+            passive_learner=is_passive_learner,
         )
         return None
 
-    meta_prompt_name = (
-        "DIALOGUE_PROMPT_NORMAL_ANGLE_SHIFT"
-        if is_angle_shift
-        else generation_meta.get("prompt", "DIALOGUE_PROMPT_NORMAL")
-    )
+    if is_passive_learner:
+        meta_prompt_name = "DIALOGUE_PROMPT_NORMAL_PASSIVE_LEARNER"
+    elif is_angle_shift:
+        meta_prompt_name = "DIALOGUE_PROMPT_NORMAL_ANGLE_SHIFT"
+    else:
+        meta_prompt_name = generation_meta.get("prompt", "DIALOGUE_PROMPT_NORMAL")
     metadata = ExampleMetadata(
         topic=seed.topic,
         subtopics=list(seed.subtopics),
@@ -163,6 +192,7 @@ async def _generate_one(
             "prompt": meta_prompt_name,
             "variant": variant,
             "angle_shift": is_angle_shift,
+            "passive_learner": is_passive_learner,
         },
     )
     return SFTExample(
@@ -194,6 +224,7 @@ async def generate_batch(
     teacher: TeacherClient | None = None,
     dialogues_per_seed: int = 1,
     angle_shift_fraction: float = 0.0,
+    passive_learner_fraction: float = 0.0,
 ) -> dict[str, int]:
     """Generate normal SFT dialogues for every seed under ``seeds_dir``.
 
@@ -210,6 +241,12 @@ async def generate_batch(
     the model that ``[learner]`` is a soft hint. Default is 0.0 (disabled).
     The id prefix is ``sft_angle_``, so these variants can be stored in the
     same ``normal_<level>.jsonl`` file without conflicting.
+
+    If ``passive_learner_fraction`` > 0, a deterministic fraction of seeds
+    additionally get a passive-learner variant: the learner is minimal/stuck
+    and the tutor proactively leads the conversation so it never stalls.
+    scenario_type stays "normal"; the id prefix is ``sft_passive_``. Default
+    0.0 (disabled).
 
     Returns ``{level: n_written}`` for this run.
     """
@@ -242,13 +279,14 @@ async def generate_batch(
         done_ids = load_existing_ids(out_path)
         all_seeds = list(iter_seeds(seeds_dir, [level]))
 
-        # 1) standard normal variants
-        pending: list[tuple[str, ScenarioSeed, int, bool]] = []
+        # 1) standard normal variants.
+        #    Tuple: (seed_id, seed, variant, is_angle_shift, is_passive_learner)
+        pending: list[tuple[str, ScenarioSeed, int, bool, bool]] = []
         for sid, seed in all_seeds:
             for variant in range(dialogues_per_seed):
                 if _sft_id(sid, variant) in done_ids:
                     continue
-                pending.append((sid, seed, variant, False))
+                pending.append((sid, seed, variant, False, False))
 
         # 2) optional angle-shift variants. Deterministic subset of seeds so
         #    re-runs hit the same selection. One angle-shift variant per
@@ -264,15 +302,33 @@ async def generate_batch(
             for sid, seed in angle_seeds:
                 if _sft_angle_shift_id(sid, 0) in done_ids:
                     continue
-                pending.append((sid, seed, 0, True))
+                pending.append((sid, seed, 0, True, False))
+
+        # 3) optional passive-learner variants. Deterministic subset (own key
+        #    salt so it does not coincide with the angle-shift selection). One
+        #    passive-learner variant per selected seed.
+        if passive_learner_fraction > 0.0 and all_seeds:
+            passive_seeds = deterministic_sample(
+                all_seeds, passive_learner_fraction, key=lambda s: f"passive::{s[0]}"
+            )
+            logger.info(
+                "[sft:%s] passive_learner_fraction=%.2f -> %d/%d additional passive-learner variants",
+                level, passive_learner_fraction, len(passive_seeds), len(all_seeds),
+            )
+            for sid, seed in passive_seeds:
+                if _sft_passive_learner_id(sid, 0) in done_ids:
+                    continue
+                pending.append((sid, seed, 0, False, True))
 
         if not pending:
             logger.info("[sft:%s] nothing to do (%d already done)", level, len(done_ids))
             results[level] = 0
             continue
 
-        async def _run(args: tuple[str, ScenarioSeed, int, bool]) -> SFTExample | None:
-            sid, seed, variant, is_angle_shift = args
+        async def _run(
+            args: tuple[str, ScenarioSeed, int, bool, bool],
+        ) -> SFTExample | None:
+            sid, seed, variant, is_angle_shift, is_passive_learner = args
             return await _generate_one(
                 teacher=teacher,
                 seed_id=sid,
@@ -284,6 +340,7 @@ async def generate_batch(
                 generation_meta=generation_meta,
                 variant=variant,
                 is_angle_shift=is_angle_shift,
+                is_passive_learner=is_passive_learner,
             )
 
         completed = await gather_with_concurrency(

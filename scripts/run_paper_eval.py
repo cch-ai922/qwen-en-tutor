@@ -79,6 +79,7 @@ TEST_SET_NAMES = (
     "persistent_probe",
     "persistent_fp_probe",
     "persistent_offposition_probe",
+    "persistent_premature_probe",
     "locale_leakage",
 )
 
@@ -120,6 +121,16 @@ BASELINES: dict[str, dict[str, Any]] = {
         # itself is built from config/generation.yaml.
         "config_path": "config/generation.yaml",
         "role": "teacher",
+    },
+    # B4 with Qwen3.5 NATIVE thinking enabled (the persistence few-shot+CoT
+    # steelman, §5.3/§6.5). Unlike qwen3_5_9b_teacher this injects /think so
+    # the client sets enable_thinking=True; pair with a large --max-new-tokens
+    # so the <think> block completes AND the tutor turn + sentinel still fit.
+    "qwen3_5_9b_teacher_think": {
+        "kind": "api",
+        "config_path": "config/generation.yaml",
+        "role": "teacher",
+        "thinking": True,
     },
     # ---------------------------------------------------------------------
     # Cross-family judge ensemble for paper §4.7.
@@ -184,6 +195,52 @@ BASELINES: dict[str, dict[str, Any]] = {
         "adapter_path": "outputs/paper/a4/dpo",
         "trust_remote_code": True,
     },
+    # SFT-only ablation variants — used for the clean §5.3/§5.4 contrasts
+    # where the SFT data structure is the hypothesis under test. Skipping
+    # DPO avoids the register-pool cross-condition leak (specialized-
+    # redirect-derived register pairs leaking into A3 etc.).
+    "paper_a3_sft": {
+        "kind": "hf",
+        "model_id": "./vendor/models/Qwen_3.5_0.8B-Base",
+        "adapter_path": "outputs/paper/a3/sft",
+        "trust_remote_code": True,
+    },
+    "paper_a4_sft": {
+        "kind": "hf",
+        "model_id": "./vendor/models/Qwen_3.5_0.8B-Base",
+        "adapter_path": "outputs/paper/a4/sft",
+        "trust_remote_code": True,
+    },
+    "paper_a5_sft": {
+        "kind": "hf",
+        "model_id": "./vendor/models/Qwen_3.5_0.8B-Base",
+        "adapter_path": "outputs/paper/a5/sft",
+        "trust_remote_code": True,
+    },
+    # A6: trained with QWEN_TUTOR_SENTINEL_FORMAT=generic so the
+    # deployment system prompt embedded in training records used the
+    # generic [SESSION_END] form. At eval time the same env var must be
+    # set BEFORE the deployment system prompt is rendered, otherwise the
+    # model sees a system prompt mismatched to its training distribution.
+    # The ``requires_env`` field is consumed by build_baseline() below
+    # (which sets the env var before constructing the runtime).
+    "paper_a6_sft": {
+        "kind": "hf",
+        "model_id": "./vendor/models/Qwen_3.5_0.8B-Base",
+        "adapter_path": "outputs/paper_v2/a6/sft",
+        "trust_remote_code": True,
+        "requires_env": {"QWEN_TUTOR_SENTINEL_FORMAT": "generic"},
+    },
+    # A7: 4-variant persistent + generic [SESSION_END] (no axis label).
+    # Same requires_env mechanism as A6 — the deployment system prompt
+    # must match the model's training distribution (generic block).
+    "paper_a7_sft": {
+        "kind": "hf",
+        "model_id": "./vendor/models/Qwen_3.5_0.8B-Base",
+        "adapter_path": "outputs/paper_v2/a7/sft",
+        "trust_remote_code": True,
+        "requires_env": {"QWEN_TUTOR_SENTINEL_FORMAT": "generic"},
+    },
 }
 
 
@@ -223,8 +280,16 @@ def assemble_chat(record: dict[str, Any]) -> tuple[str, list[dict[str, str]]]:
         "persistent_probe",
         "persistent_fp_probe",
         "persistent_offposition_probe",
+        "persistent_premature_probe",
     ):
-        return record.get("system_prompt", ""), record.get("context_messages", [])
+        # Probe records bake their system_prompt with the axis-specific
+        # sentinel format (the build-time default). If the current baseline
+        # set QWEN_TUTOR_SENTINEL_FORMAT=generic (A6/A7), swap the
+        # [persistence] block so the eval-time prompt matches the model's
+        # training-time prompt distribution.
+        from qwen_tutor.generation.prompts import align_system_prompt_to_sentinel_format
+        sp = align_system_prompt_to_sentinel_format(record.get("system_prompt", ""))
+        return sp, record.get("context_messages", [])
 
     # Cold-start: derive system_prompt + starter user turn from the seed.
     seed = record.get("seed", {})
@@ -302,10 +367,34 @@ class APIBaseline:
             spec.get("config_path", "config/generation.yaml"),
             role=spec.get("role", "teacher"),
         )
+        # When True, enable Qwen3.5 native thinking (/think) instead of the
+        # default /no_think suppression. Used by qwen3_5_9b_teacher_think for
+        # the persistence few-shot+CoT steelman. Requires a large
+        # max_new_tokens so the <think> block does not starve the answer.
+        self.thinking = bool(spec.get("thinking", False))
 
     async def generate(self, system: str, messages: list[dict[str, str]],
                        max_new_tokens: int, temperature: float) -> str:
         from qwen_tutor.schemas import Message
+        # Qwen3.5 (the teacher we use) defaults to thinking mode and emits
+        # a `<think>...</think>` reasoning block before any answer. The
+        # data-generation pipeline appends `/no_think` to every prompt via
+        # `prompts._with_no_think` to suppress this. The eval path used to
+        # forget — without `/no_think`, the teacher's 320-token budget was
+        # entirely consumed by reasoning and zero tutor turn was produced
+        # (verified on prior B4 run: 224/224 responses ended at `</think>`
+        # with no content after). HFBaseline already passes mode="no_think"
+        # to the local client; this is the equivalent for the API path.
+        # Non-Qwen models ignore the directive harmlessly.
+        #
+        # thinking=True (the _think variant) flips this: inject /think so the
+        # client sets enable_thinking=True. The caller must supply a large
+        # max_new_tokens (the prior no-answer failure was a budget problem).
+        if self.thinking:
+            if "/think" not in system:
+                system = system.rstrip() + "\n\n/think\n"
+        elif "/no_think" not in system:
+            system = system.rstrip() + "\n\n/no_think\n"
         msg_objs = [Message(role=m["role"], content=m["content"]) for m in messages]
         return await self.client.generate(
             system=system,
@@ -321,6 +410,15 @@ def build_baseline(name: str) -> Any:
         raise SystemExit(f"unknown baseline {name!r}. Choices: "
                          f"{sorted(BASELINES.keys())}")
     spec = BASELINES[name]
+    # Apply baseline-specific env vars BEFORE constructing the runtime.
+    # Used by paper_a6_sft to set QWEN_TUTOR_SENTINEL_FORMAT=generic so
+    # the deployment system prompt matches the model's training
+    # distribution (generic [SESSION_END], no axis label).
+    for k, v in (spec.get("requires_env") or {}).items():
+        prev = os.environ.get(k)
+        if prev != v:
+            print(f"  build_baseline({name}): setting env {k}={v} (was {prev!r})")
+            os.environ[k] = v
     if spec["kind"] == "hf":
         # Quick sanity: adapter path must exist if set
         adp = spec.get("adapter_path")
@@ -368,6 +466,41 @@ def append_jsonl(path: Path, record: dict[str, Any]) -> None:
         fh.write(json.dumps(record, ensure_ascii=False) + "\n")
 
 
+# Baselines that did NOT see the deployment prompt during training and
+# therefore default to chatbot-style long responses. For these, we append
+# an explicit "response shape" block so the zero-shot models produce a
+# short in-character tutor turn comparable to the trained students.
+# A1-A5 are NOT in this set: their training data is the implicit length
+# anchor; augmenting their prompt would over-constrain.
+# v2: response-shape addendum folded into deployment system prompt
+# (see src/qwen_tutor/generation/prompts.py guidelines block). No
+# baseline gets a separate addendum; all 9 conditions see the same
+# deployment prompt.
+_AUGMENT_FOR_BASELINES = frozenset()
+
+_TUTOR_RESPONSE_SHAPE_ADDENDUM = """\
+
+[response shape]
+This is a 1-on-1 tutoring session. Produce ONE short turn -- 1-3
+sentences at A1/A2, 2-4 at B1/B2, 3-4 at C1/C2 -- then WAIT for the
+learner to reply. Do NOT:
+- introduce yourself as an AI or assistant
+- write a multi-paragraph welcome message
+- use markdown bullets, numbered lists, or section headers
+- enumerate 3+ questions or options in one turn
+- summarize what you will help with -- just help
+"""
+
+
+def augment_system_for_offshelf(system: str, baseline_name: str) -> str:
+    """Option A: only off-the-shelf zero-shot baselines (B1-B4) get the
+    explicit tutor-shape addendum. Trained tutors (A1-A5) already
+    learned the short-turn style from their SFT data."""
+    if baseline_name in _AUGMENT_FOR_BASELINES:
+        return system.rstrip() + _TUTOR_RESPONSE_SHAPE_ADDENDUM
+    return system
+
+
 async def run_one_test_set(baseline_name: str, baseline_client: Any,
                            test_set: str, records: list[dict[str, Any]],
                            output_path: Path,
@@ -387,6 +520,7 @@ async def run_one_test_set(baseline_name: str, baseline_client: Any,
     for idx, rec in enumerate(todo, 1):
         try:
             system, messages = assemble_chat(rec)
+            system = augment_system_for_offshelf(system, baseline_name)
             t0 = time.time()
             generation = await baseline_client.generate(
                 system=system, messages=messages,
@@ -406,7 +540,12 @@ async def run_one_test_set(baseline_name: str, baseline_client: Any,
                     "temperature": temperature,
                     "seed": seed,
                 },
-                # carry through the test record's metadata for downstream scoring
+                # carry through the test record's metadata for downstream scoring.
+                # `expected` includes redirect-probe `violation_turn_idx` and
+                # `violation_turn_content` (added 2026-06-24), which the
+                # redirect-axis judge needs to evaluate the response against the
+                # right user turn. Without them the judge had been classifying
+                # responses with empty context.
                 "expected": rec.get("expected", {}),
                 "source": rec.get("source", {}),
             }
@@ -438,7 +577,8 @@ def _parse_args() -> argparse.Namespace:
     p.add_argument("--baseline", required=True,
                    choices=sorted(BASELINES.keys()) + ["list"])
     p.add_argument("--test-set", default="all",
-                   choices=("all",) + TEST_SET_NAMES)
+                   help='Test set(s) to run: "all", a single name from '
+                        f'{TEST_SET_NAMES}, or a comma-separated list of those names.')
     p.add_argument("--output-dir", default=str(OUTPUT_ROOT))
     p.add_argument("--max-new-tokens", type=int, default=320)
     p.add_argument("--temperature", type=float, default=0.7)
@@ -471,7 +611,22 @@ async def _main() -> int:
         spec = BASELINES[args.baseline]
         spec["adapter_path"] = args.adapter_path
 
-    test_sets = TEST_SET_NAMES if args.test_set == "all" else (args.test_set,)
+    if args.test_set == "all":
+        test_sets = TEST_SET_NAMES
+    else:
+        requested = tuple(s.strip() for s in args.test_set.split(",") if s.strip())
+        # Accept any name in TEST_SET_NAMES OR any name whose eval_sets file
+        # exists (lets custom/ad-hoc eval sets like pedagogy_extra_probe run
+        # without editing the constant).
+        unknown = [s for s in requested
+                   if s not in TEST_SET_NAMES
+                   and not (EVAL_SETS_DIR / f"{s}.jsonl").exists()]
+        if unknown:
+            raise SystemExit(
+                f"unknown test set(s): {unknown}. Valid: {TEST_SET_NAMES} "
+                f"or any existing eval_sets/<name>.jsonl"
+            )
+        test_sets = requested
     out_root = Path(args.output_dir) / args.baseline
     out_root.mkdir(parents=True, exist_ok=True)
 

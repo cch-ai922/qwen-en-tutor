@@ -90,11 +90,19 @@ async def _generate_one_axis(axis: str, cfg: dict,
                              teacher,
                              concurrency: int,
                              max_tokens: int,
-                             temperature: float) -> dict:
-    """Run persistent generation for ONE axis. Same fraction as the main
-    pipeline so the A5 persistent volume roughly matches A1's."""
+                             temperature: float,
+                             fraction_multiplier: float = 1.0,
+                             dialogues_per_seed: int = 1) -> dict:
+    """Run persistent generation for ONE axis.
+
+    By default uses the same fraction + dialogues_per_seed as the original
+    A5 regen (matches v1's small volume). For v2 A5-vs-A1 volume parity,
+    pass ``fraction_multiplier=4.0`` and ``dialogues_per_seed=2`` — that
+    approximates A1's persistent_topup-amplified volume (~780 records).
+    """
     gen = cfg.get("generation", {})
-    fraction = float(gen.get(f"{axis}_fraction", 0.05))
+    fraction = float(gen.get(f"{axis}_fraction", 0.05)) * fraction_multiplier
+    fraction = min(fraction, 1.0)   # clamp at 100% — can't select more than all seeds
     return await persistent_redirect.generate_batch(
         axis=axis,
         cefr_levels=list(LEVELS),
@@ -107,7 +115,7 @@ async def _generate_one_axis(axis: str, cfg: dict,
         temperature=temperature,
         teacher=teacher,
         persistent_fraction=fraction,
-        dialogues_per_seed=1,
+        dialogues_per_seed=dialogues_per_seed,
     )
 
 
@@ -154,6 +162,13 @@ def _parse_args() -> argparse.Namespace:
     p.add_argument("--concurrency", type=int, default=8)
     p.add_argument("--max-tokens", type=int, default=4096)
     p.add_argument("--temperature", type=float, default=0.8)
+    p.add_argument("--fraction-multiplier", type=float, default=1.0,
+                   help="Multiply each axis's persistent_fraction by this. "
+                        "Use 4.0 + --dialogues-per-seed 2 to target A1-comparable "
+                        "volume (~780 records).")
+    p.add_argument("--dialogues-per-seed", type=int, default=1,
+                   help="Variants per selected seed. Default 1 (v1 behavior). "
+                        "Use 2 to match A1's main pipeline.")
     p.add_argument("--skip-generation", action="store_true",
                    help="Skip the generation stage (only run the filter).")
     p.add_argument("--skip-filter", action="store_true",
@@ -195,6 +210,9 @@ async def _main() -> int:
         teacher = build_teacher_from_config(str(config_path), role="teacher")
 
         axes = PERSISTENT_AXES if args.axis in (None, "all") else (args.axis,)
+        print(f"fraction_multiplier={args.fraction_multiplier}  "
+              f"dialogues_per_seed={args.dialogues_per_seed}")
+        print()
         for axis in axes:
             print(f"--- axis: {axis} ---")
             result = await _generate_one_axis(
@@ -205,6 +223,8 @@ async def _main() -> int:
                 concurrency=args.concurrency,
                 max_tokens=args.max_tokens,
                 temperature=args.temperature,
+                fraction_multiplier=args.fraction_multiplier,
+                dialogues_per_seed=args.dialogues_per_seed,
             )
             print(f"   wrote (per level): {result}")
             print()

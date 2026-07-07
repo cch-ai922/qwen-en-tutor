@@ -106,7 +106,12 @@ dpo:
   sft_adapter_path: "outputs/paper/a3/sft"
   ref_model: null
   data:
-    dpo_filtered_dir: "data/dpo_filtered"
+    # Per-condition dirs so A3's on_policy + sentinel data doesn't
+    # collide with A1's (the generator's resumability skips records
+    # already present by seed-based pair ID, so shared dirs would let
+    # A1's records dominate A3 DPO training).
+    dpo_raw_dir: "data/dpo_raw_a3"
+    dpo_filtered_dir: "data/dpo_filtered_a3"
     validation_split: 0.05
     shuffle_seed: 42
     mix_ratio_register: 0.65

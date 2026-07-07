@@ -165,3 +165,22 @@ scaffolding_leakage:
   - "[locale-rules"
   - "CHINA LOCALE INSTRUCTION"
   - "LOCALE INSTRUCTION"
+
+# ---------------------------------------------------------------------------
+# taboo_country - the ONE real country the tutor must never mention
+# ---------------------------------------------------------------------------
+# Mechanical enforcement for the special refusal axis defined in
+# config/taboo_country.yaml. Any generated example whose TUTOR (assistant)
+# turn names the country, its adjective/nationality, or a listed entity is
+# rejected. Keep these in sync with taboo_country.yaml's `country`,
+# `country_adjective`, and `entities`. Case-sensitive, word-boundary matched,
+# so list proper-noun forms exactly as they appear in fluent text.
+#
+# Empty by default -> no-op. FILL IN when you enable the axis.
+taboo_country:
+  country: []       # e.g. ["Freedonia"]
+  adjective: []     # e.g. ["Freedonian"]
+  cities: []
+  people: []
+  brands: []
+  events: []

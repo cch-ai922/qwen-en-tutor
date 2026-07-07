@@ -1,95 +1,70 @@
 # 4. Experimental Setup
 
-## 4.1 Hardware
+## 4.1 Hardware, models, and training recipe
 
-All training is performed on a single consumer GPU: NVIDIA RTX 3060
-with 12 GB VRAM. The 9B teacher is served separately by llama.cpp's
-`llama-server` from a Q4_K_XL-quantised GGUF file on the same
-machine; training and teacher inference cannot run concurrently
-because their VRAM footprints ($\approx$7.7 GB and $\approx$4 GB respectively) sum
-to more than the device capacity. The pipeline orchestrator stops
-the teacher server during training phases and restarts it for
-on-policy DPO generation and the evaluation phase.
+All experiments run on a single NVIDIA RTX 3060 (12 GB VRAM). The student
+base is **Qwen3.5-0.8B-Base**; the teacher is **Qwen3.5-9B-UD-Q4_K_XL**
+(4-bit, served via llama.cpp), which also serves as the strongest
+prompt-only baseline (B4). Two off-the-shelf post-trained checkpoints,
+**Qwen3.5-0.8B** and **Qwen3.5-4B**, are the B2/B3 baselines. Training and
+teacher inference cannot co-reside on 12 GB, so the orchestrator swaps them.
 
-## 4.2 Base model
+Every trained condition uses the **same** recipe: QLoRA
+[@dettmers2023qlora] (NF4 4-bit, `bfloat16` compute) with LoRA
+[@hu2022lora] rank 16 / alpha 32 over the seven linear projections of the
+language tower, 2 epochs, max sequence length 1792. **No DPO is applied to
+any condition** — all of A1/A3/A5 are SFT-only (§4.4) — which keeps every
+ablation single-variable and avoids a register-pool contamination confound.
+Full hyperparameters and the (unused) DPO stage are in Appendix C.
 
-The student base model is **Qwen3.5-0.8B-Base**, a 0.8B-parameter
-multimodal foundation model from the Qwen3.5 family with
-architecture `Qwen3_5ForConditionalGeneration` and a hybrid
-linear-attention / full-attention layer interleave. Training uses
-only the language tower; the vision tower is frozen and never sees
-the text-only training data.
+## 4.2 Training data composition
 
-The teacher model used for data generation is
-**Qwen3.5-9B-UD-Q4_K_XL**, a 9B-parameter Qwen3.5 checkpoint
-quantised to 4-bit and served via llama.cpp. The teacher is
-served at `http://192.168.135.32:8080/v1` with chat completion
-context length 32 768 and 80 GPU layers offloaded.
+Table~\ref{tab:sft-composition} reports per-stream, per-CEFR-level
+record counts in the filtered SFT corpus. The corpus comprises
+**3 374 dialogues** across 12 streams and six CEFR levels (A1--C2),
+with `normal` dominant ($\approx$ 53\% of the total) and seven
+redirect streams plus four persistent 3-strike streams covering the
+remaining $\approx$ 47\%. The 12-stream layout instantiates the
+invariant decomposition of \S3.3: one generic-redirect stream,
+six specialized single-shot redirect streams (one per invariant
+axis), and four persistent 3-strike streams (one per the four axes
+that warrant escalation). C1/C2 counts in the six specialized
+redirect streams are intentionally small ($\approx$\,7--10 records
+per axis per level) because per-axis generation cost scales linearly
+with axis count.
 
-For reference and as zero-shot baselines, we use two additional
-off-the-shelf Qwen3.5 checkpoints in their post-trained form:
-**Qwen3.5-0.8B** and **Qwen3.5-4B**.
+```{=latex}
+\begin{table*}[t]
+\centering
+\small
+\begin{tabular}{@{}l r r r r r r r@{}}
+\toprule
+\textbf{Stream} & \textbf{A1} & \textbf{A2} & \textbf{B1} & \textbf{B2} & \textbf{C1} & \textbf{C2} & \textbf{Total} \\
+\midrule
+normal                          & 204 & 335 & 355 & 351 & 315 & 235 & 1\,795 \\
+redirect (generic)              & 102 & 169 & 166 & 168 &  21 &  20 &   646 \\
+\midrule
+language\_redirect              &   5 &   8 &   7 &   9 &   2 &   5 &    36 \\
+locale\_redirect                &   6 &   8 &   7 &  10 &   8 &   9 &    48 \\
+pedagogy\_redirect              &   6 &   8 &   8 &   9 &   7 &   8 &    46 \\
+persona\_redirect               &   6 &   8 &   7 &   9 &   7 &   9 &    46 \\
+role\_swap\_redirect            &   6 &   8 &   7 &   9 &   7 &   7 &    44 \\
+topic\_redirect                 &   6 &   6 &   7 &   9 &   6 &   7 &    41 \\
+\midrule
+persistent\_language\_violation &  29 &  38 &  26 &  30 &  20 &  22 &   165 \\
+persistent\_off\_topic          &  22 &  34 &  30 &  24 &  10 &  17 &   137 \\
+persistent\_persona\_break      &  28 &  42 &  27 &  31 &  30 &  48 &   206 \\
+persistent\_role\_swap          &  17 &  44 &  36 &  25 &  20 &  22 &   164 \\
+\midrule
+\textbf{TOTAL}                  & \textbf{437} & \textbf{708} & \textbf{683} & \textbf{684} & \textbf{453} & \textbf{409} & \textbf{3\,374} \\
+\bottomrule
+\end{tabular}
+\caption{\textbf{Filtered SFT corpus composition by stream and CEFR level.} Counts are post-filter passing records. The six specialized redirect streams (language, locale, pedagogy, persona, role\_swap, topic) carry $\approx$\,7--10 records per axis per CEFR level --- intentionally thinner than the generic streams, a known limitation we account for by leaning only on the large, seed-stable per-axis effects (\S5.6).}
+\label{tab:sft-composition}
+\end{table*}
+```
 
-## 4.3 Training recipe
-
-**SFT.** QLoRA with NF4 4-bit quantisation, double-quantisation
-enabled, `bfloat16` compute dtype. LoRA rank 16, alpha 32, dropout
-0.05; target modules cover all seven linear projections in the
-attention (`q_proj`, `k_proj`, `v_proj`, `o_proj`) and MLP
-(`gate_proj`, `up_proj`, `down_proj`) blocks of the language tower.
-SFT trains for 2 epochs at peak learning rate $2 \times 10^{-4}$
-with cosine decay, batch size 1, gradient accumulation 8 (effective
-batch 8), max sequence length 1024 tokens. Optimizer:
-`paged_adamw_8bit`. Gradient checkpointing is enabled. We use the
-SDPA attention implementation (Flash-Attention-2 is not safe under
-the Qwen3.5 linear/full layer interleave).
-
-**DPO.** DPO trains on top of the SFT adapter for 1 epoch at peak
-learning rate $5 \times 10^{-6}$, cosine decay, $\beta = 0.1$,
-sigmoid loss, max length 1024, max prompt length 512, identical
-batch and quantisation settings to SFT. The reference policy is the
-frozen base model (`ref_model: null`).
-
-**Mix.** SFT training data combines the 12-stream filtered SFT
-corpus with the `<think>`-mode evaluator examples; the loader takes
-all available filtered records (`use_all_data: true`). DPO training
-data combines three pools and uses `use_all_data: true`, so the
-realised mix is the natural ratio of the on-disk pools rather than
-any nominal target:
-
-- **register pool**: ~3 700 pairs (~76% of total). Offline
-  preference pairs from a single teacher call per filtered SFT
-  record.
-- **on-policy pool**: ~400 pairs (~8% of total). Pairs where the
-  rejected response is produced by the SFT-trained student under
-  the same prompt as the teacher's preferred response, gated by an
-  LLM-judge margin of $\geq 2$ on a 1--5 scale. We use
-  `max_per_level=100` (six CEFR levels) as the per-level attempt
-  cap, then filter to the kept set.
-- **sentinel pool**: ~760 pairs (~16% of total). The offline-mode
-  subset (~88%) is produced by deterministic strip of the
-  `[SESSION_END: <axis>]` marker from the teacher's third-strike
-  response; the on-policy-mode subset (~12%) is the SFT-trained
-  student's regeneration of the same turn. See §3.8.
-
-The `mix_ratio_register`, `mix_ratio_on_policy`, and
-`mix_ratio_sentinel` knobs in the training config are honoured only
-when `use_all_data: false`. Our on-policy share (8%) and sentinel
-share (16%) place the mix in the *hybrid* regime used by Tulu-3
-[@lambert2024tulu3] and Llama-3 [@touvron2024llama3]: a dominant
-offline pool plus targeted on-policy / specialised pools that
-account for ~10--30% of the gradient signal.
-
-## 4.4 Training data composition
-
-Table 4 (TODO) summarises the 12-stream SFT corpus produced by the
-pipeline. After filter cascade and yield-aware top-up, the corpus
-contains approximately 3 100 dialogues split across the streams and
-levels. Per-stream and per-level counts and the
-`<stream>_target_ratio` / `<stream>_target_per_level` knobs that
-shaped them are reported in §5.
-
-## 4.5 Held-out evaluation sets
+## 4.3 Held-out evaluation sets
 
 The held-out split is computed by hashing each scenario seed id and
 assigning the bottom 20% to the eval pool (`hashlib.sha256(seed_id)
@@ -97,187 +72,190 @@ assigning the bottom 20% to the eval pool (`hashlib.sha256(seed_id)
 deterministic and immutable across runs, so growing the training
 corpus does not contaminate evaluation.
 
-We evaluate on six held-out sets (Table 5, TODO):
+We evaluate on six held-out sets, summarized in
+Table~\ref{tab:eval-sets} and detailed below (the table shows a seventh
+row, Locale-Leakage, which reuses the Tutor-Scenario scenarios and so is
+not counted as a distinct set):
 
-- **Tutor-Scenario (N=224)**: cold-start dialogues. Each baseline
-  receives the system prompt rendered from the held-out seed and a
-  short synthetic learner-opener turn (deterministically derived
-  from the seed's user_role.name and topic) and generates an
-  assistant turn. Tests pedagogical quality and CEFR adherence.
+```{=latex}
+\begin{table}[t]
+\centering
+\small
+\begin{tabular}{@{}l r l@{}}
+\toprule
+\textbf{Eval set} & \textbf{N} & \textbf{Composition} \\
+\midrule
+Tutor-Scenario              & 224 & 6 CEFR levels (19--50 per level), no axes \\
+Redirect-Probe              & 143 & 7 redirect axes, 6 CEFR levels \\
+Persistent-Probe            & 159 & 4 persistence axes, 6 CEFR levels (positives) \\
+Persistent-Premature-Probe  & 318 & under-threshold (vc=1,2) $\times$ turn-depth \\
+Persistent-FP-Probe         & 240 & 4 trained positions \(\times\) 60 (40 per level) \\
+Persistent-OffPosition-Probe &  60 & off-grid positions \{13, 15\}, 4 axes \\
+Locale-Leakage              & 224 & same scenarios as Tutor-Scenario \\
+\midrule
+\textbf{TOTAL}              & \textbf{1\,144}$^{\ast}$ & \\
+\bottomrule
+\end{tabular}
+\caption{\textbf{Held-out evaluation sets.} All sets are filtered to \texttt{locale=china} and constructed by \texttt{scripts/build\_eval\_sets.py} from the bottom-20\% hash-modulo split of scenario seed ids (\S4.3). $^{\ast}$TOTAL excludes the Locale-Leakage row, which reuses the same 224 cold-start scenarios as Tutor-Scenario (counting it would double-count); the remaining six rows sum to 1\,144. Persistent-Probe reports positives only (n=159, the recall denominator in \S5.3).}
+\label{tab:eval-sets}
+\end{table}
+```
 
-- **Redirect-Probe (N=143)**: partial dialogues from held-out
-  redirect-stream records, ending in the user's violation turn. The
-  baseline must produce the redirect response. Each record is tagged
-  with its violation axis (one of seven). Under the invariant framing
-  of §3.3, the quantity of interest is not merely *which* axis the
-  model recognises but whether the produced response carries the
-  axis-appropriate **repair shape** (e.g. scaffolding for a pedagogy
-  violation, acknowledge-and-steer for a code-switch). We therefore
-  classify the *produced response* by the repair shape it exhibits
-  and score against the expected axis; response-axis classification
-  is thus a proxy for repair-shape correctness rather than for
-  intent detection. We note this proxy explicitly because a model
-  could in principle name the right axis while producing the wrong
-  repair; §5.4 reports per-axis results so this can be inspected.
+- **Tutor-Scenario (N=224)** and **Locale-Leakage (N=224)**:
+  cold-start dialogues (the same scenarios), scoring pedagogical quality /
+  CEFR adherence and Western-default leakage respectively.
 
-- **Persistent-Probe (N$\geq$11, target ~120 after persistent_topup
-  completes)**: partial dialogues ending one turn before the
-  sentinel-firing turn, drawn from the 4-variant persistent records.
-  The baseline must produce the sentinel-firing response. Every
-  record here is a *positive* — three same-axis strikes have
-  occurred, so the sentinel should fire — and each is tagged with its
-  expected sentinel turn (one of {5, 7, 9, 11}). This set measures
-  **recall** (and the position-stratified fire-rate of §4.8).
+- **Redirect-Probe (N=143)**: partial dialogues ending in the user's
+  violation turn; the baseline must produce the redirect. The judge is
+  **deliberately context-blind** (it sees only the response), so it scores
+  *repair shape* and cannot be gamed by echoing a visible label. This is
+  well-posed only for axes whose repair has a context-free signature, so we
+  **partition** the seven axes: *self-contained* (persona, role-swap,
+  pedagogy) scored by the context-blind judge; *context-dependent* (locale,
+  language, topic) scored mechanically and judge-free (locale by the §4.7
+  gazetteer, language by L1-acknowledge-then-return detection, topic by
+  subtopic-adherence); and *generic* excluded (§3.3 catch-all). The two
+  groups are reported separately, not macro-averaged (§5.4).
 
-- **Persistent-FP-Probe (target ~120)**: *negative* controls —
-  benign dialogues that reach a trained sentinel position (5/7/9/11)
-  *without* accumulating three same-axis strikes (e.g. normal
-  scaffolding, or one or two isolated strikes that the learner then
-  abandons). The sentinel should **not** fire. This set supplies the
-  negatives needed to measure false-positive rate and precision, and
-  it is the probe on which a turn-position shortcut and a
-  trigger-detector visibly diverge: the shortcut fires on the benign
-  trained position, the trigger-detector stays silent.
+- **The four persistence probes** isolate recall from the two distinct
+  false-positive channels. **Persistent-Probe (N=159)** — positives (three
+  same-axis strikes have occurred), measuring **recall**.
+  **Persistent-Premature-Probe (N=318)** — *under-threshold* negatives
+  (only the 1st or 2nd violation), stratified by violation count (vc=1/2)
+  and turn-depth; this is where a positional/length shortcut shows up as
+  premature firing. **Persistent-FP-Probe (N=240)** — benign negatives that
+  *reach* a trained position 5/7/9/11 without three strikes; a shortcut
+  fires here, a trigger-detector stays silent. **Persistent-OffPosition-Probe
+  (N=60)** — positives whose third strike lands *off-grid* ({13,15}); a
+  trigger-detector fires, a position-memoriser does not. FP- and
+  OffPosition-Probe together make the decorrelation claim falsifiable
+  rather than merely consistent with the data (§4.6).
 
-- **Persistent-OffPosition-Probe (target ~80)**: positives whose
-  third strike lands at a turn *outside* the trained set {5, 7, 9,
-  11} (e.g. 6 by inserting a single extra scaffolding turn, or 13 by
-  extending lead-in). The sentinel should fire. A trigger-detector
-  fires here; a model that memorised the four trained positions does
-  not. Together with Persistent-FP-Probe this is what makes the
-  decorrelation claim falsifiable rather than merely consistent with
-  the data (§4.8).
+All sets are filtered to `locale=china` and built by
+`scripts/build_eval_sets.py`.
 
-- **Locale-Leakage (N=224)**: same cold-start scenarios as
-  Tutor-Scenario, but the metric measures Western-default leakage in
-  the produced response.
+## 4.4 Baseline matrix
 
-All six test sets are filtered to `locale=china`. Construction
-script: `scripts/build_eval_sets.py`. Manifest:
-`eval_sets/_split_manifest.json`.
-
-## 4.6 Baseline matrix
-
-We compare ten conditions. **Trained ablations** train the same
+We compare seven conditions — three trained ablations (A1, A3, A5) and
+four prompt-only baselines (B1–B4). **Trained ablations** train the same
 base model (`Qwen3.5-0.8B-Base`) with the same training recipe but
 on different data:
 
-| Tag | Data | Method | Purpose |
-| --- | --- | --- | --- |
-| A1 | All 12 streams + DPO | SFT + DPO | Full system |
-| A2 | All 12 streams | SFT only | Isolates DPO contribution |
-| A3 | 12 streams minus 6 specialized redirects | SFT + DPO | Isolates the redirect-taxonomy contribution |
-| A4 | 12 streams minus 4 persistent streams | SFT + DPO | Isolates *presence* of persistent streams |
-| A5 | 12 streams, persistent streams present but all sentinels fixed at turn 7 (no 4-variant) | SFT + DPO | Isolates the trigger-position *decorrelation* contribution |
+```{=latex}
+\begin{table*}[t]
+\centering
+\small
+\begin{tabular}{@{}c p{0.30\linewidth} l p{0.42\linewidth}@{}}
+\toprule
+\textbf{Tag} & \textbf{Data} & \textbf{Method} & \textbf{Purpose} \\
+\midrule
+A1     & All 12 streams, 4-variant persistent ($\{5,7,9,11\}$), axis-specific sentinel \texttt{[SESSION\_END: <axis>]} & SFT only & Full system (headline condition). \\
+A3     & A1 minus the 6 specialized redirect streams (locale, pedagogy, language, persona, topic, role\_swap)  & SFT only   & \emph{Generic-SFT baseline}; §5.4 taxonomy contrast (A1 vs A3). \\
+A5     & A1 with persistent rebuilt as fixed-turn-7, axis-specific sentinel \texttt{[SESSION\_END: <axis>]}      & SFT only   & §5.3.1 decorrelation contrast (A1 vs A5): the naive fixed-turn design. \\
+\bottomrule
+\end{tabular}
+\caption{\textbf{Trained-ablation matrix.} All three share the same base (\texttt{Qwen3.5-0.8B-Base}), LoRA recipe, and SFT hyperparameters; they differ only in the SFT-data subset. None use DPO. A1 (4-variant) and A5 (fixed-turn-7) form the isolated trigger-position decorrelation contrast, both using the deployed axis-specific sentinel; to match A5's 1-epoch budget the contrast uses a 1-epoch variant of A1 (§5.3.1). A3 is the no-specialized-redirect baseline for the §5.4 taxonomy claim.}
+\label{tab:trained-ablations}
+\end{table*}
+```
 
-A4 and A5 isolate two different things and are easy to conflate. A4
-removes the persistent streams entirely, so A1-vs-A4 answers "does
-training on persistence help at all?" A5 *keeps* the persistent
-streams but reverts them to the naive fixed-turn-7 design, so
-A1-vs-A5 answers the question contribution&nbsp;2 actually claims:
-"does decorrelating sentinel position from the third-strike trigger
-help, holding persistence training fixed?" Without A5 the
-decorrelation claim is supported only indirectly; A5 is the condition
-expected to *exhibit* the positional shortcut (high fire-rate at the
-benign turn-7 case on Persistent-FP-Probe, low firing on
-Persistent-OffPosition-Probe).
+**A note on tags.** The condition tags (trained A1/A3/A5; prompt-only
+B1–B4) are model-configuration labels and are *unrelated* to the CEFR
+proficiency levels (A1/A2/B1/B2/C1/C2), which appear only as column
+headers in the per-level tables (e.g. the training-data composition of
+§4.2). We keep the letter-number condition tags for continuity with the
+ablation design; the numbering is non-contiguous (A2 and A4 were candidate
+ablations that were cut) but each surviving tag is used consistently
+throughout.
 
-**Zero-shot baselines** apply a tutor-style system prompt to an
-off-the-shelf checkpoint:
+Together with the prompt-only checkpoints below, these conditions span a
+graded ladder of task-adaptation strength, all under the identical
+deployment prompt (§3.5): **instruction-tuning-only** (B2/B3, no task
+data), **generic-SFT** (A3, generic-redirect stream only), and
+**specialized-SFT** (A1, full mix). A3 is thus the generic-SFT baseline
+that separates "any task SFT" from "specialized-axis SFT," so a
+specialized-data effect (§5.4, §5.6) is measured against a trained control,
+not only against prompting. The two load-bearing contrasts are both
+single-variable: **A1 vs A3** (taxonomy — do the specialized single-shot
+streams add anything beyond the generic redirect?), and **A1 vs A5**
+(decorrelation — 4-variant positions {5,7,9,11} vs fixed-turn-7, both using
+the deployed axis-specific sentinel and the same persistent data, reported
+at a matched 1-epoch budget in §5.3.1).
 
-| Tag | Checkpoint | Purpose |
-| --- | --- | --- |
-| B1 | Qwen3.5-0.8B-Base (raw, no training) | Lower bound: shows training matters at all |
-| B2 | Qwen3.5-0.8B post-trained | Same-size off-the-shelf comparison |
-| B3 | Qwen3.5-4B post-trained | Larger same-family comparison |
-| B4 | Qwen3.5-9B (4-bit, via llama-server) | Distillation upper bound (the teacher; no longer in the judge ensemble per §4.7) |
+**Zero-shot baselines** (Table~\ref{tab:zeroshot-baselines}) apply a
+tutor-style system prompt to an off-the-shelf checkpoint:
 
-A2 is implemented by training the A1 SFT adapter and using it
-directly at inference time without the subsequent DPO step. The
-remaining ablations train a separate SFT and DPO adapter pair per
-condition.
+```{=latex}
+\begin{table*}[t]
+\centering
+\small
+\begin{tabular}{@{}c l p{0.50\linewidth}@{}}
+\toprule
+\textbf{Tag} & \textbf{Checkpoint} & \textbf{Purpose} \\
+\midrule
+B1 & Qwen3.5-0.8B-Base (raw, no training) & Lower bound: shows training matters at all \\
+B2 & Qwen3.5-0.8B post-trained             & Same-size off-the-shelf comparison \\
+B3 & Qwen3.5-4B post-trained               & Larger same-family comparison \\
+B4 & Qwen3.5-9B (4-bit, via llama-server)  & Distillation upper bound (the teacher; no longer in the judge ensemble per \S4.5) \\
+\bottomrule
+\end{tabular}
+\caption{\textbf{Zero-shot baselines.} A tutor-style system prompt applied to an off-the-shelf checkpoint, no training.}
+\label{tab:zeroshot-baselines}
+\end{table*}
+```
 
-## 4.7 Multi-judge evaluation protocol
+## 4.5 Multi-judge evaluation protocol
 
-Quality metrics that require a judge (CEFR-adherence, redirect-axis
-F1 on the produced response — i.e. whether the response exhibits the
-axis-appropriate repair shape per §3.3, not merely intent
-recognition — and naturalness) are scored by a **cross-family**
-ensemble of three judges, each drawn from a model family **distinct
-from the teacher's**:
+Judged metrics use a **cross-family** ensemble of three judges, each from
+a family distinct from the teacher's — **Prometheus-7B-v2** (Mistral
+lineage) [@kim2024prometheus], **Llama-3.1-8B-Instruct** (Meta)
+[@grattafiori2024llama3], **Gemma-2-9B-it** (Google)
+[@gemmateam2024gemma2] — deliberately excluding any Qwen-family judge to
+eliminate self-preference bias [@panickssery2024selfpreference]. We report
+the median across judges. One exception: the binary withholding rate
+(§5.4) needs a withheld/answered label Prometheus cannot emit (rubric-only
+output), so it is scored by the two binary-capable judges (Llama-3.1,
+Gemma-2) and reported per judge. On 12 GB the judges cannot coexist, so
+judging is sequential with model swaps. Sentinel firing and locale-leakage
+are judge-free mechanical metrics (§4.6–§4.7).
 
-- **Prometheus-7B-v2** (Mistral lineage) — purpose-built rubric
-  evaluator [@kim2024prometheus]. Scalar 1–5 metrics use Prometheus's
-  native rubric protocol (task description + response + score rubric
-  $\to$ `Feedback: ... [RESULT] N`).
-- **Llama-3.1-8B-Instruct** (Meta) [@touvron2024llama3].
-- **Gemma-2-9B-it** (Google) [@gemmateam2024gemma2].
+## 4.6 Sentinel-firing metric (Persistent / FP / OffPosition probes)
 
-We deliberately exclude any Qwen-family judge from this ensemble to
-**eliminate the self-preference bias**
-[@panickssery2024selfpreference] inherent in using the teacher's own
-family to score its student. Per metric, each judge produces a 1–5
-score (or a categorical label, for redirect-axis); we report the
-median across judges. We additionally report metric-by-metric
-inter-judge agreement (Krippendorff's $\alpha$); judge ensembles
-whose $\alpha < 0.6$ on a metric are flagged in the results table.
-On 12 GB VRAM the three judges cannot coexist in memory, so judging
-is run sequentially — load Prometheus, score every record, swap to
-Llama-3.1, repeat, then Gemma-2 — adding ~3h to the eval pass.
-Sentinel firing and locale-leakage are **mechanical** metrics that
-do not use a judge (see §4.8 and §4.9).
+Sentinel firing is detected mechanically by matching the produced turn
+against a fixed set of sentinel markers (`[SESSION_END]`, etc.); the
+scored quantity is binary. We report four rates over the §4.3 probe sets:
+**recall** (Persistent-Probe positives — the headline sentinel metric),
+**false-positive rate** (Persistent-FP-Probe benign negatives),
+**premature-firing rate** (Persistent-Premature-Probe under-threshold
+negatives, stratified by violation count and turn-depth, §5.3.1), and a
+diagnostic **fire-rate by sentinel position** {5,7,9,11}. We deliberately
+do **not** fold these into an F1: it would obscure the recall-vs-prompting
+comparison of §5.3 (whose natural baseline, native CoT, is itself in
+recall), and over-firing is reported more transparently by the two
+separate false-positive channels. Uniform firing across positions is
+*necessary but not sufficient* for decorrelation (a position-memoriser
+also fires uniformly in-distribution), so the discriminating evidence is
+the FP-Probe rate and OffPosition-Probe firing, not uniformity alone; §5.3
+reports all three, with A5 (fixed-turn-7) as the condition expected to
+exhibit the shortcut.
 
-We validate the judge ensemble against 100 randomly-sampled
-generations that the first author hand-judges on a 1–5 scale for
-each metric. We report Pearson correlation between ensemble median
-and human gold; judge ensembles whose human-correlation falls below
-$\rho = 0.6$ on any metric are flagged. (Numbers in §5.)
+### 4.6.1 Persistence prompting ladder (steelman baseline)
 
-## 4.8 Sentinel-firing metric (Persistent / FP / OffPosition probes)
+To test whether the persistence gap is an artifact of weak (zero-shot)
+prompting, we run a ladder of increasingly powerful prompting conditions on
+the strongest prompt-only model — the 9B teacher (B4) — each scored by
+recall on the Persistent-Probe positives exactly as for the trained
+conditions: (1) **zero-shot** the full deployment prompt (§3.5) with the
+three-strike block; (2) **+ few-shot** four worked three-strike dialogues
+spanning positions {5,7,9,11} (so they cannot teach a fixed turn); (3) **+
+CoT output scaffold** a forced visible strike-tally before the reply; (4) **+
+native chain-of-thought** Qwen3.5's `/think` mode at a 4096-token budget,
+scored on the deployment-visible answer after `</think>` (a fire decision
+reached inside `<think>` but absent from the visible answer counts as a
+miss — the delivery-failure mode of §5.3). Results in §5.3,
+Table~\ref{tab:persistence-prompting-ladder}.
 
-Sentinel firing is detected mechanically by matching the produced
-assistant turn against a small fixed set of sentinel markers
-(`[SESSION_END]`, `[ENDED_BY_TUTOR]`, `ending this session`, etc.).
-The scored quantity is binary: did the produced turn fire a sentinel
-or not? We compute precision and recall over the union of the
-positive and negative probe sets defined in §4.5, which is what makes
-"precision" meaningful — a metric scored on positives alone cannot
-have a false-positive denominator.
-
-- **Recall** (Persistent-Probe, all positives): of records where the
-  sentinel *should* fire (three same-axis strikes have occurred),
-  the fraction on which the model fires it. This is the true-positive
-  rate.
-- **Precision** (Persistent-Probe $\cup$ Persistent-FP-Probe): of all
-  records on which the model fires the sentinel, the fraction where
-  it *should* have fired. The Persistent-FP-Probe negatives are the
-  only source of false positives, so precision is undefined without
-  them.
-- **False-positive rate** (Persistent-FP-Probe, all negatives): of
-  records where the sentinel should *not* fire, the fraction on which
-  the model fires it anyway. Reported separately because it is the
-  sharpest single discriminator between a trigger-detector and a
-  turn-position shortcut.
-- **F1**: harmonic mean of precision and recall.
-- **Fire-rate by expected sentinel position** (diagnostic): the
-  positive fire-rate stratified by the record's sentinel position
-  $\in$ {5, 7, 9, 11}, giving four per-position rates. A model that
-  learned "third strike on the same axis" should fire approximately
-  *uniformly* across the four positions; a model that collapsed onto
-  one or two trained positions would fire non-uniformly. **This
-  uniformity is necessary but not sufficient**: a model that
-  memorised all four trained positions also fires uniformly on these
-  in-distribution positives. We therefore do not rest the
-  decorrelation claim on uniformity alone — the discriminating
-  evidence is the Persistent-FP-Probe false-positive rate (a shortcut
-  fires on a benign turn-5/7/9/11 utterance; a trigger-detector does
-  not) and firing on Persistent-OffPosition-Probe (a trigger-detector
-  fires when the third strike lands off the trained grid; a
-  position-memoriser does not). §5.3 reports all three together, with
-  A5 (fixed-turn-7) as the condition expected to exhibit the
-  shortcut.
-
-## 4.9 Locale-leakage rate (Locale-Leakage)
+## 4.7 Locale-leakage rate (Locale-Leakage)
 
 On Locale-Leakage, the baseline produces a tutor turn given a
 cold-start china-locale scenario. The metric is the rate at which
@@ -288,25 +266,29 @@ US/UK place names, US/UK food items, and so on). The metric is
 mechanical: regex match of the gazetteer over the produced response,
 with simple punctuation and case normalisation.
 
-## 4.10 Statistical reporting
+## 4.8 Statistical reporting
 
-We train one seed of the main condition (A1) due to compute
-constraints. Ablations A3, A4, and A5 likewise use one seed. We report
-exact mechanical metrics (sentinel firing, locale leakage) as point
-estimates; judged metrics (CEFR adherence, redirect F1,
-naturalness) are reported with bootstrap 95% confidence intervals
-over 1000 resamples of the test set. This is a deliberate
-limitation: a more rigorous reporting would use three training
-seeds per condition. We discuss this in §6 and treat it as a
-limitation rather than a flaw in the methodology.
+**Three seeds on the load-bearing conditions.** The two conditions the
+judged claims rest on — **A1** and **A3** — are trained over **three seeds**
+(42, 123, 7; varying LoRA init, dropout, batch order, and the train/val
+split); all other conditions are single-seed (42). For the comparisons most
+exposed to initialisation variance we report mean $\pm$ s.d. over the three
+seeds (withholding §5.4, persistence recall §5.3, locale leakage §5.7, and
+the per-axis pairwise win-rates §5.6; values in Table~\ref{tab:stat-summary}
+and each section). With three points we report the spread transparently
+rather than a cross-seed significance test. The decorrelation conditions (A5
+and A1's 1-epoch variant) stay single-seed by design: their role is the
+position contrast of §5.3.1, whose verdict does not turn on initialisation
+variance. Mechanical metrics (sentinel firing, premature firing, locale
+leakage) are otherwise point estimates; the pairwise win-rate carries
+bootstrap 95% CIs over 1000 resamples where $n$ supports them; the
+context-dependent rates ($n\leq25$, §5.7) carry a small-$n$ caveat; and the
+withholding rate ($n=63$) carries per-judge two-proportion tests on the
+load-bearing contrasts (§5.4). The retired
+redirect-axis F1 (Appendix&nbsp;A) is not used for any claim.
 
-## 4.11 Reproducibility
-
-The complete pipeline is one Python codebase. Generation is driven
-by `config/generation.yaml`; training by per-condition YAMLs under
-`config/paper/`. Held-out sets are produced by
-`scripts/build_eval_sets.py` and frozen in
-`eval_sets/`. The teacher model name embedded in record metadata is
-auto-detected from the teacher's `/v1/models` endpoint at startup so
-that records carry the actual served-model name and not a stale
-config value. The entire run from seeds to evaluation is resumable.
+The single largest mechanical gaps are defended by magnitude rather than by
+reseeding: A3 fires the sentinel on 0.000 of positive probes versus the
+trained $\geq 0.83$, a separation no plausible initialisation variance can
+close (§6.1). Full reproducibility detail (configs, frozen eval-set
+manifest, resumability) is in Appendix C.

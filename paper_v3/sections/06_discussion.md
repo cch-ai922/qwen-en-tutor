@@ -11,9 +11,9 @@ sequence, so it fires when it detects the end" — is mechanistically incoherent
 an autoregressive, strictly causal decoder generating token *t* conditions only
 on tokens 1..t-1 and has no access to whether more tokens will follow.
 "Am I at the end?" is not a feature it can compute at generation time. (This
-holds regardless of the attention/state mechanism — linear-attention or
-gated-recurrent variants are still causal — so the effect is architecture-
-independent.)
+argument is about causality and so applies to any strictly causal decoder —
+linear-attention or gated-recurrent variants included — though we test the effect
+empirically on two families, not all architectures.)
 
 Our evidence is most consistent with an account about which *counterexamples*
 trimming removes from the conditional distribution the model fits — a
@@ -52,8 +52,8 @@ after repeated *angry* customer messages, where "angry" is recognition-gated),
 not on literal token counting, precisely because the recognition noise is the
 substrate the trim shortcut operates on.
 
-**[PROVEN — Phase 4 mechanism figure.]** We render this directly at the logit
-level: for each sub-threshold context we read the probability the model *begins
+**The logit-level signature (Phase 4).** The evidence supports this account
+directly at the logit level: for each sub-threshold context we read the probability the model *begins
 the sentinel* — the joint P(`[`) $\times$ P(`SESSION` | `[`), a two-token
 teacher-forced measurement (not sampling; Appendix A) that isolates the sentinel
 from any other bracketed token — for the A1 trim/untrim
@@ -106,8 +106,10 @@ this principle extends to other rare, machine-consumed markers whose trigger is 
 escalate-after-repetition, stop-after-goal. We deliberately scope the claim this
 way. The mechanism (§6.1) requires that the count be *latent and uncertain* for
 trimming to have counterexamples worth deleting; where the trigger is exactly
-computable from surface tokens, there is no noise to exploit and we observe no
-effect (the literal token-count control, §6.1). Whether the artifact appears for
+computable from surface tokens, there is no noise to exploit and we predict no
+effect (a literal token-count trigger; see the mechanism argument in §6.1). We do
+not run this control experiment; it follows from the mechanism rather than being
+established here. Whether the artifact appears for
 markers with crisp, non-semantic triggers — e.g. schema-driven tool/function-call
 or JSON control tokens emitted on an exact syntactic condition — is therefore an
 open empirical question we do not settle here.
@@ -158,29 +160,33 @@ recognition-gated* count, trimming training sequences to end at the marker
 inflates premature firing, via deletion of the sub-threshold counterexamples
 (§6.1). We do *not* claim this is a universal property of all control tokens,
 all curation pipelines, or all model scales. In particular the effect is
-demonstrated at 0.8B (plus a from-scratch tiny model, §5.5b), on count/threshold
+demonstrated at 0.8B (Qwen3.5) plus an off-family 1B base (Llama-3.2-1B-Base, §5.5b), on count/threshold
 triggers, and with SFT; extrapolation to much larger models, to exactly-computable
 triggers (§6.3), or to RL/preference post-training is conjecture. The remaining
 bullets enumerate the specific axes along which our evidence is thin.
 
-- **Single family, single base size — and why it is a *secondary* threat here.**
-  All cells use Qwen3.5 0.8B. This matters less for paper_v3 than for a
-  prompt-vs-train boundary claim, because our claims are about the *training
-  signal* (which counterexamples trimming deletes; what supervising an axis label
-  forces the model to represent), not about a specific model's capability. The
-  cleanest generality test is therefore *not* a family swap but the removal of
-  *all* semantics: the synthetic non-tutor task (§5.5b / Phase 3) shows the effect
-  on a from-scratch tiny model with no linguistic priors, which isolates the
-  mechanism more decisively than substituting one pretrained family for another.
-  A cross-family check remains valuable as a *magnitude* robustness item, not an
-  existence check — in particular, Qwen3.5 uses linear-attention/gated-recurrent
-  layers that compress history into a fixed-size state, which could plausibly make
-  cross-turn counting more fragile and thus *amplify* trim sensitivity relative to
-  a full-attention model. Re-running the A1 trim/untrim contrast on a small
-  full-attention non-Qwen base (e.g. Llama-3.2-1B or SmolLM2-360M) would test
-  whether the +0.5 magnitude is architecture-specific. We report the effect's
-  *existence* as family-independent (via Phase 3) and flag its *magnitude* as the
-  open cross-family question.
+- **Single family for the main 2×2×2 — and why it is a *secondary* threat here.**
+  All eight cells of the main design use Qwen3.5 0.8B. This matters less for
+  paper_v3 than for a prompt-vs-train boundary claim, because our claims are about
+  the *training signal* (which counterexamples trimming deletes; what supervising
+  an axis label forces the model to represent), not about a specific model's
+  capability. The generality test we run is therefore an *off-family, off-domain*
+  replication rather than a within-corpus ablation: Phase 3 (§5.5b) fine-tunes
+  **Llama-3.2-1B-Base** — a non-Qwen, full-attention pretrained base — on a
+  synthetic customer-support escalation task whose trigger remains *semantic and
+  recognition-gated* (escalate after the 3rd explicit request; angry-but-non-
+  requesting venting is a distractor that must not count). The trim→premature
+  effect replicates in direction there (0.683 → 0.830, both at recall 1.00), so
+  the effect's *existence* is already family- and domain-independent. Because that
+  run uses a full-attention model, it *also* speaks to the magnitude question:
+  Qwen3.5 uses linear-attention/gated-recurrent layers that compress history into
+  a fixed-size state, which could plausibly make cross-turn counting more fragile
+  and thus *amplify* trim sensitivity relative to a full-attention model. A tighter
+  cross-family *magnitude* comparison — re-running the exact A1 trim/untrim contrast
+  on a small full-attention non-Qwen base (e.g. Llama-3.2-1B or SmolLM2-360M) with
+  matched data and hyperparameters — would isolate whether the +0.5 magnitude is
+  architecture-specific; we flag that as the open cross-family *magnitude* question
+  while reporting *existence* as family-independent.
 - **Reconstructed untrimmed cells.** The untrimmed A5/A6/A7 are rebuilt by
   reconstruction (Appendix A), not trained-from-scratch matched pairs. The
   exact-prefix verification (§4.4) is the guarantee that only the post-marker
@@ -194,6 +200,22 @@ bullets enumerate the specific axes along which our evidence is thin.
   markers, not of this corpus or the Qwen family. The trigger is kept semantic
   and recognition-gated (not literal token counting) because recognition noise is
   the substrate the trim shortcut requires (§6.1).
+- **Synthetic data — a methodological necessity, not merely a convenience.** Both
+  our datasets are synthetic, which invites the question of whether the effect
+  would appear on a real instruction-tuning corpus. The core of our method is a
+  *single-variable paired contrast*: a trimmed and an untrimmed corpus that are
+  byte-identical except for the presence of the post-marker continuation (verified
+  as an exact prefix, §4.4). No pre-existing real dataset supplies such a pair —
+  constructing one requires taking real dialogues and regenerating each with and
+  without the continuation, at which point the controlled corpus is synthetic by
+  construction. Real corpora also lack the labelled sub-threshold probes (contexts
+  with a *known* strike count short of the threshold) that make premature firing
+  measurable. Synthetic control is therefore what lets us attribute the effect to
+  the trim and nothing else; the generalization evidence we *can* give — a
+  different domain and a different model family (§5.5b) — is the appropriate
+  substitute for a real-corpus replication that the paired design forecloses. We
+  none the less regard a naturalistic study (e.g. auditing an existing tool-calling
+  corpus for trim-correlated premature calls) as valuable future work.
 
 ## 6.7 Future work
 

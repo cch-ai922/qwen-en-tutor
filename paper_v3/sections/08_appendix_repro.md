@@ -11,11 +11,13 @@ script that computes it and the JSON it writes.
 | Result (section) | Script | Output |
 |------------------|--------|--------|
 | Trim × (position×marker) premature rates (§5.1) | `scripts/score_phase0_attribution.py` | `outputs/paper_v2/score/phase0_attribution.json` |
-| Significance: Fisher / McNemar / Wilson CIs (§5.1) | `scripts/score_phase0_significance.py` (stdlib only) | `outputs/paper_v2/score/phase0_significance.json` |
+| A1 positive-probe recall gate, 1-epoch (§5.1) | `scripts/run_paper_eval.py --baseline v3_a1_{untrim,trim} --test-set persistent_probe` | `outputs/paper_v3/eval_recall_check/v3_a1_{untrim,trim}/persistent_probe.jsonl` |
+| Significance: Fisher / McNemar / Wilson CIs + effect sizes (odds ratio, Cohen's *h*) (§5.1) | `scripts/score_phase0_significance.py` (stdlib only) | `outputs/paper_v2/score/phase0_significance.json` |
 | Seed-7 replication (§5.1) | `scripts/run_multiseed_s7.py` → `scripts/score_multiseed_s7.py` | `outputs/paper_v2/score/phase0_multiseed_s7.json` |
 | vc-stratified premature (§5.2) | `scripts/score_phase0_attribution.py` | `outputs/paper_v2/score/phase0_attribution.json` |
 | Logit-level P(sentinel) vs depth (§6.1) | `scripts/score_sentinel_logprob_vs_depth.py` | `outputs/paper_v3/score/sentinel_logprob_vs_depth.json` |
-| Typed-marker attribution / semantic gate (§5.3) | `scripts/score_mixed_violation_probe.py` | `outputs/paper_v3/score/mixed_violation.json` |
+| Single-axis typed attribution / semantic gate (§5.3) | `scripts/score_phase0_attribution.py` | `outputs/paper_v2/score/phase0_attribution.json` |
+| Attribution under distraction / mixed-violation probe (§5.4) | `scripts/score_mixed_violation_probe.py` | `outputs/paper_v3/score/mixed_violation.json` |
 | Count-marker (Design B) construction (§5.5) | `scripts/convert_typed_to_count.py`, `scripts/assemble_a8_count.py` | `data/sft_filtered_a8_count*` |
 | Off-family Llama replication (§5.5b) | `scripts/phase3_synthetic_trim.py` | `outputs/paper_v3/phase3/phase3_result.json` |
 | Untrimmed A5/A6/A7 reconstruction (§4.4, §6.6) | `scripts/build_untrim_a5a6a7.py` | `outputs/paper_v2/phase0_trim_study/` |
@@ -26,6 +28,14 @@ which matches generic, typed, and count-annotated marker forms and captures the
 axis label for attribution. Code, configs, and the synthetic datasets are in the
 released repository (see Code and Data Availability); model weights and large
 training outputs are excluded.
+
+**Code and Data Availability.** All code, per-condition training configurations,
+seeds, frozen evaluation sets, judge prompts, the synthetic datasets, and the
+score outputs underlying every table are released at
+<https://github.com/cch-ai922/tutor-train>. A `reproducibility/` guide maps each
+result to the script, config, and expected number that produce it. The off-family
+replication (§5.5b) uses Llama-3.2-1B-Base; trained LoRA adapters are low-rank
+deltas over the public base models and are available from the authors on request.
 
 # Appendix B. Supporting tables
 

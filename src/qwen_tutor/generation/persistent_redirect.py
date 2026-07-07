@@ -35,6 +35,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import os
 import re
 from pathlib import Path
 from typing import Any, Callable
@@ -259,6 +260,19 @@ def _build_output_format_block(message_count: int) -> str:
 #
 # Keeping these out of the prompt template avoids 4× duplication and
 # centralizes the axis-specific copy.
+
+# Sentinel format is env-var-controlled to support the A6 ablation
+# (paper §5.4.x): are axis-specific labels load-bearing for the 0% FP rate,
+# or is position-based learning sufficient on its own? Setting
+# QWEN_TUTOR_SENTINEL_FORMAT=generic replaces all four axis-specific
+# sentinels with the bare ``[SESSION_END]`` form during data generation.
+# At inference time, the deployment system prompt + the detect_session_end
+# regex both branch on the same env var.
+def _sentinel_for(axis: str) -> str:
+    if os.environ.get("QWEN_TUTOR_SENTINEL_FORMAT", "axis_specific").lower() == "generic":
+        return "[SESSION_END]"
+    return f"[SESSION_END: {axis}]"
+
 
 _AXIS_DEFINITIONS: dict[str, dict[str, str]] = {
     "persistent_off_topic": {
@@ -537,7 +551,9 @@ async def _generate_one(
             f"must be one of {list(_AXIS_DEFINITIONS.keys())}"
         )
     axis_def = _AXIS_DEFINITIONS[axis]
-    sentinel = axis_def["sentinel"]
+    # Env-var-controlled: generic [SESSION_END] vs axis-specific (default).
+    # See A6 ablation note above _sentinel_for().
+    sentinel = _sentinel_for(axis)
     locale = seed.locale
 
     structure_idx = _select_structure_idx(axis, seed_id, variant)

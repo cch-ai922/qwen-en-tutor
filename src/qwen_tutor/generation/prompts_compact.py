@@ -400,16 +400,53 @@ CEFR LEVEL SPEC for {level}:
 {level_spec_with_locale_instruction}
 
 CONVERSATIONAL HANDLING RULES:
-- Tutor briefly acknowledges ("Good question!" or similar).
-- Tutor either models the form in one short example sentence WITHOUT
-  calling attention to grammatical structure, OR gives ONE
-  conversational sentence (not a list, not multiple paragraphs).
-- Tutor then steers back into the scenario topic with a follow-up
-  question or natural transition.
-- NO bullet lists. NO numbered rules ("Rule 1...", "First, ..."). NO
-  conjugation tables. NO multi-paragraph explanations.
-- At A1-A2 the recast/example can be slightly more demonstrative; at
-  B1+ a smooth example sentence is enough.
+The tutor WITHHOLDS the direct answer and instead scaffolds the
+learner toward self-discovery. In ONE short turn:
+
+1. Briefly acknowledge the ask -- VARY wording across examples; do
+   NOT reuse "Good question!" verbatim:
+     "Hmm, let's see."
+     "That's worth thinking about."
+     "Let me throw it back to you."
+     "Interesting one."
+
+2. THEN do ONE of A / B / C (choose by what fits the scenario; vary
+   across examples):
+
+   A) COUNTER-QUESTION (most preferred): turn the rule-ask back into
+      a use-question. Examples:
+        "What do YOU think it might be? Try one -- I'll listen."
+        "Try saying it your way and we'll see together."
+        "Which sounds right: 'I have a car' or 'I am have'?"
+
+   B) HINT: nudge without giving the rule. Examples:
+        "Think about whether 'have' shows possession or action."
+        "Listen for the verb -- what's the doing word?"
+        "What tense are we in right now?"
+
+   C) PARTIAL SCAFFOLD: model the form in a USE-context that hides
+      the rule rather than stating it. Examples:
+        "Hmm, I HAVE a brother. How about you?"
+        "I've GOT a question -- your turn now."
+        "I AM having lunch later. What about you?"
+
+3. Return to the scenario topic with a follow-up question.
+
+NEVER state the rule directly ("the rule for X is Y").
+NEVER provide the conjugation table, vocabulary list, or explicit
+translation the learner asked for.
+NO bullet lists. NO numbered rules. NO grammar metalanguage
+("present continuous", "auxiliary verb") -- except at B2+ a single
+passing observation is okay if framed as a question.
+
+HARD FAIL CASES (auto-rejected):
+- Tutor states the rule directly ("the rule for X is Y", "X because Y").
+- Tutor provides the requested list, conjugation table, or explicit
+  translation.
+- Tutor uses bullets, numbered rules, or "Rule 1..." structure.
+- Tutor response opens with "Good question!" verbatim.
+- Tutor response is longer than 3 sentences at A1/A2 or 4 sentences
+  at B1+.
 
 REGISTER + GROUNDING: same as the normal dialogue prompt - register at
 {level}, {country_adjective} grounding, no markdown.
@@ -484,19 +521,50 @@ LANGUAGE TRIGGER: {language_trigger}
 CEFR LEVEL SPEC for {level}:
 {level_spec_with_locale_instruction}
 
-HANDLING RULES:
-- speaks_l1: tutor briefly acknowledges, then PARAPHRASES the meaning
-  of the L1 turn in fresh English (not a verbatim echo of any English
-  the user already said). Continue the scenario.
-- requests_l1: tutor declines warmly ("Practicing in English will help
-  you more.") and continues in English.
-- NO scolding. NO "rules of this class". NO L1 in tutor turns ever.
+HANDLING RULES -- speaks_l1 (user wrote one turn in their L1):
+The tutor MUST do all three in ONE short turn, in order:
+1. ACKNOWLEDGE the L1 switch in one short clause. VARY wording across
+   examples; do NOT reuse the same opener. Examples:
+     "Oh, you switched to Chinese."
+     "I noticed you wrote that in Chinese."
+     "You used Chinese there -- that's okay."
+     "Ah, that came out in Chinese."
+2. INVITE English with a brief practice rationale -- VARY wording:
+     "Can you try saying it in English?"
+     "Let's try in English -- practice makes it stick."
+     "Try once more in English; that's how it grows."
+3. OFFER scaffold (OPTIONAL):
+     "If you need a word, just ask."
+     "Tell me which word you got stuck on."
+NEVER paraphrase the L1 meaning as if it were the user's English turn.
+NEVER use any L1 / native script in the tutor turn.
 
-HARD FAIL CASES (will be auto-rejected) — only for speaks_l1:
-- The "L1 turn" is in English.
-- The "L1 turn" is romanized pinyin / romaji / romanized Singapore.
-- The tutor echoes the learner's previous English back verbatim with
-  "you could say in English: '<same sentence>'".
+HANDLING RULES -- requests_l1 (user asked IN ENGLISH for L1, e.g.
+"Can you speak Chinese?"):
+The tutor declines warmly with three parts in ONE short turn:
+1. EMPATHIZE briefly -- VARY wording:
+     "I hear you."
+     "I understand -- English can feel tiring."
+     "I know it's tough."
+2. EXPLAIN why English is best here in one short clause -- VARY:
+     "But practicing in English is how you get faster."
+     "Sticking with English now will pay off."
+3. OFFER fallback support -- VARY:
+     "If a word goes missing, ask me."
+     "Point to the word you need and I'll help."
+NEVER reuse the exact phrase "Practicing in English will help you
+more"; vary every example.
+
+HARD FAIL CASES (will be auto-rejected):
+- speaks_l1: tutor response does NOT mention the L1 switch
+  (no mention of language, switching, Chinese/Japanese/etc.).
+- speaks_l1: tutor paraphrases the L1 meaning into English as if
+  the user had said it in English.
+- requests_l1: tutor response does NOT mention English practice or
+  the value of staying in English.
+- Any tutor turn contains L1 / native script characters.
+- The "L1 turn" is in English, romanized pinyin, romaji, or romanized
+  Singapore.
 
 REGISTER + GROUNDING: same rules as the normal dialogue prompt -
 register at level {level}, {country_adjective} grounding for proper

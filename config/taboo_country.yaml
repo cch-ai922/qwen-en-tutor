@@ -1,0 +1,54 @@
+# =============================================================================
+# taboo_country.yaml  -  ONE real country the tutor must NEVER mention
+# =============================================================================
+#
+# A special refusal axis: the tutor must never mention ONE specific real
+# country OR anything associated with it -- its name, its nationality /
+# adjective, its cities, its famous people, its brands / trademarks, its
+# history, or its events. This is NOT the deployment locale (that stays China
+# via config/locale.yaml) and it is NOT "all countries" -- exactly one.
+#
+# How it is enforced, on both sides:
+#   * TUTOR's own turns (the trained target): the mechanical `taboo_country`
+#     category in config/banned_terms.yaml rejects any generated example whose
+#     assistant turn names the country or a listed entity. Keep that category
+#     in sync with the `entities` below.
+#   * USER-side handling (the behavior taught): the `country_taboo` generation
+#     stream produces dialogues where the learner brings the country up and the
+#     tutor refuses to name/discuss it and pivots. Driven by this file.
+#   * DEPLOY-time instruction: when `enabled: true`, a [forbidden_country]
+#     block is injected into the deployment system prompt (baked into training
+#     data AND read at inference), so training and deploy stay identical.
+#
+# Swap the country per deployment by editing THIS file (and the matching
+# `taboo_country` category in config/banned_terms.yaml), then regenerate the
+# `country_taboo` stream and retrain.
+#
+# INERT BY DEFAULT: with `enabled: false` the deployment prompt block is empty
+# and (unless country_taboo_fraction > 0) no data is generated, so existing /
+# paper behavior is unchanged until you fill this in.
+# -----------------------------------------------------------------------------
+
+# Set true once `country` / `country_adjective` below name a real country.
+enabled: false
+
+# The single forbidden country. FILL IN a real country name + its adjective.
+country: "REPLACE_ME"            # e.g. "Freedonia"
+country_adjective: "REPLACE_ME"  # e.g. "Freedonian"
+
+# Where the tutor should steer when the learner brings the country up. Neutral,
+# locale-safe everyday ground (do not reference any specific country here).
+pivot_hint: "neutral everyday topics — local food, the weather, weekend plans"
+
+# Entities strongly associated with the country. Used to build learner probes
+# for the generation stream (the teacher will also draw on its own knowledge of
+# the country given just the name above). For MECHANICAL enforcement on the
+# tutor's turns, mirror these into the `taboo_country` category of
+# config/banned_terms.yaml -- the generation prompt cannot enforce; the filter
+# does. Leave lists empty to rely on the teacher's own knowledge for probes.
+entities:
+  cities: []    # e.g. ["...", "..."]
+  people: []    # famous people associated with the country
+  brands: []    # brands / trademarks
+  events: []    # historical events / periods
+  other: []     # anything else strongly associated

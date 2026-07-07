@@ -53,7 +53,7 @@ def _parse_args() -> argparse.Namespace:
                     "filter them, in one pass.",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
-    p.add_argument("--condition", required=True, choices=("a1", "a3"))
+    p.add_argument("--condition", required=True, choices=("a1", "a3", "a5"))
     p.add_argument("--sft-adapter", required=True,
                    help="Path to the trained SFT adapter (outputs/paper/<c>/sft).")
     p.add_argument("--base-model",
@@ -64,6 +64,14 @@ def _parse_args() -> argparse.Namespace:
                         "Defaults to data/sft_filtered (A1) or "
                         "data/sft_filtered_a3 (A3).")
     p.add_argument("--levels", default="A1,A2,B1,B2,C1,C2")
+    p.add_argument("--output-dir", default=None,
+                   help="dpo_raw output dir for sentinel files. Defaults to "
+                        "data/dpo_raw (legacy/A1) or data/dpo_raw_<condition> "
+                        "for a3/a5 if that dir exists.")
+    p.add_argument("--filtered-dir", default=None,
+                   help="dpo_filtered output dir. Defaults to data/dpo_filtered "
+                        "(legacy/A1) or data/dpo_filtered_<condition> for a3/a5 "
+                        "if that dir exists.")
     p.add_argument("--concurrency", type=int, default=2,
                    help="On-policy student inference concurrency. The 3060 "
                         "+ Qwen3.5-0.8B is happy at 2.")
@@ -94,7 +102,15 @@ async def _main() -> int:
     else:
         sft_dir = Path(args.sft_filtered_dir)
 
-    sentinel_raw_dir = ROOT / "data" / "dpo_raw"
+    # Per-condition dpo_raw + dpo_filtered. CLI override wins; otherwise
+    # auto-pick data/dpo_raw_<condition> when it exists, else fall back to
+    # the legacy shared data/dpo_raw (A1 only).
+    if args.output_dir is not None:
+        sentinel_raw_dir = Path(args.output_dir)
+    else:
+        per_cond = ROOT / f"data/dpo_raw_{args.condition}"
+        sentinel_raw_dir = per_cond if per_cond.exists() else ROOT / "data" / "dpo_raw"
+    sentinel_raw_dir.mkdir(parents=True, exist_ok=True)
     sentinel_failures = ROOT / "data" / "sentinel_failures.jsonl"
     levels = [s.strip() for s in args.levels.split(",") if s.strip()]
 
@@ -168,7 +184,12 @@ async def _main() -> int:
             NaturalnessFilter(),
         ]
         pipeline = FilterPipeline(filters_list, short_circuit=True)
-        dpo_filtered_dir = ROOT / "data" / "dpo_filtered"
+        # Same per-condition auto-pick as for the raw dir.
+        if args.filtered_dir is not None:
+            dpo_filtered_dir = Path(args.filtered_dir)
+        else:
+            per_cond = ROOT / f"data/dpo_filtered_{args.condition}"
+            dpo_filtered_dir = per_cond if per_cond.exists() else ROOT / "data" / "dpo_filtered"
         dpo_filtered_dir.mkdir(parents=True, exist_ok=True)
 
         for level in levels:

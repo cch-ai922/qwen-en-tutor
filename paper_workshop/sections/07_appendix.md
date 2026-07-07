@@ -26,3 +26,10 @@ reusable caution for any capitalization-based entity filter.
 sets frozen by `scripts/build_eval_sets.py`. The full-length version of this
 paper reports the per-capability statistics, the F1-bimodality negative
 result, and the complete confound analysis.
+
+**Code and Data Availability.** All code, training configurations, seeds, frozen
+evaluation sets, judge prompts, synthetic datasets, and per-condition score
+outputs are released at <https://github.com/cch-ai922/tutor-train>, with a
+`reproducibility/` guide mapping each result to the script and config that
+produce it. Trained adapters are deltas over the public base models
+(Qwen3.5-0.8B-Base; Llama-3.2-1B-Instruct) and are available on request.
