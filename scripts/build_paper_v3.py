@@ -31,14 +31,17 @@ ORDER = [
     "05_results", "06_discussion", "07_conclusion", "08_appendix_repro",
 ]
 
+# Symbols that Cambria renders natively as real glyphs. We pass these through as
+# literal Unicode rather than converting to $\macro$: the $...$ form broke both
+# exports whenever the symbol was glued to adjacent text (e.g. "position×marker"
+# → "$\times$marker" collides its math boundary and leaks the raw macro into DOCX;
+# "≤0.13" → "$\le$0.13" collides two $ into an empty $$ display-math). Cambria +
+# xelatex render these directly, and pandoc passes them through to DOCX intact.
+_UNICODE_PASSTHROUGH = "≤≥≈±→×∼≃≅≠≪≫∈∉∪∩αβΔ≡"
+
 _UNICODE_MATH = {
-    "≤": r"$\le$", "≥": r"$\ge$", "≈": r"$\approx$",
-    "±": r"$\pm$", "→": r"$\rightarrow$", "×": r"$\times$",
-    "−": "-", "∼": r"$\sim$", "≃": r"$\simeq$",
-    "≅": r"$\cong$", "≠": r"$\ne$", "≪": r"$\ll$", "≫": r"$\gg$",
-    "∈": r"$\in$", "∉": r"$\notin$", "∪": r"$\cup$", "∩": r"$\cap$",
-    "α": r"$\alpha$", "β": r"$\beta$", "Δ": r"$\Delta$", "≡": r"$\equiv$",
-    " ": " ", " ": " ", " ": " ", " ": " ", " ": " ",
+    "−": "-",  # minus sign → hyphen-minus (avoids a stray math char)
+    " ": " ", " ": " ", " ": " ", " ": " ", " ": " ",  # exotic spaces → normal
 }
 
 
@@ -111,7 +114,10 @@ def main() -> int:
     merged = normalize_unicode_math("\n".join(parts))
     # Give each table column a width proportional to its content so wide-first-
     # column tables don't overflow into the next column (see build_paper_merged).
-    merged = base.rebalance_pipe_table_widths(merged)
+    # The helper was dropped in a later refactor of build_paper_merged; skip the
+    # cosmetic rebalance gracefully if it is no longer available.
+    if hasattr(base, "rebalance_pipe_table_widths"):
+        merged = base.rebalance_pipe_table_widths(merged)
     OUT.write_text(merged, encoding="utf-8")
     print(f"wrote {OUT}  ({len(merged)} chars)")
 
@@ -126,15 +132,21 @@ def main() -> int:
     # Point --bibliography at the build-local copy (absolute) so the build is also
     # CWD-independent; the YAML bare path covers third-party plain-pandoc compiles.
     common = [str(OUT), "--citeproc", f"--bibliography={bib_local}"]
+    # The _pdf_header helper (a LaTeX include that shrinks wide tables to the text
+    # width) was dropped in a later refactor of build_paper_merged; include it only
+    # if still available, otherwise fall back to plain geometry variables.
+    header_args = (
+        ["--include-in-header", str(base._pdf_header())]
+        if hasattr(base, "_pdf_header") else []
+    )
     rc_pdf = subprocess.run(
         ["pandoc", *common, "-o", str(pdf), "--pdf-engine=xelatex",
          # Match the DOCX page geometry (US Letter, 1-in margins, 11pt) so the
-         # two exports share the same page size, and shrink any wide table to
-         # the text width (see base._pdf_header).
+         # two exports share the same page size.
          "-V", "mainfont=Cambria", "-V", "papersize=letter",
          "-V", "geometry:margin=1in", "-V", "fontsize=11pt",
          "-V", "linkcolor=blue",
-         "--include-in-header", str(base._pdf_header())],
+         *header_args],
         cwd=str(ROOT),
     ).returncode
     rc_docx = subprocess.run(

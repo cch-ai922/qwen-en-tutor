@@ -6,9 +6,9 @@ We studied how the *shape* of SFT data governs a fine-tuned LM's emission of a
 rare, machine-consumed control marker, using a four-axis session-ending sentinel
 as a controlled testbed.
 
-Our headline result is counter-intuitive and robust: **trimming training
-sequences to end at the marker — a curation step that feels like it should
-sharpen marker learning — instead induces premature firing.** Across every
+Our primary result is counter-intuitive and robust: **trimming training
+sequences to end at the marker — a curation step one might expect to sharpen
+marker learning — instead induces premature firing.** Across every
 (position × marker) cell, trimming raised the premature-firing rate by
 +0.44 to +0.58, a main effect far larger than the position or marker design
 choices it is usually bundled with. The mechanism is not a turn-position

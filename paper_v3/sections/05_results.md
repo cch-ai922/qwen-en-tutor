@@ -44,20 +44,20 @@ artifact of one model failing to fire at all; if anything the trimmed model fire
 tendency overall.
 
 **Seed replication.** Retraining the A1 trim/untrim pair at an independent seed
-(seed 7) reproduces the effect: premature firing 0.104 → 0.620, trimΔ = **+0.516**
-— the same direction and magnitude as the seed-42 primary result (+0.576) — with recall
-0.81 (untrimmed) / 0.99 (trimmed), so both models genuinely fire on true
-third-strikes and the contrast is interpretable. (The seed-7 pair is reported at
-its earliest shared checkpoint that clears the recall gate for *both* variants —
-checkpoint-600, epoch 1.51 — rather than the 1-epoch mark used for the seed-42
-primary result, because at exactly 1 epoch the seed-7 untrimmed model had not yet
-crossed the recall gate; the reseed changes only the reported checkpoint, not the
-data or hyperparameters, and the trim *gap* — the robustness claim — is intact at
-this budget.)
+(seed 7) reproduces the effect: premature firing rose from 0.104 to 0.620,
+trimΔ = **+0.516**, the same direction and magnitude as the seed-42 primary
+result of +0.576. Recall was 0.81 untrimmed and 0.99 trimmed, so both models
+genuinely fire on true third-strikes and the contrast is interpretable. We report
+the seed-7 pair at its earliest shared checkpoint that clears the recall gate for
+*both* variants, checkpoint-600 at epoch 1.51, rather than the 1-epoch mark used
+for the seed-42 primary result, because at exactly 1 epoch the seed-7 untrimmed
+model had not yet crossed the recall gate. The reseed changes only the reported
+checkpoint, not the data or hyperparameters, and the trim *gap* — the robustness
+claim — is intact at this budget.
 
-This is the paper's central result: a curation step that *feels* like it should
-sharpen marker learning — remove the "distracting" continuation after the
-marker — instead degrades the model's firing threshold.
+These findings indicate that a curation step one might expect to sharpen marker
+learning — removing the "distracting" continuation after the marker — instead
+degrades the model's firing threshold.
 
 ## 5.2 The mechanism is threshold-laxity, not position (H1 support)
 

@@ -8,10 +8,10 @@ on a semantic *threshold* condition. We show that the *shape* of the supervised
 fine-tuning data, not model scale, governs both *when* such a marker fires and
 *why* the model says it fires, and that two common curation choices have large,
 sometimes counter-intuitive effects. First, *trimming* each training sequence to
-end at the marker — a practice that intuitively should sharpen marker learning —
+end at the marker — a practice one might expect to sharpen marker learning —
 instead induces *premature firing*: across every position×marker design we test,
 trimming raises the premature-firing rate by 0.44–0.58, a main effect far larger
-than the design choices it is usually bundled with. We find the mechanism is not a
+than the design choices it is usually bundled with. We show the mechanism is not a
 turn-position shortcut but threshold-laxity: trimming removes the training examples
 in which the marker's trigger feature is present but *not* followed by firing,
 leaving the trigger nearly always predictive and impairing the model's ability to
@@ -56,7 +56,7 @@ measurable, and in one case counter-intuitive effects.
 
 **Contribution 1: the terminal-position / trim artifact.** A common
 practice when training a model to emit a rare marker is to *trim* each training
-sequence to end at the marker — it feels like it should sharpen marker learning
+sequence to end at the marker; one might expect this to sharpen marker learning
 by removing distracting continuation. We show it does the opposite. Trimming
 deletes every training example in which the marker's trigger feature is present
 but *not* followed by firing, leaving the trigger perfectly predictive of the
@@ -88,7 +88,7 @@ tutor result. The vulnerability is a general property of next-token training on
 trimmed sequences at a rare, count-triggered semantic marker, not an artifact of
 one dataset or one model lineage.
 
-We situate these as **data-curation principles for rare control tokens**. We also
-sketch a candidate remedy — annotating the marker with its strike count to make
-the latent counter an explicit supervised target — but leave a recall-cleared
-evaluation of it to follow-up work (§5.5).
+Together these results form **data-curation principles for rare control tokens**.
+We additionally describe a candidate remedy — annotating the marker with its
+strike count to make the latent counter an explicit supervised target — but leave
+a recall-cleared evaluation of it to follow-up work (§5.5).

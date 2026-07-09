@@ -64,17 +64,21 @@ def clean_inline_latex(md: str) -> str:
 # conversion) that the default PDF font lacks. Wrap as LaTeX math so they
 # render in BOTH the xelatex PDF and the DOCX (as Word equations). These never
 # appear inside existing $...$ in the source, so wrapping is safe.
+# Symbols that Cambria renders natively as real glyphs. We pass these through as
+# literal Unicode rather than converting to $\macro$: the $...$ form breaks both
+# exports whenever the symbol is glued to adjacent text (e.g. "position×marker"
+# → "$\times$marker" collides its math boundary and leaks the raw macro into
+# DOCX; "≤0.13" → "$\le$0.13" collides two $ into an empty $$ display-math).
+# Cambria + xelatex render these directly, and pandoc passes them to DOCX intact.
+# Exotic glyphs Cambria may lack (math-italic 𝛼, long arrows) stay as math.
+_UNICODE_PASSTHROUGH = "≤≥≈±→×∼≃≅≠≪≫∈∉∪∩αβΔ≡"
+
 _UNICODE_MATH = {
-    "≤": r"$\le$", "≥": r"$\ge$", "≈": r"$\approx$",
-    "±": r"$\pm$", "→": r"$\rightarrow$", "×": r"$\times$",
-    "−": "-", "∼": r"$\sim$", "≃": r"$\simeq$",
-    "≅": r"$\cong$", "≠": r"$\ne$",
+    "−": "-",  # minus sign -> hyphen-minus (avoids a stray math char)
     "⟹": r"$\Longrightarrow$", "⟸": r"$\Longleftarrow$",
-    "∈": r"$\in$", "∉": r"$\notin$", "∪": r"$\cup$", "∩": r"$\cap$",
-    "α": r"$\alpha$", "𝛼": r"$\alpha$", "β": r"$\beta$",
-    "≪": r"$\ll$", "≫": r"$\gg$",
+    "𝛼": r"$\alpha$",  # mathematical-italic alpha (U+1D6FC)
     # stray unicode spaces (thin/nbsp) the table conversion can emit -> normal space
-    " ": " ", " ": " ", " ": " ", " ": " ", " ": " ",
+    " ": " ", " ": " ", " ": " ", " ": " ", " ": " ",
 }
 
 
