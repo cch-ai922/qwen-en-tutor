@@ -84,7 +84,7 @@ target:
 The trim's *entire* effect on the training distribution is to delete the 614
 post-marker "escalated-context-but-no-further-fire" assistant turns — exactly the
 sub-threshold counterexamples the mechanism of §6.1 turns on. This makes precise,
-and bounds, the reviewer's concern that trimming changes many things at once: with
+and bounds, a natural concern that trimming changes many things at once: with
 pre-marker context and marker turn held identical, the only manipulated quantity
 is the presence of these counterexamples (and the ~14 tokens they carry).
 
@@ -166,7 +166,7 @@ each dir carrying a `_SOURCE.json` provenance record.
   by (design × marker × trim) cell, vc-stratified, plus axis-attribution accuracy
   and the emitted-vs-true axis confusion matrix. Output:
   `outputs/paper_v2/score/phase0_attribution.json`.
-- `scripts/score_mixed_violation_probe.py` — Phase 1 scorer for attribution
+- `scripts/score_mixed_violation_probe.py` — distractor-test scorer for attribution
   under distraction.
 
 ## 4.7 Probes
@@ -175,7 +175,7 @@ each dir carrying a `_SOURCE.json` provenance record.
 - **persistent_premature_probe** — single-axis sub-threshold contexts, n=318,
   stratified by (violation_count, premature_turn). Built by
   `build_eval_sets.py::build_persistent_premature_probe`.
-- **mixed_violation_probe** (Phase 1) — `scripts/build_mixed_violation_probe.py`.
+- **mixed_violation_probe** (distractor test) — `scripts/build_mixed_violation_probe.py`.
   Primary axis X escalates to threshold while distractor axis Y appears
   sub-threshold; n≈282 (141 fire_correct / 141 distractor_sub), all 12 X×Y pairs.
   Generated on the typed checkpoints (A1, A5) and scored by
@@ -205,7 +205,7 @@ training budget the data-shape claim is conditioned on is fully explicit.
 | Training seed / shuffle seed | 42 (primary); 7 (replication) |
 | GPU | single 12 GB consumer card |
 
-The off-family replication (§5.5b) uses the same recipe on Llama-3.2-1B-Base; its
+The off-family replication (§5.5) uses the same recipe on Llama-3.2-1B-Base; its
 exact config is in Appendix A / `outputs/paper_v3/phase3/`.
 
 ## 4.9 Statistical note
@@ -213,7 +213,7 @@ exact config is in Appendix A / `outputs/paper_v3/phase3/`.
 The main design is single training seed (seed 42). We additionally retrain the
 primary A1 trim/untrim pair at an independent seed (seed 7) and reproduce the
 trim effect (§5.1); two seeds is a limitation we state explicitly (§6.6) and
-address with a pre-registered ≥3-seed protocol in future work (§6.7). The trim
+address with a pre-registered ≥3-seed protocol in future work (§6.6). The trim
 effect (~+0.5, §5) is far larger than plausible seed variance and is corroborated
 by a factorial item-level model (§5.1b); the attribution effect (typed ~0.96 vs
 generic undefined) is structural.

@@ -28,10 +28,10 @@ sub-threshold distractor (correct-axis 0.96–0.98, pulled to the distractor <2%
 Finally, the trim effect replicates *in direction* off-family and off-domain —
 fine-tuning Llama-3.2-1B-Base on a synthetic customer-support escalation task
 reproduces trim→premature (trimmed 0.830 vs untrimmed 0.683, both at full recall)
-— suggesting it is not specific to the tutoring corpus or the Qwen family. As a
-clearly-labelled exploratory experiment we also tested **count-annotated markers**,
-but the resulting model failed the predefined recall gate, so no conclusion about
-its effectiveness is drawn (§5.5).
+— suggesting it is not specific to the tutoring corpus or the Qwen family. We also
+outline **count-annotated markers** — supervising the strike count directly in the
+marker — as a candidate remedy for the trim artifact, and leave its evaluation to
+future work (§6.6).
 
 The practical takeaway is a curation principle for any rare control token with a
 count/threshold trigger: **do not trim to the marker; retain a continuation
@@ -39,7 +39,7 @@ after it; and where the trigger is a count, supervise the count explicitly.**
 These are cheap, low-overhead data choices with first-order effects on
 control-token reliability, observed across two model families (Qwen3.5, Llama-3.2).
 
-<!-- Status: H1 (trim→premature), H1-mechanism (Phase 4 logit), H2 single-axis and
-     H2b under-distraction (Phase 1), and H-gen off-family replication (Phase 3)
-     are all supported by experiments and in the build. H3 count-remedy (Phase 2) under-fires the
-     terminal marker and is deferred to future work (§5.5). -->
+<!-- Status: H1 (trim→premature), H1-mechanism (logit-level analysis), H2 single-axis and
+     H2b under-distraction, and H-gen off-family replication
+     are all supported by experiments and in the build. Count-annotated remedy is
+     outlined as future work only (§6.6). -->

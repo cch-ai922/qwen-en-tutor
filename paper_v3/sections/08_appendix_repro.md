@@ -5,7 +5,7 @@
 Every result in the paper is produced by a named script over generations already
 on disk (no result depends on unseen inference). Base model: Qwen3.5-0.8B-Base,
 QLoRA SFT, 1-epoch matched budget unless noted; the off-family replication
-(§5.5b) uses Llama-3.2-1B-Base. The table below maps each reported result to the
+(§5.5) uses Llama-3.2-1B-Base. The table below maps each reported result to the
 script that computes it and the JSON it writes.
 
 | Result (section) | Script | Output |
@@ -18,9 +18,9 @@ script that computes it and the JSON it writes.
 | Logit-level P(sentinel) vs depth (§6.1) | `scripts/score_sentinel_logprob_vs_depth.py` | `outputs/paper_v3/score/sentinel_logprob_vs_depth.json` |
 | Single-axis typed attribution / semantic gate (§5.3) | `scripts/score_phase0_attribution.py` | `outputs/paper_v2/score/phase0_attribution.json` |
 | Attribution under distraction / mixed-violation probe (§5.4) | `scripts/score_mixed_violation_probe.py` | `outputs/paper_v3/score/mixed_violation.json` |
-| Count-marker (Design B) construction (§5.5) | `scripts/convert_typed_to_count.py`, `scripts/assemble_a8_count.py` | `data/sft_filtered_a8_count*` |
-| Off-family Llama replication (§5.5b) | `scripts/phase3_synthetic_trim.py` | `outputs/paper_v3/phase3/phase3_result.json` |
-| Untrimmed A5/A6/A7 reconstruction (§4.4, §6.6) | `scripts/build_untrim_a5a6a7.py` | `outputs/paper_v2/phase0_trim_study/` |
+| Count-marker (Design B) construction — future-work remedy (§6.6) | `scripts/convert_typed_to_count.py`, `scripts/assemble_a8_count.py` | `data/sft_filtered_a8_count*` |
+| Off-family Llama replication (§5.5) | `scripts/phase3_synthetic_trim.py` | `outputs/paper_v3/phase3/phase3_result.json` |
+| Untrimmed A5/A6/A7 reconstruction (§4.4, §6.5) | `scripts/build_untrim_a5a6a7.py` | `outputs/paper_v2/phase0_trim_study/` |
 
 The firing detector used throughout is the axis-capturing regex
 `\[SESSION_END(?:\s*:\s*(?:STRIKE=\d+\s*:\s*)?(persistent_[a-zA-Z_]+))?\s*\]`,
@@ -34,7 +34,7 @@ seeds, frozen evaluation sets, judge prompts, the synthetic datasets, and the
 score outputs underlying every table are released at
 <https://github.com/cch-ai922/tutor-train>. A `reproducibility/` guide maps each
 result to the script, config, and expected number that produce it. The off-family
-replication (§5.5b) uses Llama-3.2-1B-Base; trained LoRA adapters are low-rank
+replication (§5.5) uses Llama-3.2-1B-Base; trained LoRA adapters are low-rank
 deltas over the public base models and are available from the authors on request.
 
 # Appendix B. Supporting tables

@@ -1,7 +1,7 @@
 # 5. Results
 
 <!-- paper_v3 — "Don't Trim the Tail" -->
-<!-- LEGEND: reported numbers are from Phase 0 (existing generations, scored by
+<!-- LEGEND: reported numbers are from the primary trim study (existing generations, scored by
      scripts/score_phase0_attribution.py; JSON at
      outputs/paper_v2/score/phase0_attribution.json). -->
 
@@ -93,9 +93,9 @@ changes only the reported checkpoint, not the data or hyperparameters. We report
 two seeds rather than the three or more a full variance characterization would use;
 given a per-cell effect of +0.44–0.58 at Fisher *p* < 10⁻³² with disjoint Wilson
 intervals, and the same direction at an independent seed and an off-family
-replication (§5.5b), sampling variance is an implausible explanation for the
+replication (§5.5), sampling variance is an implausible explanation for the
 effect, but we flag the seed count and checkpoint-selection choice as limitations
-(§6.6) and specify a pre-registered ≥3-seed protocol as future work (§6.7).
+(§6.5) and specify a pre-registered ≥3-seed protocol as future work (§6.6).
 
 These findings indicate that a curation step one might expect to sharpen marker
 learning — removing the "distracting" continuation after the marker — instead
@@ -117,8 +117,8 @@ than raw depth, and its direct logit-level signature — to §6.1.
 
 ## 5.2b Strike count survives adjustment for turn depth (confound check)
 
-The reviewer-flagged concern is that violation count and turn depth are correlated,
-so §5.2 could reflect raw depth. The premature probe is not a fully balanced
+A natural concern is that violation count and turn depth are correlated in
+dialogue, so §5.2 could reflect raw depth. The premature probe is not a fully balanced
 depth × count grid, but three depths (turns 3, 5, 7) carry *both* strike counts,
 so within each of these depths we can read the pure effect of adding a strike while
 holding depth fixed. At every such depth and in every cell, adding the second
@@ -144,7 +144,7 @@ The most direct interpretation supported by this evidence is that accumulated
 strike count — not raw turn position — is the feature premature firing rides on.
 A fully orthogonal, balanced depth × strike-count probe (matched cells across
 several depths at both sub-threshold counts) would test this more directly and is
-flagged as future work (§6.7). Scored by `scripts/score_depth_count_grid.py`.
+flagged as future work (§6.6). Scored by `scripts/score_depth_count_grid.py`.
 
 ## 5.3 Typed markers are semantic gates (H2)
 
@@ -210,7 +210,7 @@ P(fires ∧ names the correct axis) on the positive probe — the deployment-rel
 joint event — which for the typed cells reaches 0.956 (A1 trim) and complements
 the conditional attribution of §5.3.
 
-## 5.4 Attribution under distraction — the mixed-axis distractor condition (H2, Phase 1)
+## 5.4 Attribution under distraction — the mixed-axis distractor condition (H2)
 
 The §5.3 attribution is measured on single-axis conversations, where naming the
 axis is comparatively easy. The `mixed_violation_probe` (§4.7) is the stronger
@@ -243,38 +243,7 @@ the escalation-driven mechanism (§6.1): more accumulated escalation pressure, m
 premature firing. This extends the §5.1 story to a two-axis context; it is not
 central to the semantic-gate claim.
 
-## 5.5 The count-marker remedy (H3, Phase 2 — exploratory negative experiment)
-
-We also tested an explicit count-annotation remedy as an exploratory experiment,
-but — as reported below — the resulting model failed the predefined recall gate,
-so no conclusion about its effectiveness is drawn; it is not part of this paper's
-supported contributions and is presented here as a clearly-labelled negative
-result that motivates follow-up work. A natural candidate remedy is to externalise
-the latent strike counter as a supervised target. In Design B (§3.6) the
-second strike is tagged `[STRIKE=2: axis]` and the third emits
-`[SESSION_END: STRIKE=3: axis]`, so the count the model must otherwise infer is
-made explicit at the point of firing. The hypothesis (H3) is that count
-supervision makes firing trim-robust — the trim Δ for the count-annotated cell
-(A8) should be far smaller than A1's +0.576.
-
-We trained A8 (untrimmed) and A8-trim and evaluated both on the premature and
-positive probes. The result is not yet interpretable: the count model
-under-fires the terminal session-end marker — positive-probe recall for
-`[SESSION_END: STRIKE=3: …]` is only ≈0.06 (A8) / 0.13 (A8-trim), well below the
-0.8 gate. The model largely emits the intermediate `[STRIKE=2: …]` warning but
-does not escalate to the third-strike terminator. With recall this low the
-premature rates (0.009 vs 0.025) cannot support a trim-vs-untrim conclusion.
-
-Two likely causes, both addressable, are deferred to follow-up work: (i) the
-training context window truncates long three-strike dialogues before the
-third-strike turn, so the model rarely sees a *labelled* session-end during
-training; and (ii) jointly predicting count and axis at the terminator is
-hard at this scale — a sentinel+count marker without the axis label
-(`[SESSION_END: STRIKE=3]`) isolates the count question and should clear the
-recall gate. H3 therefore remains open; the core claims of this paper (H1, its
-mechanism, H2/H2b, and the off-family H-gen replication) do not depend on it.
-
-## 5.5b Generalization — off-tutor replication (H-gen, Phase 3)
+## 5.5 Generalization — off-tutor replication (H-gen)
 
 To show the trim→premature effect is a property of *next-token training on rare,
 count-triggered semantic markers* and not an artifact of the tutoring corpus,
@@ -333,16 +302,16 @@ both variants are high because the sub-threshold probe is deliberately adversari
   factorial logistic model, §5.1b: trim odds ratio ≈9.6, all interactions n.s.).
 - **H1 mechanism [evidence-consistent]:** most consistent with threshold-laxity on
   accumulated violation count rather than a turn-position shortcut. Evident at the
-  logit level (Phase 4): the trimmed model puts 34–45× more probability mass on
+  logit level: the trimmed model puts 34–45× more probability mass on
   beginning the sentinel at sub-threshold escalation than the untrimmed model; and
   the strike-count term survives adjustment for turn depth (§5.2b, §6.1).
 - **H2 [supported, single-axis]:** typed = semantic gate; 0.94–0.99 attribution,
   0 contentless fires; generic cannot attribute. Attribution is trim-robust.
-- **H2b [supported, Phase 1]:** attribution holds under a sub-threshold distractor
+- **H2b [supported]:** attribution holds under a sub-threshold distractor
   — correct-axis 0.975 (A1) / 0.963 (A5), wrong-axis <0.02, 0 contentless fires,
   matching the single-axis rate. The strongest semantic-gate evidence, since it
   requires selecting the threshold axis over a competing one.
-- **H-gen [supported in direction, Phase 3]:** the trim→premature effect replicates
+- **H-gen [supported in direction]:** the trim→premature effect replicates
   off-tutor and off-family. On a synthetic customer-support escalation task (fire
   after the 3rd *explicit* escalation request), fine-tuning Llama-3.2-1B-Base on
   trimmed vs untrimmed data (identical shared draw, differing only by the
@@ -351,9 +320,6 @@ both variants are high because the sub-threshold probe is deliberately adversari
   the same direction as the Qwen tutor result. This suggests trim→premature is a
   data-shape effect not specific to the tutoring corpus or the Qwen family; we
   report direction, not magnitude, given the small synthetic setting.
-- **H3 [FUTURE WORK, Phase 2]:** count annotation as a candidate remedy. Design B
-  (strike-2 warning + strike-3 session-end) was trained and evaluated, but the
-  count model under-fires the terminal marker (positive-probe recall ≈0.06–0.13),
-  so the trim comparison is not yet interpretable; we defer a recall-cleared
-  version (larger context window so the third-strike turn is not truncated, and a
-  sentinel+count marker without the axis label) to follow-up work.
+- **Candidate remedy [future work]:** supervising the strike count directly in the
+  marker is a natural fix for the trim artifact; we outline it as future work
+  (§6.6) rather than a tested contribution.

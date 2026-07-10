@@ -40,13 +40,13 @@ trimming removed the examples showing that high evidence short of the exact
 threshold is not yet a fire. This is why the effect requires a semantic,
 recognition-gated trigger: a task that counts an *explicit, unambiguous* token
 would let the model count exactly and leave no recognition noise for the trim to
-exploit — no shortcut, no premature firing. The generalization test (§5.5b) is
+exploit — no shortcut, no premature firing. The generalization test (§5.5) is
 therefore constructed on a *different-domain but still semantic* trigger (escalation
 after repeated *angry* customer messages, where "angry" is recognition-gated),
 not on literal token counting, precisely because the recognition noise is the
 substrate the trim shortcut operates on.
 
-**The logit-level signature (Phase 4).** The evidence supports this account
+**The logit-level signature.** The evidence supports this account
 directly at the logit level: for each sub-threshold context we read the probability the model *begins
 the sentinel* — the joint P(`[`) $\times$ P(`SESSION` | `[`), a two-token
 teacher-forced measurement (not sampling; Appendix A) that isolates the sentinel
@@ -89,7 +89,7 @@ Trimming maximizes the correlation between the marker and sequence-terminality/
 trigger-presence, deleting the negative examples the model needs to learn that
 the trigger's *presence* is not its *threshold*. Retain a benign continuation
 after the marker. Where the trigger is a count, additionally supervise the count
-explicitly in the output (§6.5). We conjecture — but do not demonstrate — that
+explicitly in the output (§6.6). We conjecture — but do not demonstrate — that
 this principle extends to other rare, machine-consumed markers whose trigger is a
 *noisy, recognition-gated* count or threshold: refusal-after-N,
 escalate-after-repetition, stop-after-goal. We deliberately scope the claim this
@@ -120,30 +120,14 @@ corpora that contain rare machine-consumed markers:
    metrics do not detect premature firing; a dedicated sub-threshold probe does
    (§5.2). *When* and *why* a marker fires are separately curated behaviors
    (§6.2) and must be measured separately.
-4. **Where the trigger is a count, supervise the count** (§6.5) rather than
+4. **Where the trigger is a count, supervise the count** (§6.6) rather than
    leaving it a latent variable the trim can corrupt.
 
 These cost little beyond corpus bookkeeping. We demonstrate them at a single
 small scale (0.8B) and on two model families; whether the magnitude holds at much
-larger scale is left to future work (§6.6, §6.7).
+larger scale is left to future work (§6.5, §6.6).
 
-## 6.5 The count-annotated marker (Design B)
-
-Trim breaks a *latent* counter; the direct remedy is to stop keeping it latent.
-Design B tags every strike with its running count, converting the count from an
-unsupervised intermediate variable into a supervised output target. To fire
-prematurely the model would now have to emit a wrong number (strike=2 where it
-should say strike=3), which the loss penalizes — so the count annotation should
-make firing contingent on the actual tally and, in particular, trim-robust
-(H3, §5.5). This is chain-of-thought/process-supervision
-[@nye2021scratchpad; @wei2022cot; @lightman2024verify] compressed to a single
-tag: no separate reasoning trace, negligible inference cost, and (unlike native
-CoT) no delivery-at-budget failure mode. The trade-off is a changed deployment
-contract — the dispatcher now sees `[STRIKE: axis, N]` on non-terminal turns —
-which we consider acceptable because those tags are independently useful
-(per-turn abuse telemetry).
-
-## 6.6 Threats to validity
+## 6.5 Threats to validity
 
 **Scope of the claims.** We claim, and support with a controlled paired
 experiment, a specific effect: for a rare marker whose trigger is a *noisy,
@@ -157,7 +141,7 @@ with the evidence (including the logit-level signature and the depth-adjusted
 strike-count model), not a proven mechanism to the exclusion of all contextual
 alternatives. We do *not* claim this is a universal property of all control
 tokens, all curation pipelines, or all model scales. In particular the effect is
-demonstrated at 0.8B (Qwen3.5) plus an off-family 1B base (Llama-3.2-1B-Base, §5.5b), on count/threshold
+demonstrated at 0.8B (Qwen3.5) plus an off-family 1B base (Llama-3.2-1B-Base, §5.5), on count/threshold
 triggers, and with SFT; extrapolation to much larger models, to exactly-computable
 triggers (§6.3), or to RL/preference post-training is conjecture. The remaining
 bullets enumerate the specific axes along which our evidence is thin.
@@ -165,12 +149,15 @@ bullets enumerate the specific axes along which our evidence is thin.
 - **Single family for the main 2×2×2 — a *secondary* threat here.** All eight
   cells use Qwen3.5 0.8B, but our claims are about the *training signal* (which
   counterexamples trimming deletes), not a specific model's capability, and the
-  off-family, off-domain Llama-3.2-1B-Base replication (§5.5b) already shows the
+  off-family, off-domain Llama-3.2-1B-Base replication (§5.5) already shows the
   effect's *existence* is family- and domain-independent. What it does not settle
-  is *magnitude*: Qwen3.5's linear-attention state could plausibly amplify trim
-  sensitivity relative to a full-attention model, so a matched A1 trim/untrim
-  contrast on a small full-attention non-Qwen base is the open cross-family
-  *magnitude* question (§6.7).
+  is *magnitude*: the Qwen3.5 0.8B base is a hybrid-attention architecture (per its
+  released config, most layers are linear-attention with a full-attention layer at
+  a fixed interval), and its compressed cross-turn state could plausibly amplify
+  trim sensitivity relative to a fully full-attention model. A matched A1 trim/untrim
+  contrast on a small full-attention non-Qwen base would test this; it is the open
+  cross-family *magnitude* question (§6.6). We flag this as a hypothesis about
+  magnitude only — the effect's existence does not depend on it.
 - **Reconstructed untrimmed cells.** The untrimmed A5/A6/A7 are rebuilt by
   reconstruction (Appendix A), not trained-from-scratch matched pairs. The
   exact-prefix verification (§4.4) is the guarantee that only the post-marker
@@ -183,16 +170,16 @@ bullets enumerate the specific axes along which our evidence is thin.
   Fisher *p* < 10⁻³², disjoint Wilson intervals) plus same-direction reproduction
   at an independent seed and an off-family model to argue the result is not
   seed-driven; a pre-registered ≥3-seed run at fixed checkpoints (seeds 7/42/123,
-  five if budget permits) remains the proper test and is specified in §6.7.
+  five if budget permits) remains the proper test and is specified in §6.6.
 - **Checkpoint selection for the seed-7 pair.** The seed-7 pair is reported at the
   earliest shared checkpoint clearing the recall gate for *both* variants
   (checkpoint-600, epoch 1.51), not the exact 1-epoch budget of the seed-42
   primary, because at 1 epoch the seed-7 untrimmed model had not yet learned to
   fire and a premature-firing contrast on a non-firing model is uninterpretable.
   This is a principled, pre-specified gate (recall ≥ threshold for both variants),
-  not an outcome-maximizing search over checkpoints, but we flag it because a
-  reviewer could read it as checkpoint selection; the fixed-checkpoint multi-seed
-  protocol (§6.7) removes the ambiguity.
+  not an outcome-maximizing search over checkpoints, but we flag it because it
+  could be read as checkpoint selection; the fixed-checkpoint multi-seed
+  protocol (§6.6) removes the ambiguity.
 - **Token-budget confound (bounded, not eliminated).** Trimming removes the
   post-marker continuation, which also removes a small number of supervised tokens
   (§4.5: mean ≈14 assistant tokens, exactly one turn, per persistent dialogue).
@@ -203,9 +190,9 @@ bullets enumerate the specific axes along which our evidence is thin.
   on the escalation feature rather than on generic sequence length. A definitive
   separation is a *token-matched control* — adding the same number of extra
   supervised tokens as benign continuation *without* the high-escalation/no-fire
-  structure — which we specify in §6.7.
-- **Single dataset / task — addressed by Phase 3.** The trim principle is
-  demonstrated primarily on the tutoring persistence task; the §5.5b Llama
+  structure — which we specify in §6.6.
+- **Single dataset / task — addressed by the off-family replication.** The trim principle is
+  demonstrated primarily on the tutoring persistence task; the §5.5 Llama
   replication (a different domain and family) is what extends it beyond this
   corpus, keeping the trigger semantic and recognition-gated because recognition
   noise is the substrate the shortcut requires (§6.1).
@@ -220,17 +207,17 @@ bullets enumerate the specific axes along which our evidence is thin.
   effect to the trim alone; a naturalistic study (auditing an existing tool-calling
   corpus for trim-correlated premature calls) remains valuable future work.
 
-## 6.7 Future work
+## 6.6 Future work
 
-The most informative next experiments, in priority order (the first three
-directly answer the strongest reviewer requests and are the ones we would run
+The most informative next experiments, in priority order (the first three most
+directly strengthen the causal claim and are the ones we would run
 before any broadening of scope):
 
 1. **Multi-seed at fixed checkpoints.** Train the primary A1 trim/untrim pair at
    ≥3 pre-registered seeds (7, 42, 123; five if budget permits), evaluate all at
    *identical* fixed checkpoints, and report mean ± SD with learning curves for
    both recall and premature firing. This replaces the current two-seed result and
-   removes the checkpoint-selection ambiguity (§6.6).
+   removes the checkpoint-selection ambiguity (§6.5).
 2. **Counterexample dose-response and token-matched control.** Vary the *retained*
    post-marker continuation across C0/C25/C50/C75/C100 (0/25/50/75/100% of the
    tail kept) and plot premature firing against retained counterexample supply, to
@@ -239,7 +226,7 @@ before any broadening of scope):
    supervised tokens as C100 but as benign continuation *without* the
    high-escalation/no-fire structure; if only the genuine counterexample-bearing
    tail reduces premature firing, the mechanism (§6.1) is established rather than
-   merely evidence-consistent, and the token-budget confound (§6.6) is closed.
+   merely evidence-consistent, and the token-budget confound (§6.5) is closed.
 3. **Orthogonal depth × strike-count probe.** Build a balanced grid that
    independently varies turn depth (e.g. 5/7/9/11) and strike count (1/2) at fixed
    semantic axis, with matched cell sizes, and estimate P(fire) = f(count, depth,
@@ -248,10 +235,17 @@ before any broadening of scope):
    directly.
 4. **Cross-family magnitude** — re-run the A1 contrast on a small full-attention
    non-Qwen base (Llama-3.2-1B / SmolLM2-360M) to test whether the +0.5 magnitude
-   is specific to Qwen's linear-attention state; direction is already
-   family-independent via Phase 3 (§5.5b).
+   is specific to Qwen3.5's hybrid (mostly linear) attention; direction is already
+   family-independent via the off-family replication (§5.5).
 5. **Scale** — repeat the contrast at 4B (and larger) to test whether the effect
    size is scale-dependent; the present study fixes scale and does not claim scale
    independence.
-6. **Close H3** — the count-annotated remedy under-fires at 0.8B (§5.5); larger
-   context and dropping the axis label are the two fixes to test.
+6. **Count-annotated marker as a remedy.** A natural fix for the trim artifact is
+   to stop keeping the strike counter latent: tag every strike with its running
+   count (`[STRIKE=2: axis]` … `[SESSION_END: STRIKE=3: axis]`), so premature firing
+   would require emitting a wrong count that the loss penalizes — process
+   supervision [@nye2021scratchpad; @wei2022cot; @lightman2024verify] compressed to
+   a single tag, at negligible inference cost. An exploratory run at 0.8B under-fired
+   the terminal marker (positive-probe recall below the gate), so we leave a
+   recall-cleared evaluation — with a larger context window and a count marker that
+   drops the axis label to isolate the count — to future work.

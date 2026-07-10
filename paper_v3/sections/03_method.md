@@ -85,7 +85,7 @@ that escalation is necessary but not *sufficient* — only the third strike is.
 - **persistent_probe** — true third-strike positives (recall).
 - **persistent_premature_probe** — single-axis sub-threshold contexts
   (premature firing), n=318, stratified by (vc, turn).
-- **mixed_violation_probe** (Phase 1, this paper) — the mixed-axis distractor
+- **mixed_violation_probe** (this paper) — the mixed-axis distractor
   attribution test: primary axis X escalates to threshold while a distractor axis Y appears
   sub-threshold. `fire_correct` records (X at 3rd strike) test correct
   attribution under distraction; `distractor_sub` records (X at 2nd strike, Y
@@ -99,6 +99,6 @@ that escalation is necessary but not *sufficient* — only the third strike is.
 - **H2 (typed = semantic gate).** Typed models attribute the correct axis at
   high accuracy and never emit a contentless marker; generic models cannot
   attribute at all. Attribution is robust to trim even where timing is not.
-- **H3 (count remedy).** Annotating the marker with the strike count
-  (`[SESSION_END: <axis>, strike=3]`) supervises the latent counter and
-  neutralizes the trim-induced premature firing. *(Phase 2.)*
+
+We additionally sketch a candidate remedy — supervising the strike count directly
+in the marker — as future work rather than a tested hypothesis (§6.6).

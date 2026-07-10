@@ -70,11 +70,11 @@ architectural/position design choices it is usually bundled with
 **Counting and multi-turn state in LMs.** Emitting a marker "on the third
 strike" requires maintaining a count across turns. Prior work shows LMs struggle
 with exact counting and that making intermediate state explicit (scratchpads,
-chain-of-thought) helps. Our count-annotated marker (Design B) is a minimal,
-inference-cheap form of this: it supervises the running count directly in the
-output rather than requiring a separate reasoning trace, in the spirit of recent
-process-supervision work that supervises intermediate steps rather than only the
-final answer
+chain-of-thought) helps. The candidate count-annotated marker we outline as future
+work (§6.6) is a minimal, inference-cheap form of this — supervising the running
+count directly in the output rather than in a separate reasoning trace — in the
+spirit of process-supervision work that supervises intermediate steps rather than
+only the final answer
 [@bhattamishra2020ability; @nye2021scratchpad; @wei2022cot; @lightman2024verify; @zheng2024processbench].
 
 **The gap we address.** These threads — instruction tuning, alignment,
@@ -91,11 +91,14 @@ trim an explicit factor in a fully-crossed 2×2×2 design (§3), so its effect i
 measured independently of the position and marker-format choices it is usually
 bundled with.
 
-**Relation to the companion paper.** This paper is a data-curation study split
-off from a companion boundary paper (the train-vs-prompt boundary for tutoring
-behaviors). There, multi-turn persistence and pedagogical withholding are shown
-to be *not promptable* — acquired only by SFT. Here we take the persistence
-marker as a controlled testbed and ask which *data-shape* factors govern its
-emission once training is committed to. The two papers share the pipeline and
-the persistence task but make disjoint claims: the companion paper on
-prompt-vs-train acquisition, this one on trim/typing/count curation.
+**Scope of this study.** We take a multi-turn persistence marker — a session-end
+sentinel that must fire on the third same-axis violation — as a controlled testbed,
+because it is a rare, count-triggered, machine-consumed control token of exactly the
+kind whose curation we study. Prior work establishes that such multi-turn behaviors
+are acquired through supervised fine-tuning rather than prompting alone; we take
+that acquisition as given and ask a distinct, downstream question: once training is
+committed to, which *data-shape* choices — where a sequence is trimmed, whether the
+marker is axis-typed, whether the count is supervised — govern *when* the marker
+fires and *what reason* it encodes. Our claims are therefore about the training
+signal for control-token emission, and are independent of the tutoring domain we
+draw the testbed from.

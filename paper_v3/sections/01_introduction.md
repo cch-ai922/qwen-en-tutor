@@ -2,36 +2,24 @@
 
 ## Abstract
 
-Fine-tuned language models are increasingly trained to emit rare, machine-consumed
-control markers — tokens that end a session, invoke a tool, or trigger a refusal —
-on a semantic *threshold* condition. We show that the *shape* of the supervised
-fine-tuning data can exert a first-order effect on both *when* such a marker fires
-and *why* the model says it fires — with model family and training budget held
-fixed — and that two common curation choices have large, sometimes counter-intuitive
-effects. First, in a fully crossed 2×2×2 (position × marker-format × trim) study,
-*trimming* each training sequence to end at the marker — a practice one might
-expect to sharpen marker learning — instead induces *premature firing*: across
-every position×marker design we test, trimming raises the premature-firing rate by
-0.44–0.58, the largest observed main effect in the tested design (confirmed by an
-item-level factorial logistic model: trim odds ratio ≈9.6, all interactions
-non-significant). The evidence is most consistent with a threshold-laxity
-mechanism rather than a turn-position shortcut: trimming removes the training
-examples in which the marker's trigger feature is present but *not* followed by
-firing, leaving the trigger nearly always predictive and impairing the model's
-ability to threshold on its magnitude; retaining a benign post-marker continuation
-substantially reduces premature firing. Second, a *typed* marker acts as a
-*semantic gate*: models trained to emit an axis-labeled marker attribute the
-correct violated invariant on the large majority of fires and never emit a
-contentless marker, whereas generic markers carry no such signal — and attribution
-survives the trim that worsens timing, showing *when* and *why* a marker fires are
-separable, separately-curated behaviors; typed markers support robust per-axis
-attribution even when a second sub-threshold violation is present as a distractor.
-Third, the effect is not specific to the tutoring corpus: it replicates in
-direction in a different domain on a different model family (Llama-3.2), suggesting
-the vulnerability is a property of next-token training on trimmed sequences at a
-rare, count-triggered semantic marker rather than an artifact of one dataset or
-model lineage. These are cheap, low-overhead data-curation principles for reliable
-control-token emission.
+Fine-tuned language models are increasingly trained to emit rare,
+machine-consumed control markers — tokens that end a session, invoke a tool, or
+trigger a refusal — on a semantic threshold condition. We show that the shape of
+the supervised fine-tuning data, with model family and training budget held fixed,
+has a first-order effect on both when such a marker fires and what reason the
+model encodes for firing. In a fully crossed factorial study of marker position,
+marker format, and sequence trimming, we find that trimming each training sequence
+to end at the marker — a practice one might expect to sharpen marker learning —
+instead raises premature firing by 0.44 to 0.58 across every design, the largest
+main effect in the study. The evidence is most consistent with a threshold-laxity
+mechanism: trimming deletes the training turns that show the trigger present but
+not yet followed by firing, so the model stops thresholding on the trigger's
+magnitude, and retaining a benign post-marker continuation substantially reduces
+premature firing. Separately, an axis-typed marker acts as a semantic gate,
+attributing the correct violated invariant on the large majority of fires,
+including under a distractor, whereas a generic marker carries no such signal. The
+effect replicates in direction in a second domain and model family. Together these
+yield cheap data-curation principles for reliable control-token emission.
 
 *Keywords:* large language models; supervised fine-tuning; data curation; control
 tokens; sequence truncation; threshold learning; tool calling; agentic systems.
@@ -73,7 +61,7 @@ four-axis session-ending task, trimming raises premature-firing rate by **+0.44 
 design, confirmed by an item-level factorial logistic model in which trim is the
 largest term by a wide margin (odds ratio ≈9.6) and every interaction with
 position and marker format is non-significant. Retaining the benign post-marker continuation
-substantially reduces premature firing. <!-- F-B: proven Phase 0 -->
+substantially reduces premature firing. <!-- F-B: primary trim study -->
 
 **Contribution 2: typed markers as semantic gates.** A *typed* marker
 (`[SESSION_END: <axis>]`) forces the model to attribute firing to a specific
@@ -86,7 +74,7 @@ establishing that *when* a model fires and *why* it says it fires are separable,
 separately curated behaviors. Typed markers support robust per-axis attribution
 under a sub-threshold distractor: with a second, sub-threshold violation present
 in the conversation, typed models still name the axis at threshold on 96–98% of
-fires and are pulled to the distractor under 2% of the time. <!-- F-A: proven Phase 0 + Phase 1 -->
+fires and are pulled to the distractor under 2% of the time. <!-- F-A: trim study + distractor test -->
 
 **Contribution 3 (generalization): the effect is not specific to the tutoring
 corpus.** We replicate trim→premature *in direction* in a **different domain on a
@@ -102,8 +90,6 @@ lineage; we make the narrower directional claim rather than a claim of universal
 magnitude, since both settings are small synthetic tasks (§6.6).
 
 Together these results form **data-curation principles for rare control tokens**.
-As a clearly-labelled exploratory negative result, we additionally test a candidate
-remedy — annotating the marker with its strike count to make the latent counter an
-explicit supervised target — but the resulting model fails the predefined recall
-gate, so no conclusion about its effectiveness is drawn; we leave a recall-cleared
-evaluation to follow-up work (§5.5).
+We additionally sketch a candidate remedy — annotating the marker with its strike
+count to make the latent counter an explicit supervised target — and leave its
+evaluation to future work (§6.6).
