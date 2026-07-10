@@ -38,7 +38,19 @@ Crossed orthogonally with a third factor:
 
 - **Post-marker trim** — each persistent training record is either **trimmed**
   to end at the marker, or **untrimmed** (the benign post-marker continuation is
-  retained). All four cells exist in both variants, giving a 2×2×2.
+  retained). All four cells exist in both variants, giving a **fully crossed
+  2 × 2 × 2 factorial design yielding eight conditions**:
+
+| # | Position | Marker format | Trim status | Cell |
+|---|----------|---------------|-------------|------|
+| 1 | 4-variant | typed | untrimmed | A1 (untrim) |
+| 2 | 4-variant | typed | trimmed | A1 (trim) |
+| 3 | fixed-7 | typed | untrimmed | A5 (untrim) |
+| 4 | fixed-7 | typed | trimmed | A5 (trim) |
+| 5 | fixed-7 | generic | untrimmed | A6 (untrim) |
+| 6 | fixed-7 | generic | trimmed | A6 (trim) |
+| 7 | 4-variant | generic | untrimmed | A7 (untrim) |
+| 8 | 4-variant | generic | trimmed | A7 (trim) |
 
 Every other factor is held constant across all cells and variants — base model,
 tokenizer, optimizer, learning-rate schedule, batch size, epoch budget, seed
@@ -73,8 +85,8 @@ that escalation is necessary but not *sufficient* — only the third strike is.
 - **persistent_probe** — true third-strike positives (recall).
 - **persistent_premature_probe** — single-axis sub-threshold contexts
   (premature firing), n=318, stratified by (vc, turn).
-- **mixed_violation_probe** (Phase 1, this paper) — the decisive attribution
-  test: primary axis X escalates to threshold while a distractor axis Y appears
+- **mixed_violation_probe** (Phase 1, this paper) — the mixed-axis distractor
+  attribution test: primary axis X escalates to threshold while a distractor axis Y appears
   sub-threshold. `fire_correct` records (X at 3rd strike) test correct
   attribution under distraction; `distractor_sub` records (X at 2nd strike, Y
   present) test that mere escalation of *some* axis does not trigger firing.

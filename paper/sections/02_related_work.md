@@ -103,7 +103,24 @@ predicted benefit does not materialise as a position-resampling effect
 characterization of *when* the positional shortcut governs behavior, not as
 a validated defense.
 
-## 2.5 Positioning
+## 2.5 Multi-turn instruction following and judge reliability
+
+Two fast-moving literatures bear directly on our setup. First, **multi-turn and
+stateful instruction following**: a growing line of benchmarks probes whether
+models maintain instructions and structural constraints across turns, where
+single-turn success does not predict multi-turn robustness. Our persistence task
+is an instance of this — firing on the *third* same-axis strike is a cross-turn
+state commitment that a single-turn instruction-following score would miss. Second,
+**LLM-as-judge reliability**: judges exhibit position bias, verbosity and
+self-preference effects, and correlated failures, and synthetic preference data can
+leak stylistic artifacts [@zheng2023judging; @panickssery2024selfpreference]. We
+mitigate but do not eliminate these (a three-family judge ensemble distinct from
+the teacher, a randomized-order pairwise protocol, a mechanical judge-free
+persistence metric, and a generic-redirect negative control), and we flag human
+calibration of the judged metrics as future work (§6.3). We avoid an
+absolute-novelty claim pending a fuller survey of these quickly-developing areas.
+
+## 2.5.1 Positioning
 
 The prompting-versus-fine-tuning trade-off has been examined at the level of
 *general* alignment — LIMA [@zhou2023lima] shows a small demonstration set
@@ -132,7 +149,7 @@ study also produced, which we do not advance as separate contributions.
 \textit{Contribution --- the boundary} & \\
 Self-Instruct / Evol-Instruct / WizardLM & Per-capability train-vs-prompt boundary: which taught behaviors a fully-specified prompt already elicits, and which require demonstration \\
 Tutor / educational LLMs                  & Matched-prompt evidence that scaffolding/withholding resists prompting even at 9B; prompt-derived CEFR$\times$axis taxonomy anchoring the map \\
-Single-turn safety / persona data         & Multi-turn persistence shown un-promptable under a full three-strike prompt spec; per-axis promptability map for redirects \\
+Single-turn safety / persona data         & Multi-turn persistence shown to resist prompting (under the tested regimes) despite a full three-strike prompt spec; per-axis promptability map for redirects \\
 \midrule
 \textit{Secondary --- reusable apparatus and one bounded side-result} & \\
 LLM-judge filtering                       & Negative result on context-blind redirect-axis F1 (type-not-quality, bimodal); quality-aware pairwise recovery; locale-judge allowlist + FP-audit methodology \\

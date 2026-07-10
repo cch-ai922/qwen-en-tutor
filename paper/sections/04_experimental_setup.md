@@ -17,6 +17,18 @@ any condition** — all of A1/A3/A5 are SFT-only (§4.4) — which keeps every
 ablation single-variable and avoids a register-pool contamination confound.
 Full hyperparameters and the (unused) DPO stage are in Appendix C.
 
+**Decoding and exact-generation provenance.** Because two of our metrics turn on
+*exact-string* emission (the sentinel) and on prompt-only baselines, we fix and
+report the generation settings. Mechanical sentinel/premature/FP evaluations use
+**greedy decoding** (temperature 0), so those results are deterministic given the
+checkpoint; the judged withholding/pairwise generations use temperature 0.7 with a
+fixed generation seed. The teacher and prompt-only baselines are served via
+llama.cpp with the model's native chat template and stop tokens. Appendix C pins
+the exact library versions (`transformers`, `bitsandbytes`, PyTorch, CUDA,
+llama.cpp commit), the quantized-checkpoint source and revision, chat templates,
+and per-stage decoding parameters (temperature, top-$p$/top-$k$, max new tokens,
+seed) so every reported number is reproducible from the released configs.
+
 ## 4.2 Training data composition
 
 Table~\ref{tab:sft-composition} reports per-stream, per-CEFR-level
@@ -150,11 +162,11 @@ on different data:
 \textbf{Tag} & \textbf{Data} & \textbf{Method} & \textbf{Purpose} \\
 \midrule
 A1     & All 12 streams, 4-variant persistent ($\{5,7,9,11\}$), axis-specific sentinel \texttt{[SESSION\_END: <axis>]} & SFT only & Full system (headline condition). \\
-A3     & A1 minus the 6 specialized redirect streams (locale, pedagogy, language, persona, topic, role\_swap)  & SFT only   & \emph{Generic-SFT baseline}; §5.4 taxonomy contrast (A1 vs A3). \\
+A3     & \textbf{Normal + generic-redirect streams only} --- drops \emph{both} the 6 specialized redirect streams \emph{and} the 4 persistent streams (1\,895 records vs A1's 3\,342) & SFT only   & \emph{Generic-SFT baseline}; §5.4 taxonomy contrast (A1 vs A3). \\
 A5     & A1 with persistent rebuilt as fixed-turn-7, axis-specific sentinel \texttt{[SESSION\_END: <axis>]}      & SFT only   & §5.3.1 decorrelation contrast (A1 vs A5): the naive fixed-turn design. \\
 \bottomrule
 \end{tabular}
-\caption{\textbf{Trained-ablation matrix.} All three share the same base (\texttt{Qwen3.5-0.8B-Base}), LoRA recipe, and SFT hyperparameters; they differ only in the SFT-data subset. None use DPO. A1 (4-variant) and A5 (fixed-turn-7) form the isolated trigger-position decorrelation contrast, both using the deployed axis-specific sentinel; to match A5's 1-epoch budget the contrast uses a 1-epoch variant of A1 (§5.3.1). A3 is the no-specialized-redirect baseline for the §5.4 taxonomy claim.}
+\caption{\textbf{Trained-ablation matrix.} All three share the same base (\texttt{Qwen3.5-0.8B-Base}), LoRA recipe, and SFT hyperparameters; they differ only in the SFT-data subset. None use DPO. \textbf{A3 is trained on the normal + generic-redirect streams only} --- it contains \emph{no} specialized-redirect and \emph{no} persistent data (materialized by \texttt{setup\_paper\_ablation\_data.py}; verified against the on-disk \texttt{data/sft\_filtered\_a3/} dir). Its 0.000 persistence recall therefore reflects the \emph{absence} of persistence demonstration, not a failure despite it. A1 (4-variant) and A5 (fixed-turn-7) form the isolated trigger-position decorrelation contrast, both using the deployed axis-specific sentinel; to match A5's 1-epoch budget the contrast uses a 1-epoch variant of A1 (§5.3.1).}
 \label{tab:trained-ablations}
 \end{table*}
 ```
@@ -175,12 +187,46 @@ data), **generic-SFT** (A3, generic-redirect stream only), and
 **specialized-SFT** (A1, full mix). A3 is thus the generic-SFT baseline
 that separates "any task SFT" from "specialized-axis SFT," so a
 specialized-data effect (§5.4, §5.6) is measured against a trained control,
-not only against prompting. The two load-bearing contrasts are both
-single-variable: **A1 vs A3** (taxonomy — do the specialized single-shot
-streams add anything beyond the generic redirect?), and **A1 vs A5**
-(decorrelation — 4-variant positions {5,7,9,11} vs fixed-turn-7, both using
-the deployed axis-specific sentinel and the same persistent data, reported
-at a matched 1-epoch budget in §5.3.1).
+not only against prompting. The two contrasts are **A1 vs A3** (taxonomy — do
+the specialized/persistent streams add anything beyond the generic redirect?) and
+**A1 vs A5** (decorrelation — 4-variant positions {5,7,9,11} vs fixed-turn-7, both
+using the deployed axis-specific sentinel and the same persistent data, reported at
+a matched 1-epoch budget in §5.3.1). We caution that A1-vs-A3 is *not* a
+single-stream contrast: A3 removes several streams at once (all specialized and all
+persistent) and trains on fewer records (1,895 vs 3,342), so it receives fewer
+optimizer steps at matched epochs. A1-vs-A3 therefore establishes that *some*
+combination of the removed streams is necessary for a capability, not that any one
+stream is; budget-matched leave-one-stream-out ablations (§6.3) are needed to
+attribute an effect to a single stream.
+
+**Authoritative condition composition and data-lineage audit.**
+Table~\ref{tab:composition-audit} is the single authoritative source for what each
+reported condition trained on and for train/eval separation
+(`scripts/score_paper_composition_audit.py`). The split is at the level of the
+source **scenario seed id** (a content hash; all variants of a scenario share it,
+§4.3), so no variant of an eval scenario can appear in training. We verify this
+holds for every evaluated condition: **0 of the 224 held-out eval scenario ids
+appear in A1's or A3's training data**. This audit also subsumes the
+`<think>`-mode evaluator-example lineage question: any such example that entered an
+SFT dir contributes its scenario id to the training-id set, so an eval-seed leak
+would surface here — none does.
+
+```{=latex}
+\begin{table}[t]
+\centering
+\small
+\begin{tabular}{@{}l c c c c c c@{}}
+\toprule
+\textbf{Cond.} & \textbf{Normal} & \textbf{Gen.\,redir.} & \textbf{Spec.\,(of 6)} & \textbf{Persist.\,(of 4)} & \textbf{Records} & \textbf{Eval-id leaks} \\
+\midrule
+A1 & yes & yes & 6/6 & 4/4 & 3\,342 & 0\,/\,224 \\
+A3 & yes & yes & 0/6 & 0/4 & 1\,895 & 0\,/\,224 \\
+\bottomrule
+\end{tabular}
+\caption{\textbf{Authoritative condition composition and data-separation audit.} Stream membership and record counts from the materialized SFT dirs; ``Eval-id leaks'' = held-out eval scenario ids appearing in the condition's training data (of 224). Both reported conditions are clean. \texttt{score\_paper\_composition\_audit.py}.}
+\label{tab:composition-audit}
+\end{table}
+```
 
 **Zero-shot baselines** (Table~\ref{tab:zeroshot-baselines}) apply a
 tutor-style system prompt to an off-the-shelf checkpoint:
@@ -283,9 +329,13 @@ variance. Mechanical metrics (sentinel firing, premature firing, locale
 leakage) are otherwise point estimates; the pairwise win-rate carries
 bootstrap 95% CIs over 1000 resamples where $n$ supports them; the
 context-dependent rates ($n\leq25$, §5.7) carry a small-$n$ caveat; and the
-withholding rate ($n=63$) carries per-judge two-proportion tests on the
-load-bearing contrasts (§5.4). The retired
-redirect-axis F1 (Appendix&nbsp;A) is not used for any claim.
+withholding rate ($n=63$) carries, on the load-bearing A1-vs-A3 contrast, a
+**paired McNemar exact test** (the conditions are judged on the identical prompts,
+so the comparison is paired by item) together with a **paired bootstrap 95% CI**
+over prompts (§5.4). Where we do not detect a difference (e.g.\ locale-leakage
+parity, §5.7) we treat it as absence of evidence, not evidence of equivalence, and
+report the interval rather than asserting parity. The retired redirect-axis F1
+(Appendix&nbsp;A) is not used for any claim.
 
 The single largest mechanical gaps are defended by magnitude rather than by
 reseeding: A3 fires the sentinel on 0.000 of positive probes versus the

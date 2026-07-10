@@ -2,48 +2,39 @@
 title: "What Must Be Trained and What Can Be Prompted: A Per-Capability Study of Tutor Redirect Behavior"
 author: "Miles Yung — Independent Research (milesyung2026@gmail.com)"
 abstract: |
-  Deploying a small language model as an English tutor forces a question a
-  flat "good-dialogue" corpus never does: *which* tutor behaviors can be
-  elicited by an explicit system prompt, and which must be demonstrated
-  through fine-tuning? We answer this per-capability. We read the redirect
-  behaviors a deployed tutor must handle off its deployment prompt as
-  *interaction invariants* --- one per prompt commitment (locale,
-  language, topic, persona, role, pedagogy, appropriateness) --- and
-  evaluate each under a **matched-prompt** protocol: the identical
-  fully-specified prompt given to a fine-tuned 0.8B student and to
-  prompt-only baselines up to a 9B teacher.
+  Deploying a small language model as an English tutor forces a practical
+  decision: for each behavior a deployment prompt already *describes*,
+  does an explicit prompt clause *elicit* it, or must it be demonstrated
+  through fine-tuning? We answer this per-capability under a
+  **matched-prompt** protocol --- the identical fully-specified prompt
+  given to a fine-tuned 0.8B student and to prompt-only baselines up to a
+  9B teacher --- so a prompt-only failure isolates promptability rather
+  than under-specification.
   
-  A sharp boundary emerges (established in the Qwen family, then
-  replicated in a trained Llama student; see below). Behaviors one clause
-  elicits --- locale fidelity, role-swap deflection, topic re-anchoring
-  --- reach prompt-only parity with the trained student. Behaviors the
-  prompt *describes but cannot install* do not: on persistence (firing a
-  session-end sentinel on the third same-axis violation) the 9B teacher
-  reaches $\leq$`<!-- -->`{=html}0.06 recall zero- and few-shot and only
-  0.63 with native chain-of-thought (below the student's 0.83, at
-  1.6--3.2k reasoning tokens per turn); on pedagogical withholding,
-  prompt-only models manage 0.09--0.45 versus the student's 0.61 (two
-  judges). The boundary *replicates in a second trained family*: a
-  Llama-3.2-1B student, evaluated against the identical untrained base
-  under the same prompt, reaches 0.91 persistence recall and 0.50
-  withholding versus 0.25 and 0.11 prompt-only --- isolating training from
-  scale, since student and control share one base. Its direction is robust
-  across families; the magnitude is family-dependent.
+  Under the tested small-model and prompting regimes, the behaviors
+  separate into *three* operational regimes rather than a binary. **(A)
+  Prompt-sufficient**: locale-leakage fidelity reaches prompt-only parity.
+  **(B) Prompt-elicitable but data-refinable**: role-swap and topic
+  re-anchoring appear prompt-only as a *type*, yet specialized data wins a
+  pairwise quality comparison decisively (role-swap win-rate 0.87). **(C)
+  Training-dependent (under the tested regimes)**: multi-turn persistence
+  (firing a session-end sentinel on the third same-axis violation) and
+  pedagogical withholding are named by the prompt but not reliably
+  elicited --- the 9B teacher reaches $\leq$ 0.06
+  persistence recall zero/few-shot and 0.63 with native chain-of-thought
+  (below the student's 0.83, at 1.6--3.2k reasoning tokens/turn), and
+  withholds on under half of probes (0.45) versus the student's 0.61
+  (paired tests, two judges). The regime-C effects replicate *in
+  direction* in a trained Llama-3.2-1B student evaluated against its own
+  untrained base (persistence 0.25$\to$ 0.91, withholding
+  0.11$\to$ 0.50), separating training from scale within a
+  shared base; magnitude is family-dependent.
   
-  Reading these axes honestly required retiring the conventional
-  redirect-axis macro-F1 --- a context-blind *type* classifier that ties
-  the 0.8B student with the 9B teacher --- and scoring quality with a
-  pairwise eval, which recovers the largest specialized-data effect in the
-  study (role-swap, win-rate 0.87).
-  
-  All experiments run on one RTX 3060 12GB GPU. We release the
-  locale-aware generation pipeline as reusable apparatus (auditing its
-  LLM-judge filter: \~85% false positives on rejections, pass rate
-  70.1% $\to$ 88.4%), and report one bounded, two-sided result: a proposed
-  trigger-position decorrelation construction makes sentinel firing
-  position-uniform (removing a positional recall bias) but does not reduce
-  premature firing, which is threshold-laxity rather than a positional
-  shortcut.
+  Reading the regime-A/B axes honestly required retiring the conventional
+  context-blind redirect-axis macro-F1 (a *type* classifier that ties
+  student and teacher) in favor of capability-specific metrics. All
+  experiments run on one RTX 3060 12GB GPU; we release the apparatus and
+  analysis scripts.
 ---
 
 
@@ -59,32 +50,24 @@ swaps, give one short example rather than a grammar lecture, escalate to
 a session-end signal under sustained abuse. If stating a behavior were
 sufficient, the data-side problem would be trivial.
 
-**Why it matters.** It is not trivial: the behaviors split cleanly into
-ones a prompt clause elicits and ones it only describes, and knowing
-which is which is exactly the decision a practitioner faces when building
-a task-specific model on consumer hardware — spend the data-collection
-and training budget only where a prompt will not do. The tutor setting
-makes this question both unavoidable and answerable, because each target
-behavior corresponds to a clause already present in a realistic
-deployment prompt (§3.5 reproduces ours): pedagogical appropriateness is
-level-specific, redirect behavior spans several *interaction invariants*
-(language of instruction, lesson topic, role structure, persona,
-pedagogical contract, locale frame), and cultural fit must resist the
-Western-default references pretraining drives toward. This lets us ask,
-clause by clause, whether the clause suffices.
+**Why it matters.** Knowing which behaviors a prompt clause elicits and which it
+only describes is exactly the decision a practitioner faces when building a
+task-specific model on consumer hardware — spend the data-collection and training
+budget only where a prompt will not do. The tutor setting makes this question both
+unavoidable and answerable, because each target behavior corresponds to a clause
+already present in a realistic deployment prompt (§3.5): redirect behavior spans
+several *interaction invariants* (language, topic, role, persona, pedagogical
+contract, locale), each a distinct clause we can test in isolation.
 
 **Gap in prior work.** The prompting-versus-fine-tuning question has been
-studied at the level of general alignment — that a small, high-quality
-demonstration set can install broad instruction-following
-[@zhou2023lima; @ouyang2022instructgpt], and that in-context demonstrations
-often convey format more than new capability [@min2022rethinking] — but not
-resolved *per behavior* for a deployed task model. Synthetic-instruction
-pipelines (§2.1) and tutor-LLM datasets (§2.3) target general
-instruction-following with a uniform recipe; none asks, per behavior,
-whether the deployment prompt already elicits what the data teaches.
-Single-turn safety and persona work (§2.4) treats redirection as
-one-prompt-one-refusal and does not address multi-turn persistence or the
-per-axis promptability of redirects.
+studied at the level of general alignment — a small demonstration set can install
+broad instruction-following [@zhou2023lima; @ouyang2022instructgpt], and in-context
+demonstrations often convey format more than new capability [@min2022rethinking] —
+but not resolved *per behavior* for a deployed task model. Synthetic-instruction
+pipelines (§2.1), tutor-LLM datasets (§2.3), and single-turn safety/persona work
+(§2.4) target general instruction-following or one-prompt-one-refusal redirection;
+none asks, per behavior, whether the deployment prompt already elicits what the
+data teaches, nor addresses multi-turn persistence.
 
 We fill this gap with a **matched-prompt per-capability evaluation**: the
 same fully-specified deployment prompt — every redirect-axis instruction
@@ -98,51 +81,61 @@ is *promptable* at all (the full logic is in §5.1).
 **Contribution.** Our contribution is a single one: **a per-capability map
 of the train-versus-prompt boundary** for tutor redirect behavior,
 established under a matched-prompt protocol that makes prompt-only failures
-interpretable. The behaviors separate along an interpretable line:
-*promptable* when a single clause both *describes* and *elicits* the
-behavior (locale fidelity, role-swap and topic re-anchoring at the level of
-response type — prompt-only reaches parity with the trained student), and
-*not promptable* when the behavior requires cross-turn state-tracking
-(multi-turn persistence) or the suppression of a strong competing prior
-(pedagogical withholding), which a clause can name but not produce.
+interpretable. Under the tested small-model and prompting regimes, the behaviors
+separate into **three operational regimes** rather than a binary: **(A)
+prompt-sufficient** — a single clause both describes and elicits the behavior and
+data adds little (locale-leakage fidelity); **(B) prompt-elicitable but
+data-refinable** — the behavior *type* is elicited by the clause (role-swap and
+topic re-anchoring reach prompt-only type-parity), yet specialized data materially
+improves its *quality*; and **(C) training-dependent under the tested regimes** —
+the behavior requires cross-turn state-tracking (multi-turn persistence) or the
+suppression of a strong competing prior (pedagogical withholding), which a clause
+names but the tested prompts do not reliably elicit. Regime B is what a binary
+promptable/not-promptable framing hides.
 
-In support of that map — not as separate contributions — we also report an
-evidenced negative result on the conventional metric (context-blind
-redirect-axis F1 is a *type* classifier that ties a 0.8B student with the
-9B teacher at 0.409, while a quality-aware pairwise eval finds the student
-preferred on every axis; §5.5, Appendix A), and release the reusable
-apparatus the study is built on: a locale-aware, yield-aware generation
-pipeline (§3, with a `locale_judge` FP audit, §6.4) and a *partially
-validated* trigger-position decorrelation construction (§5.3.1).
+In support of that map — not as separate contributions — we report an evidenced
+negative result on the conventional metric (context-blind redirect-axis F1 ties
+student and 9B teacher at 0.409, while a quality-aware pairwise eval prefers the
+student on every axis; §5.5, Appendix A), and release the reusable generation
+pipeline the study is built on (§3, with a `locale_judge` FP audit, §6.4) plus a
+*partially validated* trigger-position decorrelation construction (§5.3.1).
 
-**Results.** Under the matched prompt, the two not-promptable behaviors
-fail prompt-only and are installed by SFT. Persistence resists zero-shot
-and few-shot prompting on the 9B teacher (recall $\leq 0.06$) and is only
-partially recovered by native chain-of-thought (0.63, still below the
-trained student's 0.83 and at 1.6–3.2k reasoning tokens per turn), while
-the no-specialized-data ablation fires 0% of the time. Withholding stays at
-0.09–0.45 prompt-only (9B teacher 0.45) against the trained student's 0.61
-(two judges, n=63), collapsing to near the untrained-base rate when the
-pedagogy stream is ablated. The promptable axes reach prompt-only parity.
+**Results.** Under the matched prompt, the two regime-C behaviors fail
+prompt-only in the tested regimes and are installed by SFT. Persistence resists
+zero-shot and few-shot prompting on the 9B teacher (recall $\leq 0.06$) and is only
+partially recovered by native chain-of-thought (0.63, still below the trained
+student's 0.83 and at 1.6–3.2k reasoning tokens per turn), while the
+no-persistence-data ablation A3 fires 0% of the time (A3 trains on neither the
+specialized nor the persistent streams, §5.1). Withholding stays at 0.09–0.45
+prompt-only (9B teacher 0.45) against the trained student's 0.61 (two judges,
+n=63), collapsing to near the untrained-base rate when the specialized streams are
+ablated. The trained student's persistence survives a full error taxonomy
+(precision 0.795, balanced accuracy 0.885, MCC 0.758, benign FPR 0.000; §5.3), so
+its recall is genuine discrimination, not over-firing. The regime-A/B axes reach
+prompt-only type-parity.
 
-**The boundary replicates in a second trained family.** A Llama-3.2-1B
-student, evaluated against its *own* untrained base, lifts *both*
-not-promptable behaviors far above prompt-only — persistence 0.25→0.91 and
-withholding 0.11→0.50 — so the effect is training, not scale (student and
-control share one base). A larger Llama-3.1-8B prompt-only probe stays low
-even with chain-of-thought; the direction is robust across families, the
-magnitude family-dependent (§6.2). The load-bearing conditions (A1, A3) are
-reported over three seeds with mean$\pm$s.d., the withholding contrasts
-carry per-judge two-proportion tests, and the pairwise win-rates carry
-bootstrap CIs (§4.8, Table, §6.1).
+**The regime-C effects replicate in a second trained family.** A Llama-3.2-1B
+student, evaluated against its *own* untrained base, lifts *both* regime-C
+behaviors far above prompt-only — persistence 0.25$\rightarrow$0.91 and withholding 0.11$\rightarrow$0.50.
+Because the student and its control share one base and differ only in training,
+this separates *training from scale within that base* (it is not a claim about
+scale independence across model sizes, which we do not test). A larger
+Llama-3.1-8B prompt-only probe stays low even with chain-of-thought; the direction
+is robust across families, the magnitude family-dependent (§6.2). The load-bearing
+conditions (A1, A3) are reported over three seeds with mean$\pm$s.d., the
+withholding contrasts carry per-judge paired McNemar tests and paired bootstrap
+CIs, and the pairwise win-rates carry bootstrap CIs (§4.8,
+Table 8, §6.1).
 
 **Scope and non-goals.** We focus on the *data side* and treat the
 training recipe as fixed (QLoRA SFT). We do not contribute to
 CEFR-leveling itself. We evaluate with a single base/teacher family
 (Qwen) — a genuine limitation (§6.2) — and at a single locale
-(`china`), which does *not* limit the central claim: persistence and
-withholding are structural behaviors independent of the locale backdrop,
-so the boundary for them is locale-independent by construction (§6.2).
+(`china`). We *hypothesize* the persistence and withholding boundaries are less
+locale-dependent than the redirect axes, because their formal trigger definitions
+(count same-axis strikes; withhold the requested answer) contain no locale-specific
+variables; but single-locale evaluation still limits external validity, and we do
+not claim locale-independence as established (§6.2).
 The 0.8B student on RTX 3060 12GB is a deliberate choice: the boundary is
 most consequential precisely where a large general-purpose model is not
 deployable.
@@ -260,7 +253,24 @@ predicted benefit does not materialise as a position-resampling effect
 characterization of *when* the positional shortcut governs behavior, not as
 a validated defense.
 
-## 2.5 Positioning
+## 2.5 Multi-turn instruction following and judge reliability
+
+Two fast-moving literatures bear directly on our setup. First, **multi-turn and
+stateful instruction following**: a growing line of benchmarks probes whether
+models maintain instructions and structural constraints across turns, where
+single-turn success does not predict multi-turn robustness. Our persistence task
+is an instance of this — firing on the *third* same-axis strike is a cross-turn
+state commitment that a single-turn instruction-following score would miss. Second,
+**LLM-as-judge reliability**: judges exhibit position bias, verbosity and
+self-preference effects, and correlated failures, and synthetic preference data can
+leak stylistic artifacts [@zheng2023judging; @panickssery2024selfpreference]. We
+mitigate but do not eliminate these (a three-family judge ensemble distinct from
+the teacher, a randomized-order pairwise protocol, a mechanical judge-free
+persistence metric, and a generic-redirect negative control), and we flag human
+calibration of the judged metrics as future work (§6.3). We avoid an
+absolute-novelty claim pending a fuller survey of these quickly-developing areas.
+
+## 2.5.1 Positioning
 
 The prompting-versus-fine-tuning trade-off has been examined at the level of
 *general* alignment — LIMA [@zhou2023lima] shows a small demonstration set
@@ -273,51 +283,27 @@ prompt already elicits, and which demand demonstration. Our contribution is
 thus orthogonal to all four lines above: a per-capability map of the
 train-versus-prompt boundary for tutor redirect behavior, established under a
 protocol in which the same fully-specified deployment prompt is given to
-fine-tuned and prompt-only models alike. Table
+fine-tuned and prompt-only models alike. Table 1
 positions that one contribution against each prior-work axis; the remaining
 rows record the reusable apparatus and the single bounded side-result the
 study also produced, which we do not advance as separate contributions.
 
-::: table*
-  ------------------------------------------------------------------
-  **Prior work axis**      **Relation to this paper**
-  ------------------------ -----------------------------------------
-  *Contribution --- the    
-  boundary*                
+| **Prior work axis** | **Relation to this paper** |
+| :----------------------------------------------------------- | :------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| *Contribution --- the boundary* |  |
+| Self-Instruct / Evol-Instruct / WizardLM | Per-capability train-vs-prompt boundary: which taught behaviors a fully-specified prompt already elicits, and which require demonstration |
+| Tutor / educational LLMs | Matched-prompt evidence that scaffolding/withholding resists prompting even at 9B; prompt-derived CEFR$\times$axis taxonomy anchoring the map |
+| Single-turn safety / persona data | Multi-turn persistence shown to resist prompting (under the tested regimes) despite a full three-strike prompt spec; per-axis promptability map for redirects |
+| *Secondary --- reusable apparatus and one bounded side-result* |  |
+| LLM-judge filtering | Negative result on context-blind redirect-axis F1 (type-not-quality, bimodal); quality-aware pairwise recovery; locale-judge allowlist + FP-audit methodology |
+| Shortcut learning / spurious cues (NLI) | Multi-turn dialogue-sentinel instantiation; matched-budget characterization of when the positional shortcut governs (bounded, not a validated defense) |
 
-  Self-Instruct /          Per-capability train-vs-prompt boundary:
-  Evol-Instruct / WizardLM which taught behaviors a fully-specified
-                           prompt already elicits, and which require
-                           demonstration
-
-  Tutor / educational LLMs Matched-prompt evidence that
-                           scaffolding/withholding resists prompting
-                           even at 9B; prompt-derived
-                           CEFR$\times$axis taxonomy anchoring the
-                           map
-
-  Single-turn safety /     Multi-turn persistence shown
-  persona data             un-promptable under a full three-strike
-                           prompt spec; per-axis promptability map
-                           for redirects
-
-  *Secondary --- reusable  
-  apparatus and one        
-  bounded side-result*     
-
-  LLM-judge filtering      Negative result on context-blind
-                           redirect-axis F1 (type-not-quality,
-                           bimodal); quality-aware pairwise
-                           recovery; locale-judge allowlist +
-                           FP-audit methodology
-
-  Shortcut learning /      Multi-turn dialogue-sentinel
-  spurious cues (NLI)      instantiation; matched-budget
-                           characterization of when the positional
-                           shortcut governs (bounded, not a
-                           validated defense)
-  ------------------------------------------------------------------
-:::
+: **Table 1. Positioning relative to four prior-work axes plus the NLI
+shortcut-learning literature.** The single contribution is the boundary
+(top block); the judge-filtering and shortcut-learning rows record
+reusable apparatus and a bounded side-result (bottom block), not
+separate contributions. The decorrelation construction is
+tested-and-bounded (§5.3), not a headline principle. {#tab:positioning}
 
 We demonstrate the boundary at the smallest practical scale (0.8B student on
 a consumer GPU), the regime where the question "must this be trained, or
@@ -344,16 +330,9 @@ and DPO on top of the SFT student is left to future work.
 
 ## 3.1 Pipeline overview
 
-<figure id="fig:pipeline" data-latex-placement="t">
-<img src="fig_pipeline.png" style="width:98.0%" />
-<figcaption><strong>The locale-aware, yield-aware generation
-pipeline.</strong> A single locally-served 9B teacher drives twelve SFT
-streams; a six-filter cascade and a yield-aware top-up loop shape the
-corpus, which trains a 0.8B QLoRA student scored on six frozen held-out
-sets — all on one RTX 3060 12GB.</figcaption>
-</figure>
+![**The locale-aware, yield-aware generation pipeline.** A single locally-served 9B teacher drives twelve SFT streams; a six-filter cascade and a yield-aware top-up loop shape the corpus, which trains a 0.8B QLoRA student scored on six frozen held-out sets — all on one RTX 3060 12GB.](paper/figures/fig_pipeline.png)
 
-The pipeline comprises eight stages (Figure). A small
+The pipeline comprises eight stages (Figure 1). A small
 pool of CEFR-stratified scenario *seeds* drives twelve parallel SFT
 generation streams — normal tutor behavior, seven single-shot redirect
 axes, and four persistent three-strike abuse axes — whose output flows
@@ -388,76 +367,47 @@ collapsing them obscures both.
 
 ## 3.3 An invariant-based taxonomy of tutor behavior
 
-We fix the taxonomy not by intuition but by reading it off the
-deployment system prompt. A tutor is the keeper of a set of
-**interaction invariants**, each corresponding to one commitment the
-rendered prompt already makes: language of instruction, lesson topic,
-role structure, persona, pedagogical contract, and locale frame, plus a
-general-appropriateness commitment inherited from the underlying
-assistant. A learner *violation* breaks exactly one commitment, and the
-correct redirect is the **minimal repair** that restores it.
+We fix the taxonomy by reading it off the deployment system prompt rather than by
+intuition. A tutor keeps a set of **interaction invariants**, each corresponding
+to one commitment the prompt already makes: language, topic, role, persona,
+pedagogical contract, and locale, plus a general-appropriateness commitment
+inherited from the assistant. A learner *violation* breaks exactly one commitment;
+the correct redirect is the **minimal repair** that restores it. Grounding the axis
+list in the deployment contract makes it auditable — adding or removing a clause
+adds or removes one axis — so we claim completeness only *relative to a given
+deployment's commitment set*. One bimodality matters for evaluation: persona,
+role-swap, and pedagogical withholding carry a context-free surface signature,
+while locale, language, topic, and the catch-all are identifiable only relative to
+scenario context (§4.3, §5.5, Appendix A adapt the evaluation accordingly).
+Table 2 states each single-shot axis.
 
-Grounding the axis list in the deployment contract makes it auditable
-and operational: anyone holding the prompt can check the invariant list
-against its enumerated clauses (adding or removing a clause adds or
-removes one axis), and two violations occupy distinct axes when their
-repair must consult different *scenario fields* (language→L1,
-locale→country, persona→role-identity, topic→active-topic). We therefore
-claim completeness only *relative to a given deployment's commitment
-set*. One caveat matters for the evaluation: the repair-shape signal is
-*not uniform across axes* — persona, role-swap, and pedagogical
-withholding carry a context-free surface signature, while locale,
-language, topic, and the generic catch-all are identifiable only
-relative to scenario context. §4.3, §5.5, and Appendix A make this
-bimodality explicit and adapt the evaluation accordingly.
-Table states the invariant, violation, and
-minimal repair for each single-shot axis.
+| **Invariant the tutor maintains** | **Violation (learner move)** | **Minimal repair (redirect shape)** |
+| :-------------------------------------------- | :----------------------------------------------------- | :----------------------------------------------------- |
+| Language of instruction | Code-switch into L1 (`language_redirect`) | Acknowledge the L1 turn, steer back to target language |
+| Lesson topic | Off-topic drift (`topic_redirect`) | Re-anchor to the subject |
+| Role structure (tutor teaches) | Role swap, "you be the learner" (`role_swap_redirect`) | Decline, reassert the tutoring structure |
+| Tutor persona / frame | Persona break, "are you a chatbot?" (`persona_redirect`) | Reassert the frame, continue in persona |
+| Pedagogical contract (scaffold, don't answer) | "Just give me the answer" (`pedagogy_redirect`) | Scaffold toward the answer rather than supplying it |
+| Locale / cultural frame | Out-of-locale reference (`locale_redirect`) | Brief in-locale redirect, continue in-locale |
+| General appropriateness (safety) | Politics / religion / distress (`redirect`, catch-all) | Generic safe redirect |
 
-::: table*
-  -----------------------------------------------------------------------
-  **Invariant the   **Violation (learner     **Minimal repair (redirect
-  tutor maintains** move)**                  shape)**
-  ----------------- ------------------------ ----------------------------
-  Language of       Code-switch into L1      Acknowledge the L1 turn,
-  instruction       (`language_redirect`)    steer back to target
-                                             language
+: **Table 2. The seven single-shot redirect axes as invariant /
+violation / minimal-repair triples.** The third column is the response
+*shape* a tutor must produce. Whether the shapes differ was the *design
+heuristic* that shaped the streams (§3.3), not a load-bearing
+classification criterion; §5.4--§5.6 test *where specialized data is
+necessary* per axis rather than whether axes are separable by shape.
+{#tab:invariant-triples}
 
-  Lesson topic      Off-topic drift          Re-anchor to the subject
-                    (`topic_redirect`)       
+The final row (general appropriateness) is a general-assistant safety behavior, so
+we treat it as the catch-all. The taxonomy earns its place by converting "a generic
+redirect stream is insufficient" into a *per-axis* falsifiable prediction —
+specialized data should help exactly on axes whose repair is not already supplied
+by assistant priors or a prompt clause — which §5.4 finds borne out, concentrated
+on pedagogical withholding.
 
-  Role structure    Role swap, "you be the   Decline, reassert the
-  (tutor teaches)   learner"                 tutoring structure
-                    (`role_swap_redirect`)   
-
-  Tutor persona /   Persona break, "are you  Reassert the frame, continue
-  frame             a chatbot?"              in persona
-                    (`persona_redirect`)     
-
-  Pedagogical       "Just give me the        Scaffold toward the answer
-  contract          answer"                  rather than supplying it
-  (scaffold, don't  (`pedagogy_redirect`)    
-  answer)                                    
-
-  Locale / cultural Out-of-locale reference  Brief in-locale redirect,
-  frame             (`locale_redirect`)      continue in-locale
-
-  General           Politics / religion /    Generic safe redirect
-  appropriateness   distress (`redirect`,    
-  (safety)          catch-all)               
-  -----------------------------------------------------------------------
-:::
-
-One caveat: the final row (general appropriateness) is a
-general-assistant safety behavior rather than a tutoring-specific
-invariant, so we treat it as the catch-all. The principle earns its
-place by converting "a generic redirect stream is insufficient" from a
-blanket assertion into a *per-axis* falsifiable prediction — specialized
-data should help exactly on axes whose repair is not already supplied by
-assistant priors or a prompt clause. §5.4 tests this and finds it borne
-out, with the benefit concentrated on pedagogical withholding.
-
-The pipeline realises this taxonomy through twelve parallel streams in
-three groups.
+The pipeline realises this taxonomy through twelve parallel streams in three
+groups.
 
 **Normal (1 stream).** Standard scaffolded tutor dialogues. The
 teacher plays both learner and tutor turns over ~12 turns, with the
@@ -471,24 +421,19 @@ single learner-stance archetype.
 dialogues whose first ~5 turns are normal scaffolding, but at a
 specific turn the learner introduces a violation along *one* axis;
 the tutor's job in the next turn is the minimal repair for that
-invariant (Table, third column). Training on a single generic
+invariant (Table 2, third column). Training on a single generic
 "redirect" stream, as most prior tutor datasets do, collapses these
 axis-specific repair shapes into one averaged behavior.
 
-**Persistent 3-strike streams (4 streams).** Persistence is
-*orthogonal* to the invariant axis: any violation can be one-off or
-repeated. A persistent stream produces dialogues where the learner
-persists in the same violation across three probe turns; the tutor
-probes twice, then ends the session with a sentinel marker on the third
-strike. We give persistent variants to four axes —
-`persistent_off_topic`, `persistent_language_violation`,
-`persistent_persona_break`, `persistent_role_swap` — and not all seven,
-because a persistent axis earns its own stream only where *repeated*
-violation changes the correct response (escalation to a hard
-session-end). A repeated locale slip is most naturally just corrected
-again in-locale, so no distinct escalation is trained. (One borderline
-case: `persistent_pedagogy` is a plausible extension we do not currently
-include.)
+**Persistent 3-strike streams (4 streams).** Persistence is *orthogonal* to the
+invariant axis: any violation can be one-off or repeated. A persistent stream has
+the learner persist in the same violation across three probe turns; the tutor
+probes twice, then ends the session with a sentinel on the third strike. We give
+persistent variants to four axes (`persistent_off_topic`,
+`persistent_language_violation`, `persistent_persona_break`,
+`persistent_role_swap`) and not all seven, because a persistent stream earns its
+place only where *repeated* violation changes the correct response (escalation to a
+hard session-end); a repeated locale slip is just corrected again in-locale.
 
 ## 3.4 Trigger-position decorrelation (bounded side-result)
 
@@ -557,39 +502,18 @@ important to me"). Brevity itself is the boundary. Do NOT lecture -- redirect, t
 sentinel.
 ```
 
-The teacher is a general-purpose multilingual model with strong Western
-cultural defaults. A naive "tutor for English learners in China" system
-prompt produces dialogues with NYC, Thanksgiving, and Costco references at
-non-trivial rates. The `[locale]` block above addresses this; it is
-parameterized from `config/locale.yaml` and enumerates: (i) the country and
-a country adjective; (ii) per-locale learner-description language; (iii) a
-per-locale `avoid_default_cultures` list; and (iv) a per-locale
-`avoided_topics` list combining safety and cultural sensitivity.
-
-Most generation streams require **strict-Latin output** in user turns, since
-the learner is a non-native English learner. The `language_redirect` stream
-is the exception: by design the learner code-switches into L1 mid-dialogue.
-We split the locale block into two variants accordingly:
-
-- **`locale_instruction_block`** (default): strict-Latin output rule; L1
-  characters are forbidden in user turns and trigger the `non_latin_script`
-  filter.
-- **`locale_instruction_block_allow_l1`** (allow-L1 variant): the
-  strict-Latin rule is dropped; L1 characters are permitted in the
-  code-switch turn. The `non_latin_script` filter respects the
-  `scenario_type` field and skips user turns for `language_redirect`
-  records.
-
-This split is necessary because the strict-Latin rule and the
-`language_redirect` intent contradict each other. Before we introduced the
-allow-L1 variant, every `language_redirect` example failed the
-`non_latin_script` filter and the stream had ~0% pass rate; after the split,
-the stream reaches the global ~85–90% post-filter pass rate.
-
-A related but distinct decision is to model only the *tutor* side of
-redirect behavior in our SFT. We do not optimize the user-side persona, only
-the tutor's response to user behavior. This keeps the contributed-behavior
-axis sharply defined.
+The teacher is a general-purpose multilingual model with strong Western defaults
+(a naive "tutor in China" prompt yields NYC/Thanksgiving/Costco references at
+non-trivial rates); the `[locale]` block above, parameterized from
+`config/locale.yaml`, addresses this by enumerating the country, per-locale learner
+language, an `avoid_default_cultures` list, and an `avoided_topics` list. One
+locale-engineering detail (full description in Appendix B): most streams require
+strict-Latin user turns, but `language_redirect` by design code-switches into L1,
+so we split the locale block into default (strict-Latin) and allow-L1 variants — a
+split that lifts the `language_redirect` pass rate from ~0% (every record failing
+the `non_latin_script` filter) to the global ~85–90%. We model only the *tutor*
+side of redirect behavior in SFT, keeping the contributed-behavior axis sharply
+defined.
 
 ## 3.6 Yield, filtering, and unused pipeline capabilities
 
@@ -625,9 +549,21 @@ any condition** — all of A1/A3/A5 are SFT-only (§4.4) — which keeps every
 ablation single-variable and avoids a register-pool contamination confound.
 Full hyperparameters and the (unused) DPO stage are in Appendix C.
 
+**Decoding and exact-generation provenance.** Because two of our metrics turn on
+*exact-string* emission (the sentinel) and on prompt-only baselines, we fix and
+report the generation settings. Mechanical sentinel/premature/FP evaluations use
+**greedy decoding** (temperature 0), so those results are deterministic given the
+checkpoint; the judged withholding/pairwise generations use temperature 0.7 with a
+fixed generation seed. The teacher and prompt-only baselines are served via
+llama.cpp with the model's native chat template and stop tokens. Appendix C pins
+the exact library versions (`transformers`, `bitsandbytes`, PyTorch, CUDA,
+llama.cpp commit), the quantized-checkpoint source and revision, chat templates,
+and per-stage decoding parameters (temperature, top-$p$/top-$k$, max new tokens,
+seed) so every reported number is reproducible from the released configs.
+
 ## 4.2 Training data composition
 
-Table reports per-stream, per-CEFR-level
+Table 3 reports per-stream, per-CEFR-level
 record counts in the filtered SFT corpus. The corpus comprises
 **3 374 dialogues** across 12 streams and six CEFR levels (A1--C2),
 with `normal` dominant ($\approx$ 53\% of the total) and seven
@@ -641,23 +577,29 @@ redirect streams are intentionally small ($\approx$\,7--10 records
 per axis per level) because per-axis generation cost scales linearly
 with axis count.
 
-::: table*
-  **Stream**                         **A1**    **A2**    **B1**    **B2**    **C1**    **C2**   **Total**
-  ------------------------------- --------- --------- --------- --------- --------- --------- -----------
-  normal                                204       335       355       351       315       235       1 795
-  redirect (generic)                    102       169       166       168        21        20         646
-  language_redirect                       5         8         7         9         2         5          36
-  locale_redirect                         6         8         7        10         8         9          48
-  pedagogy_redirect                       6         8         8         9         7         8          46
-  persona_redirect                        6         8         7         9         7         9          46
-  role_swap_redirect                      6         8         7         9         7         7          44
-  topic_redirect                          6         6         7         9         6         7          41
-  persistent_language_violation          29        38        26        30        20        22         165
-  persistent_off_topic                   22        34        30        24        10        17         137
-  persistent_persona_break               28        42        27        31        30        48         206
-  persistent_role_swap                   17        44        36        25        20        22         164
-  **TOTAL**                         **437**   **708**   **683**   **684**   **453**   **409**   **3 374**
-:::
+| **Stream** | **A1** | **A2** | **B1** | **B2** | **C1** | **C2** | **Total** |
+| :-------------------------------- | :-- | :-- | :-- | :-- | :-- | :-- | :----- |
+| normal | 204 | 335 | 355 | 351 | 315 | 235 | 1 795 |
+| redirect (generic) | 102 | 169 | 166 | 168 | 21 | 20 | 646 |
+| language_redirect | 5 | 8 | 7 | 9 | 2 | 5 | 36 |
+| locale_redirect | 6 | 8 | 7 | 10 | 8 | 9 | 48 |
+| pedagogy_redirect | 6 | 8 | 8 | 9 | 7 | 8 | 46 |
+| persona_redirect | 6 | 8 | 7 | 9 | 7 | 9 | 46 |
+| role_swap_redirect | 6 | 8 | 7 | 9 | 7 | 7 | 44 |
+| topic_redirect | 6 | 6 | 7 | 9 | 6 | 7 | 41 |
+| persistent_language_violation | 29 | 38 | 26 | 30 | 20 | 22 | 165 |
+| persistent_off_topic | 22 | 34 | 30 | 24 | 10 | 17 | 137 |
+| persistent_persona_break | 28 | 42 | 27 | 31 | 30 | 48 | 206 |
+| persistent_role_swap | 17 | 44 | 36 | 25 | 20 | 22 | 164 |
+| **TOTAL** | **437** | **708** | **683** | **684** | **453** | **409** | **3 374** |
+
+: **Table 3. Filtered SFT corpus composition by stream and CEFR level.**
+Counts are post-filter passing records. The six specialized redirect
+streams (language, locale, pedagogy, persona, role_swap, topic) carry
+$\approx$ 7--10 records per axis per CEFR level --- intentionally
+thinner than the generic streams, a known limitation we account for by
+leaning only on the large, seed-stable per-axis effects (§5.6).
+{#tab:sft-composition}
 
 ## 4.3 Held-out evaluation sets
 
@@ -668,29 +610,28 @@ deterministic and immutable across runs, so growing the training
 corpus does not contaminate evaluation.
 
 We evaluate on six held-out sets, summarized in
-Table and detailed below (the table shows a seventh
+Table 4 and detailed below (the table shows a seventh
 row, Locale-Leakage, which reuses the Tutor-Scenario scenarios and so is
 not counted as a distinct set):
 
-**Eval set**                                  **N** **Composition**
-  ------------------------------ -------------------- ------------------------------------------------
-  Tutor-Scenario                                  224 6 CEFR levels (19--50 per level), no axes
-  Redirect-Probe                                  143 7 redirect axes, 6 CEFR levels
-  Persistent-Probe                                159 4 persistence axes, 6 CEFR levels (positives)
-  Persistent-Premature-Probe                      318 under-threshold (vc=1,2) $\times$ turn-depth
-  Persistent-FP-Probe                             240 4 trained positions $\times$ 60 (40 per level)
-  Persistent-OffPosition-Probe                     60 off-grid positions {13, 15}, 4 axes
-  Locale-Leakage                                  224 same scenarios as Tutor-Scenario
-  **TOTAL**                        **1 144**$^{\ast}$ 
+| **Eval set** | **N** | **Composition** |
+| :--------------------------- | :------------- | :--------------------------------------------- |
+| Tutor-Scenario | 224 | 6 CEFR levels (19--50 per level), no axes |
+| Redirect-Probe | 143 | 7 redirect axes, 6 CEFR levels |
+| Persistent-Probe | 159 | 4 persistence axes, 6 CEFR levels (positives) |
+| Persistent-Premature-Probe | 318 | under-threshold (vc=1,2) $\times$ turn-depth |
+| Persistent-FP-Probe | 240 | 4 trained positions $\times$ 60 (40 per level) |
+| Persistent-OffPosition-Probe | 60 | off-grid positions {13, 15}, 4 axes |
+| Locale-Leakage | 224 | same scenarios as Tutor-Scenario |
+| **TOTAL** | **1 144**$^{\ast}$ |  |
 
-  : **Held-out evaluation sets.** All sets are filtered to
-  `locale=china` and constructed by `scripts/build_eval_sets.py` from
-  the bottom-20% hash-modulo split of scenario seed ids (§4.3).
-  $^{\ast}$TOTAL excludes the Locale-Leakage row, which reuses the same
-  224 cold-start scenarios as Tutor-Scenario (counting it would
-  double-count); the remaining six rows sum to 1 144. Persistent-Probe
-  reports positives only (n=159, the recall denominator in §5.3).
-  {#tab:eval-sets}
+: **Table 4. Held-out evaluation sets.** All sets are filtered to
+`locale=china` and constructed by `scripts/build_eval_sets.py` from the
+bottom-20% hash-modulo split of scenario seed ids (§4.3). $^{\ast}$TOTAL
+excludes the Locale-Leakage row, which reuses the same 224 cold-start
+scenarios as Tutor-Scenario (counting it would double-count); the
+remaining six rows sum to 1 144. Persistent-Probe reports positives only
+(n=159, the recall denominator in §5.3). {#tab:eval-sets}
 
 - **Tutor-Scenario (N=224)** and **Locale-Leakage (N=224)**:
   cold-start dialogues (the same scenarios), scoring pedagogical quality /
@@ -732,29 +673,24 @@ four prompt-only baselines (B1–B4). **Trained ablations** train the same
 base model (`Qwen3.5-0.8B-Base`) with the same training recipe but
 on different data:
 
-::: table*
-  ------------------------------------------------------------------------------
-   **Tag**  **Data**                  **Method**   **Purpose**
-  --------- ------------------------- ------------ -----------------------------
-     A1     All 12 streams, 4-variant SFT only     Full system (headline
-            persistent                             condition).
-            ($\{5,7,9,11\}$),                      
-            axis-specific sentinel                 
-            `[SESSION_END: <axis>]`                
+| **Tag** | **Data** | **Method** | **Purpose** |
+| :-- | :-------------------------------------------------------------------------------------------------------------------------------------------------- | :------- | :--------------------------------------------------------------------- |
+| A1 | All 12 streams, 4-variant persistent ($\{5,7,9,11\}$), axis-specific sentinel `[SESSION_END: <axis>]` | SFT only | Full system (headline condition). |
+| A3 | **Normal + generic-redirect streams only** --- drops *both* the 6 specialized redirect streams *and* the 4 persistent streams (1 895 records vs A1's 3 342) | SFT only | *Generic-SFT baseline*; §5.4 taxonomy contrast (A1 vs A3). |
+| A5 | A1 with persistent rebuilt as fixed-turn-7, axis-specific sentinel `[SESSION_END: <axis>]` | SFT only | §5.3.1 decorrelation contrast (A1 vs A5): the naive fixed-turn design. |
 
-     A3     A1 minus the 6            SFT only     *Generic-SFT baseline*; §5.4
-            specialized redirect                   taxonomy contrast (A1 vs A3).
-            streams (locale,                       
-            pedagogy, language,                    
-            persona, topic,                        
-            role_swap)                             
-
-     A5     A1 with persistent        SFT only     §5.3.1 decorrelation contrast
-            rebuilt as fixed-turn-7,               (A1 vs A5): the naive
-            axis-specific sentinel                 fixed-turn design.
-            `[SESSION_END: <axis>]`                
-  ------------------------------------------------------------------------------
-:::
+: **Table 5. Trained-ablation matrix.** All three share the same base
+(`Qwen3.5-0.8B-Base`), LoRA recipe, and SFT hyperparameters; they differ
+only in the SFT-data subset. None use DPO. **A3 is trained on the
+normal + generic-redirect streams only** --- it contains *no*
+specialized-redirect and *no* persistent data (materialized by
+`setup_paper_ablation_data.py`; verified against the on-disk
+`data/sft_filtered_a3/` dir). Its 0.000 persistence recall therefore
+reflects the *absence* of persistence demonstration, not a failure
+despite it. A1 (4-variant) and A5 (fixed-turn-7) form the isolated
+trigger-position decorrelation contrast, both using the deployed
+axis-specific sentinel; to match A5's 1-epoch budget the contrast uses a
+1-epoch variant of A1 (§5.3.1). {#tab:trained-ablations}
 
 **A note on tags.** The condition tags (trained A1/A3/A5; prompt-only
 B1–B4) are model-configuration labels and are *unrelated* to the CEFR
@@ -772,34 +708,53 @@ data), **generic-SFT** (A3, generic-redirect stream only), and
 **specialized-SFT** (A1, full mix). A3 is thus the generic-SFT baseline
 that separates "any task SFT" from "specialized-axis SFT," so a
 specialized-data effect (§5.4, §5.6) is measured against a trained control,
-not only against prompting. The two load-bearing contrasts are both
-single-variable: **A1 vs A3** (taxonomy — do the specialized single-shot
-streams add anything beyond the generic redirect?), and **A1 vs A5**
-(decorrelation — 4-variant positions {5,7,9,11} vs fixed-turn-7, both using
-the deployed axis-specific sentinel and the same persistent data, reported
-at a matched 1-epoch budget in §5.3.1).
+not only against prompting. The two contrasts are **A1 vs A3** (taxonomy — do
+the specialized/persistent streams add anything beyond the generic redirect?) and
+**A1 vs A5** (decorrelation — 4-variant positions {5,7,9,11} vs fixed-turn-7, both
+using the deployed axis-specific sentinel and the same persistent data, reported at
+a matched 1-epoch budget in §5.3.1). We caution that A1-vs-A3 is *not* a
+single-stream contrast: A3 removes several streams at once (all specialized and all
+persistent) and trains on fewer records (1,895 vs 3,342), so it receives fewer
+optimizer steps at matched epochs. A1-vs-A3 therefore establishes that *some*
+combination of the removed streams is necessary for a capability, not that any one
+stream is; budget-matched leave-one-stream-out ablations (§6.3) are needed to
+attribute an effect to a single stream.
 
-**Zero-shot baselines** (Table) apply a
+**Authoritative condition composition and data-lineage audit.**
+Table 6 is the single authoritative source for what each
+reported condition trained on and for train/eval separation
+(`scripts/score_paper_composition_audit.py`). The split is at the level of the
+source **scenario seed id** (a content hash; all variants of a scenario share it,
+§4.3), so no variant of an eval scenario can appear in training. We verify this
+holds for every evaluated condition: **0 of the 224 held-out eval scenario ids
+appear in A1's or A3's training data**. This audit also subsumes the
+`<think>`-mode evaluator-example lineage question: any such example that entered an
+SFT dir contributes its scenario id to the training-id set, so an eval-seed leak
+would surface here — none does.
+
+| **Cond.** | **Normal** | **Gen. redir.** | **Spec. (of 6)** | **Persist. (of 4)** | **Records** | **Eval-id leaks** |
+| :---- | :----- | :---------- | :----------- | :-------------- | :------ | :------------ |
+| A1 | yes | yes | 6/6 | 4/4 | 3 342 | 0 / 224 |
+| A3 | yes | yes | 0/6 | 0/4 | 1 895 | 0 / 224 |
+
+: **Table 6. Authoritative condition composition and data-separation
+audit.** Stream membership and record counts from the materialized SFT
+dirs; "Eval-id leaks" = held-out eval scenario ids appearing in the
+condition's training data (of 224). Both reported conditions are clean.
+`score_paper_composition_audit.py`. {#tab:composition-audit}
+
+**Zero-shot baselines** (Table 7) apply a
 tutor-style system prompt to an off-the-shelf checkpoint:
 
-::: table*
-  -----------------------------------------------------------------
-   **Tag**  **Checkpoint**      **Purpose**
-  --------- ------------------- -----------------------------------
-     B1     Qwen3.5-0.8B-Base   Lower bound: shows training matters
-            (raw, no training)  at all
+| **Tag** | **Checkpoint** | **Purpose** |
+| :-- | :----------------------------------- | :------------------------------------------------------------------------------- |
+| B1 | Qwen3.5-0.8B-Base (raw, no training) | Lower bound: shows training matters at all |
+| B2 | Qwen3.5-0.8B post-trained | Same-size off-the-shelf comparison |
+| B3 | Qwen3.5-4B post-trained | Larger same-family comparison |
+| B4 | Qwen3.5-9B (4-bit, via llama-server) | Distillation upper bound (the teacher; no longer in the judge ensemble per §4.5) |
 
-     B2     Qwen3.5-0.8B        Same-size off-the-shelf comparison
-            post-trained        
-
-     B3     Qwen3.5-4B          Larger same-family comparison
-            post-trained        
-
-     B4     Qwen3.5-9B (4-bit,  Distillation upper bound (the
-            via llama-server)   teacher; no longer in the judge
-                                ensemble per §4.5)
-  -----------------------------------------------------------------
-:::
+: **Table 7. Zero-shot baselines.** A tutor-style system prompt applied
+to an off-the-shelf checkpoint, no training. {#tab:zeroshot-baselines}
 
 ## 4.5 Multi-judge evaluation protocol
 
@@ -850,7 +805,7 @@ native chain-of-thought** Qwen3.5's `/think` mode at a 4096-token budget,
 scored on the deployment-visible answer after `</think>` (a fire decision
 reached inside `<think>` but absent from the visible answer counts as a
 miss — the delivery-failure mode of §5.3). Results in §5.3,
-Table.
+Table 10.
 
 ## 4.7 Locale-leakage rate (Locale-Leakage)
 
@@ -871,7 +826,7 @@ judged claims rest on — **A1** and **A3** — are trained over **three seeds**
 split); all other conditions are single-seed (42). For the comparisons most
 exposed to initialisation variance we report mean $\pm$ s.d. over the three
 seeds (withholding §5.4, persistence recall §5.3, locale leakage §5.7, and
-the per-axis pairwise win-rates §5.6; values in Table
+the per-axis pairwise win-rates §5.6; values in Table 8
 and each section). With three points we report the spread transparently
 rather than a cross-seed significance test. The decorrelation conditions (A5
 and A1's 1-epoch variant) stay single-seed by design: their role is the
@@ -880,9 +835,13 @@ variance. Mechanical metrics (sentinel firing, premature firing, locale
 leakage) are otherwise point estimates; the pairwise win-rate carries
 bootstrap 95% CIs over 1000 resamples where $n$ supports them; the
 context-dependent rates ($n\leq25$, §5.7) carry a small-$n$ caveat; and the
-withholding rate ($n=63$) carries per-judge two-proportion tests on the
-load-bearing contrasts (§5.4). The retired
-redirect-axis F1 (Appendix&nbsp;A) is not used for any claim.
+withholding rate ($n=63$) carries, on the load-bearing A1-vs-A3 contrast, a
+**paired McNemar exact test** (the conditions are judged on the identical prompts,
+so the comparison is paired by item) together with a **paired bootstrap 95% CI**
+over prompts (§5.4). Where we do not detect a difference (e.g.\ locale-leakage
+parity, §5.7) we treat it as absence of evidence, not evidence of equivalence, and
+report the interval rather than asserting parity. The retired redirect-axis F1
+(Appendix&nbsp;A) is not used for any claim.
 
 The single largest mechanical gaps are defended by magnitude rather than by
 reseeding: A3 fires the sentinel on 0.000 of positive probes versus the
@@ -896,83 +855,82 @@ manifest, resumability) is in Appendix C.
 
 ## 5.1 Protocol and conditions
 
-Every condition is evaluated under the **same** fully-specified deployment
-system prompt reproduced in §3.5 — including an explicit clause for each
-redirect axis and the complete three-strike persistence block
-(Figure). Because the
-instruction is present for all conditions, a prompt-only failure isolates
-*promptability* rather than under-specification. The trained student and its
-ablations were trained *and* evaluated under this prompt; the prompt-only
-baselines see it at evaluation.
+Every condition is evaluated under the **same** fully-specified deployment prompt
+(§3.5; Figure 2) — every redirect-axis clause and the complete
+three-strike persistence block — so a prompt-only failure isolates *promptability*
+rather than under-specification. Trained conditions see the prompt at train and
+eval; prompt-only baselines see it at eval.
 
-<figure id="fig:design" data-latex-placement="t">
-<img src="fig_design.png" />
-<figcaption><strong>Matched-prompt protocol.</strong> The identical
-fully-specified deployment prompt is supplied to a fine-tuned 0.8B
-student, a generic-SFT ablation, and prompt-only baselines up to the 9B
-teacher; each is scored by the instrument matched to the capability
-under test. Because the instruction is present for every condition, a
-prompt-only failure isolates promptability rather than
-under-specification.</figcaption>
-</figure>
+![**Matched-prompt protocol.** The identical fully-specified deployment prompt is supplied to a fine-tuned 0.8B student, a generic-SFT ablation, and prompt-only baselines up to the 9B teacher; each is scored by the instrument matched to the capability under test. Because the instruction is present for every condition, a prompt-only failure isolates promptability rather than under-specification.](paper/figures/fig_design.png)
 
-Conditions (defined in §4.4, Table): the
-trained student **A1** (full 12-stream SFT), the generic-SFT ablation
-**A3** (A1 minus the six specialized redirect streams), and the prompt-only
-ladder **B1**–**B4** (0.8B-base, 0.8B-instruct, 4B-instruct, 9B teacher).
-A3 is the generic-SFT baseline against which the specialized-data effect is
-isolated; the fixed-turn ablation A5 and the 1-epoch A1 variant are
-introduced for the position contrast in §5.3. The load-bearing conditions
+Conditions (defined in §4.4, Table 5): the
+trained student **A1** (full 12-stream SFT: normal + generic redirect + 6
+specialized redirect + 4 persistent streams; 3342 records), the generic-SFT
+ablation **A3** (**normal + generic-redirect streams only** — it drops *both* the
+six specialized redirect streams *and* the four persistent streams; 1895 records),
+and the prompt-only ladder **B1**–**B4** (0.8B-base, 0.8B-instruct, 4B-instruct,
+9B teacher). Because A3 contains no persistent training data, its 0.000 persistence
+recall reflects the *absence* of persistence demonstration, not a failure despite
+it; and because A3 also drops the specialized streams, an A1-vs-A3 contrast removes
+*several* streams at once (we bound what this contrast can and cannot causally
+attribute in §6, and specify budget-matched leave-one-out ablations as future
+work). A1 has more records than A3, so A1 also receives more optimizer steps at
+matched epochs; we note this budget asymmetry as a limitation of the A1-vs-A3
+contrast (§6). The fixed-turn ablation A5 and the 1-epoch A1 variant are introduced
+for the position contrast in §5.3. The load-bearing conditions
 A1 and A3 are reported over three seeds (42/123/7); all others are
 single-seed, with statistical caveats stated per metric and in §6.
 
 ## 5.2 The boundary at a glance
 
-<figure id="fig:boundary" data-latex-placement="t">
-<img src="fig_boundary.png" />
-<figcaption><strong>The train-versus-prompt boundary.</strong> <em>Top
-three rows</em>: behaviors a single prompt clause elicits — the best
-prompt-only model reaches parity with the trained 0.8B student.
-<em>Bottom two rows</em>: behaviors the prompt <em>describes but cannot
-install</em> — prompt-only falls far short despite the identical
-instruction. Persistence prompt-only is the 9B teacher’s zero/few-shot
-recall (<span class="math inline"> ≤ 0.06</span>); withholding
-prompt-only is the 9B teacher (0.45). Full statistics in Table <a
-href="#tab:stat-summary" data-reference-type="ref"
-data-reference="tab:stat-summary">[tab:stat-summary]</a>.</figcaption>
-</figure>
+![**Three regimes of the train-versus-prompt boundary.** Each capability is scored by its own validated, capability-specific metric (no heterogeneous metrics are combined on one axis, and the retired context-blind axis-F1 is not used here; §5.5). *Regime A (prompt-sufficient)*: locale fidelity — prompt-only reaches parity. *Regime B (prompt-elicitable but data-refinable)*: role-swap and topic re-anchoring — the behavior type appears prompt-only, but specialized data wins the pairwise quality comparison (§5.6). *Regime C (training-dependent under the tested regimes)*: multi-turn persistence and pedagogical withholding — prompt-only falls far short despite the identical instruction. Persistence prompt-only is the 9B teacher’s zero/few-shot recall ( $\le$ 0.06); withholding prompt-only is the 9B teacher (0.45). Interval estimates and full statistics in Table 8.](paper/figures/fig_boundary.png)
 
-Figure states the boundary; the remainder of §5 establishes
-each row, then turns to the metric we had to retire (§5.5) to read the
-promptable axes honestly. Table collects every headline
-number with its sample size and dispersion (three-seed s.d., bootstrap 95% CI,
-or two-proportion test as applicable; §4.8, §6.1).
+**Three regimes, not a binary** (Figure 3): **(A)
+prompt-sufficient** — a clause elicits the behavior and data adds little (locale
+fidelity); **(B) prompt-elicitable but data-refinable** — the behavior *type*
+appears prompt-only, yet specialized data materially improves its *quality*
+(role-swap and topic, §5.6); **(C) training-dependent under the tested regimes** —
+the prompt names the behavior but does not reliably elicit it, and SFT installs it
+(persistence, withholding). Regime B is what a binary framing hides. Each row of
+the summary figure uses its own validated capability-specific metric (no
+heterogeneous metrics on one axis; the retired context-blind axis-F1 is not used,
+§5.5). The remainder of §5 establishes each row; Table 8
+collects every headline number with its sample size and dispersion (three-seed
+s.d., bootstrap CI, or paired test as applicable; §4.8, §6.1).
 
-::: table*
-  **Headline result**                     **Metric**             **$n$**     **Value**       **Dispersion / test**
-  --------------------------------------- ---------------------- ----------- --------------- -----------------------------------------------------------------
-  Persistence, A1 (trained)               sentinel recall        159         0.83            3-seed mean $0.85\pm0.04$ (42/123/7)
-  Persistence, A3 (generic-SFT)           sentinel recall        159         0.000           point estimate; gap to $\geq 0.83$ magnitude-defended (§6.1)
-  Persistence, 9B teacher                 sentinel recall        159         $\leq 0.06$     single-run (off-the-shelf); native CoT 0.63
-  Withholding, A1 (trained)               withholding rate       63          0.611           3-seed mean $0.63\pm0.08$; A1-vs-A3 $z=5.9$/$5.6$ ($p\ll0.001$)
-  Withholding, A3 (generic-SFT)           withholding rate       63          0.119           3-seed mean $0.13\pm0.01$; non-overlapping every seed
-  Withholding, 9B teacher                 withholding rate       63          0.452           A1-vs-teacher $z=1.96$/$1.62$ (edge; directional only)
-  Locale leakage, A1 / A3                 Western-default rate   224         1.34% / 0.89%   3-seed $0.022\pm0.008$ / $0.016\pm0.007$; indistinguishable
-  Pairwise, role_swap (A1 vs A3)          A1 win-rate            ---         0.87            3-seed $0.82\pm0.06$; bootstrap 95% CI (§5.6)
-  Pairwise, language (A1 vs A3)           A1 win-rate            ---         0.75            3-seed $0.76\pm0.06$
-  Pairwise, generic (control)             A1 win-rate            60          0.55            3-seed $0.53\pm0.05$; near parity
-  Context-dependent (locale/lang/topic)   mechanical rate        $\leq 25$   ---             point estimates; underpowered, suggestive only (§5.7)
-:::
+| **Headline result** | **Metric** | **$n$** | **Value** | **Dispersion / test** |
+| :------------------------------------ | :------------------- | :-------- | :------------ | :---------------------------------------------------------------------- |
+| Persistence, A1 (trained) | sentinel recall | 159 | 0.83 | 3-seed mean $0.85\pm0.04$ (42/123/7) |
+| Persistence, A3 (generic-SFT) | sentinel recall | 159 | 0.000 | point estimate; gap to $\geq 0.83$ magnitude-defended (§6.1) |
+| Persistence, 9B teacher | sentinel recall | 159 | $\leq 0.06$ | single-run (off-the-shelf); native CoT 0.63 |
+| Withholding, A1 (trained) | withholding rate | 63 | 0.611 | 3-seed $0.63\pm0.08$; A1-vs-A3 paired McNemar $p<10^{-6}$ (both judges) |
+| Withholding, A3 (generic-SFT) | withholding rate | 63 | 0.119 | 3-seed $0.13\pm0.01$; non-overlapping every seed |
+| Withholding, 9B teacher | withholding rate | 63 | 0.452 | A1-vs-teacher $z=1.96$/$1.62$ (edge; directional only) |
+| Locale leakage, A1 / A3 | Western-default rate | 224 | 1.34% / 0.89% | 3-seed $0.022\pm0.008$ / $0.016\pm0.007$; indistinguishable |
+| Pairwise, role_swap (A1 vs A3) | A1 win-rate | --- | 0.87 | 3-seed $0.82\pm0.06$; bootstrap 95% CI (§5.6) |
+| Pairwise, language (A1 vs A3) | A1 win-rate | --- | 0.75 | 3-seed $0.76\pm0.06$ |
+| Pairwise, generic (control) | A1 win-rate | 60 | 0.55 | 3-seed $0.53\pm0.05$; near parity |
+| Context-dependent (locale/lang/topic) | mechanical rate | $\leq 25$ | --- | point estimates; underpowered, suggestive only (§5.7) |
 
-## 5.3 Not promptable I — multi-turn persistence (mechanical)
+: **Table 8. Statistical summary of the headline results.** Every
+load-bearing number with its sample size and dispersion. Three-seed s.d.
+is reported for the reseeded A1/A3 conditions (§4.8); off-the-shelf
+baselines (B1--B4) carry no training seed and are single-run. The two
+mechanical results the boundary rests on --- A3 persistence 0.000 vs
+trained $\geq 0.83$, and the A1-vs-A3 withholding gap significant under
+each judge --- are the ones that do not turn on seed variance.
+Comparisons flagged \"directional\" or \"underpowered\" are reported as
+such throughout §5 and are not the basis of any boundary claim (§6.1).
+{#tab:stat-summary}
 
-The sentinel-firing metrics are the only fully-mechanical evaluation in the
-paper and consult no judge. The behavior is: on the third same-axis
-violation, emit the exact literal sentinel string for that axis. The
-deployment prompt specifies the entire protocol (§3.5, `[persistence]`):
-escalating brevity across the three strikes, the four governed axes, the
-four literal `[SESSION_END: …]` strings, and explicit anti-jailbreak
-clauses.
+## 5.3 Regime C, I — multi-turn persistence (mechanical)
+
+The sentinel-firing metrics are the only fully-mechanical evaluation in the paper
+and consult no judge. The behavior: on the third same-axis violation, emit the
+exact literal sentinel string for that axis. The deployment prompt specifies the
+entire protocol (§3.5, `[persistence]`) — escalating brevity across the three
+strikes, the four governed axes, the four literal `[SESSION_END: …]` strings, and
+anti-jailbreak clauses.
 
 **Prompting does not elicit it.** Under this fully-specified prompt, no
 prompt-only model fires the sentinel reliably: on the strongest prompt-only
@@ -983,10 +941,47 @@ streams, fires on **0.000** of positive probes — never. Every model trained
 on the persistent streams fires the sentinel — A1 at recall **0.83** (3-seed
 mean $0.85\pm0.04$ over 42/123/7), the sentinel-position ablations at 0.56--0.82
 (§5.3.1) — whereas the strongest prompt-only
-model tops out at 0.06 and A3 at 0.000. Counting same-axis violations across turns and
-emitting a rare literal marker on the third is a behavior the prompt can
-name but not produce; it must be demonstrated. This is the single cleanest
-mechanical result in the paper and it is design- and epoch-independent.
+model tops out at 0.06 and A3 at 0.000. Under the tested prompting regimes,
+counting same-axis violations across turns and emitting a rare literal marker on
+the third is a behavior the prompt names but does not reliably elicit; it is
+installed by demonstration. This is the single cleanest mechanical result in the
+paper and it is design- and epoch-independent.
+
+**Recall alone would overstate correctness — the full error taxonomy does not.**
+High sentinel recall can in principle be achieved by firing too often, so we
+report the trained student's persistence as a full operational error taxonomy
+(Table 9), not a single recall number
+(`scripts/score_paper_persistence_taxonomy.py`).
+
+| **Condition** | **Recall** | **Prem.@2** | **Benign FPR** | **Precision** | **Bal. acc** | **MCC** |
+| :------------------- | :----- | :------ | :--------- | :-------- | :------- | :------- |
+| A1 student (SFT) | 0.830 | 0.201 | 0.000 | 0.795 | 0.885 | 0.758 |
+| A3 (generic-SFT) | 0.000 | 0.000 | 0.000 | --- | 0.500 | 0.000 |
+| 0.8B base (prompt) | 0.000 | 0.000 | 0.008 | 0.000 | 0.497 | $-0.035$ |
+| 4B instruct (prompt) | 0.063 | 0.044 | 0.000 | 0.526 | 0.523 | 0.121 |
+| 9B teacher (prompt) | 0.025 | 0.025 | 0.000 | 0.500 | 0.509 | 0.071 |
+
+: **Table 9. Persistence as a full error taxonomy, not recall alone.**
+Recall on the positive probe (n=159); Prem.@2 = premature firing with
+only two prior strikes (sub-threshold); Benign FPR = firing in a fully
+benign context; Precision, balanced accuracy, and Matthews correlation
+(MCC) pool the positive probe with the premature and benign negatives
+into one confusion matrix, so recall inflated by over-firing is
+penalized. The trained student's 0.83 recall is *not* an over-firing
+artifact: benign FPR is 0.000, malformed-marker and duplicate-fire rates
+are 0.000 (not shown), and MCC is 0.758 --- genuine discrimination.
+Every prompt-only condition and the generic-SFT ablation collapse to MCC
+$\approx 0$. Scored by `score_paper_persistence_taxonomy.py`.
+{#tab:persistence-taxonomy}
+
+The trained student's headline 0.83 survives the harder metrics: benign
+false-positive rate 0.000, precision 0.795, balanced accuracy 0.885, and
+MCC 0.758 — it fires on genuine third strikes and stays silent in benign
+contexts, rather than achieving recall by over-firing. It does fire prematurely on
+20% of two-strike (sub-threshold) contexts, which we report openly and analyze in
+§5.3.1. Every prompt-only condition and the generic-SFT ablation sit at
+MCC $\approx 0$: they do not fire at all, so the gap is not a threshold-placement
+difference but the presence or absence of the behavior.
 
 **The gap is not an artifact of zero-shot prompting.** Counting same-axis
 violations across turns is exactly the regime where in-context exemplars and
@@ -997,56 +992,41 @@ Persistent-Probe positives. Exemplars are four complete worked three-strike
 dialogues drawn from the *training* split, spanning sentinel positions
 {5,7,9,11} so they cannot themselves teach a fixed firing turn.
 
-**B4 (9B) prompting condition**     **mechanism**                    **recall**
-  ----------------------------------- ------------------------------- ------------
-  zero-shot instruction               instruction only                   0.025
-  \+ few-shot exemplars               4 worked 3-strike dialogues        0.013
-  \+ CoT output scaffold (no-think)   forced strike-tally in output      0.057
-  \+ native chain-of-thought          Qwen3.5 `/think` reasoning        **0.63**
-  A1 trained 0.8B (reference)         SFT                               **0.83**
+| **B4 (9B) prompting condition**   | **mechanism**                 | **recall** |
+| :-------------------------------- | :---------------------------- | :----- |
+| zero-shot instruction             | instruction only              | 0.025      |
+| \+ few-shot exemplars             | 4 worked 3-strike dialogues   | 0.013      |
+| \+ CoT output scaffold (no-think) | forced strike-tally in output | 0.057      |
+| \+ native chain-of-thought        | Qwen3.5 `/think` reasoning    | **0.63**   |
+| A1 trained 0.8B (reference)       | SFT                           | **0.83**   |
 
-  : **Persistence resists prompting up to, but not including, native
-  chain-of-thought --- and even that does not reach the trained
-  student.** Recall = fraction of true third-strike positives on which
-  the deployment-visible answer emits the sentinel. Few-shot exemplars
-  and an output-forced counting scratchpad leave the 9B teacher at
-  $\leq 0.06$ (no better than zero-shot). Only Qwen3.5's *native*
-  reasoning (`/think`) moves the needle, to 0.63 --- substantially
-  closing but not closing the gap to the trained 0.8B student (0.83).
-  The A1 reference recall is 0.83 (seed 42; three-seed mean
-  $0.85\pm0.04$ over 42/123/7, §4.8); the prompt-only-vs-trained gap
-  ($\leq 0.06$ / 0.63 vs 0.83) is far too large for seed variance to
-  close. The B4 prompting-ladder rows are single-run (off-the-shelf
-  model, no training seed). {#tab:persistence-prompting-ladder}
+: **Table 10. Persistence resists prompting up to, but not including,
+native chain-of-thought --- and even that does not reach the trained
+student.** Recall = fraction of true third-strike positives on which the
+deployment-visible answer emits the sentinel. Few-shot exemplars and an
+output-forced counting scratchpad leave the 9B teacher at $\leq 0.06$
+(no better than zero-shot). Only Qwen3.5's *native* reasoning (`/think`)
+moves the needle, to 0.63 --- substantially closing but not closing the
+gap to the trained 0.8B student (0.83). The A1 reference recall is 0.83
+(seed 42; three-seed mean $0.85\pm0.04$ over 42/123/7, §4.8); the
+prompt-only-vs-trained gap ($\leq 0.06$ / 0.63 vs 0.83) is far too large
+for seed variance to close. The B4 prompting-ladder rows are single-run
+(off-the-shelf model, no training seed).
+{#tab:persistence-prompting-ladder}
 
-<figure id="fig:failure" data-latex-placement="t">
-<img src="fig_failure.png" />
-<figcaption><strong>The two not-promptable behaviors.</strong>
-<em>Left</em>: on persistence, the 9B teacher stays at <span
-class="math inline"> ≤ 0.06</span> recall through few-shot and an output
-CoT scaffold; only native chain-of-thought moves it, to 0.63 — still
-below the trained student’s 0.83 (dashed). <em>Right</em>: on
-withholding, every prompt-only condition (including the 9B teacher,
-0.45) falls below the trained student’s 0.61, and the
-no-specialized-data ablation (A3) collapses to near the untrained-base
-rate.</figcaption>
-</figure>
+![**The two not-promptable behaviors.** *Left*: on persistence, the 9B teacher stays at $\le$ 0.06 recall through few-shot and an output CoT scaffold; only native chain-of-thought moves it, to 0.63 — still below the trained student’s 0.83 (dashed). *Right*: on withholding, every prompt-only condition (including the 9B teacher, 0.45) falls below the trained student’s 0.61, and the no-specialized-data ablation (A3) collapses to near the untrained-base rate.](paper/figures/fig_failure.png)
 
 Two costs make the native-CoT result a *relocation* of the boundary, not a
-refutation (Figure). First, **accuracy**: even with
-unrestricted reasoning the 9B teacher reaches 0.63 (100/159), still well
-below the trained 0.8B student's 0.83. Second, **inference cost and reliability**: the native reasoning block
-runs $\approx 1.6$–3.2k tokens per turn, and at a practical 4096-token budget
-roughly a third of responses either exhaust the budget inside `<think>` with
-no answer rendered, or conclude "fire" *within* the reasoning while the
-deployment-visible answer omits the sentinel. The model's reasoning reaches
-the correct fire decision in nearly all cases; *delivering* it as a usable
-marker at deployment budget is what fails. The trained student installs the
-behavior at 0.83 in one short turn with no inference-time reasoning. So the
-honest claim is: **persistence resists zero-shot and few-shot prompting
-outright, and is only partially recovered by native chain-of-thought — at an
-inference cost, and a reliability and accuracy deficit, that SFT removes.**
-We discuss the relocation in §6.2 and the cost trade-off in §6.3.
+refutation (Figure 4). First, **accuracy**: even with unrestricted
+reasoning the 9B teacher reaches only 0.63 (100/159), below the trained student's
+0.83. Second, **cost and reliability**: the reasoning block runs $\approx$1.6–3.2k
+tokens/turn, and at a practical 4096-token budget roughly a third of responses
+either exhaust the budget inside `<think>` or conclude "fire" within the reasoning
+while the deployment-visible answer omits the sentinel — the decision is reached,
+but *delivering* it at deployment budget is what fails. So the claim is:
+**persistence resists zero/few-shot prompting outright, and is only partially
+recovered by native chain-of-thought — at a cost and reliability deficit SFT
+removes** (§6.2–§6.3).
 
 ### 5.3.1 Trigger-position decorrelation result (bounded side-result)
 
@@ -1057,91 +1037,98 @@ the positional recall bias** — the fixed-turn design fires best at its trained
 turn 7 and degrades off-position (recall 0.56), while the 4-variant fires
 uniformly across positions (0.82) — but it **does not reduce premature firing**
 (0.208 vs 0.119). The reason is that at 0.8B the premature over-firing is
-*threshold-laxity*: it tracks accumulated violation count and conversation
-depth (peaking at turn 9, not the trained turn 7), so there is no positional
-shortcut for decorrelation to suppress. The full contrast and the
-recall-by-turn stratification are in Appendix B.6
-(Table and Table). We report the
-construction as *partially validated* and do not lean on it for the boundary
-claim; the robust, budget-independent result of this section is the
-persistence row of Figure: **persistence requires SFT.**
+*threshold-laxity*: it tracks accumulated violation count rather than a fixed
+turn position, so there is no positional shortcut for decorrelation to suppress.
 
-## 5.4 Not promptable II — pedagogical withholding
+**Strike count, not turn depth, drives the trained student's firing.** Because
+violation count and conversation depth are correlated in natural dialogue, we
+tested whether firing tracks the semantic strike count or merely conversation
+depth, using the existing premature probe, in which three depths (turns 3, 5, 7)
+each carry *both* one- and two-strike contexts
+(`scripts/score_paper_depth_count.py`). Holding depth fixed, adding the second
+strike raises the A1 student's firing at every shared depth (+0.12 at turn 3,
++0.18 at turn 5, +0.16 at turn 7). An item-level logistic model of firing on
+standardized depth and strike count (cluster-robust SE, n=318) finds the
+strike-count term strongly positive after adjusting for depth (count: $\beta=+2.55$,
+OR 12.8, $p=0.001$; depth: $\beta=+0.68$, OR 2.0, $p=0.0015$). So the trained
+student's firing tracks accumulated strike count over and above turn depth —
+evidence it learned three-strike tracking rather than a depth or position
+heuristic. The probe is not a fully balanced depth$\times$count grid, so we report
+this as an observational stratification on existing data and flag a purpose-built
+balanced grid (violation count $\{0,1,2,3\}\times$ depth $\{5,7,9,11,13,15\}$) as
+future work (§6). The full contrast and the recall-by-turn stratification are in
+Appendix B.6 (Table 17 and Table 18). We
+report the decorrelation construction as *partially validated* and do not lean on
+it for the boundary claim; the robust, budget-independent result of this section
+is the persistence row of Figure 3: **persistence is installed by
+SFT under the tested regimes.**
 
-The pedagogy axis tests whether the tutor *withholds* the answer and
-scaffolds instead of supplying it. The deployment prompt instructs this
-explicitly: "If the learner asks for a grammar rule, conjugation table,
-vocabulary list, or explanation, briefly acknowledge and give ONE short
-sentence or example, then continue — no bullet lists, no structured lesson"
-(§3.5). Withholding is scorable from the response alone (did the model give
-the answer, or hold it and scaffold?), so we report a **withholding rate**:
-the fraction of probes on which the model declined to supply the requested
-answer and instead scaffolded. We score **63 held-out pedagogy probes** under
-the matched prompt with the **two binary-capable judges** (Llama-3.1-8B and
-Gemma-2-9B; Prometheus emits only a rubric score, so it is excluded from this
-metric alone, §4.5). Table reports each judge's rate
-(over the full n=63) and their mean.
+## 5.4 Regime C, II — pedagogical withholding
 
-**Condition**         **demonstrated?**    **Llama-3.1**   **Gemma-2**   **mean**
-  --------------------- ------------------- --------------- ------------- -----------
-  A1 (full SFT)         yes                      0.571          0.651      **0.611**
-  A3 (no specialized)   no                       0.079          0.159        0.119
-  B1 0.8B-base          no                       0.127          0.048        0.087
-  B2 0.8B-instruct      no                       0.302          0.317        0.310
-  B3 4B-instruct        no                       0.286          0.302        0.294
-  B4 9B-teacher         no                       0.397          0.508        0.452
+The pedagogy axis tests whether the tutor *withholds* the answer and scaffolds
+instead of supplying it — instructed explicitly in the deployment prompt ("give ONE
+short sentence or example, then continue — no structured lesson", §3.5). We report
+a **withholding rate**: the fraction of probes on which the model declined to supply
+the requested answer and scaffolded instead. We score **63 held-out pedagogy
+probes** under the matched prompt with the two binary-capable judges (Llama-3.1-8B,
+Gemma-2-9B; Prometheus emits rubric-only output, §4.5).
+Table 11 reports each judge's rate and their mean.
 
-  : **Pedagogical withholding under a matched prompt (n=63, two
-  judges).** The instruction to withhold is present for every condition.
-  The trained student withholds at 0.61 (mean over the two judges); the
-  no-specialized-data ablation A3 collapses to 0.12, near the
-  untrained-base rate (B1, 0.09). Prompt-only models, including the 9B
-  teacher (0.45), withhold far less than the trained 0.8B student
-  despite the identical instruction. Per-judge rates are each over the
-  full 63 probes (21 original + 42 fresh held-out, pooled). Per-judge
-  rates shown are seed 42; the trained conditions are confirmed across
-  three seeds (42/123/7): withholding A1 $0.63\pm0.08$ vs A3
-  $0.13\pm0.01$, non-overlapping at every seed (§4.8). B1--B4 are
-  off-the-shelf and carry no training seed. {#tab:withholding}
+| **Condition**       | **demonstrated?** | **Llama-3.1** | **Gemma-2** | **mean**  |
+| :--------------------- | :-------------- | :--------- | :------- | :----- |
+| A1 (full SFT)       | yes               | 0.571         | 0.651       | **0.611** |
+| A3 (no specialized) | no                | 0.079         | 0.159       | 0.119     |
+| B1 0.8B-base        | no                | 0.127         | 0.048       | 0.087     |
+| B2 0.8B-instruct    | no                | 0.302         | 0.317       | 0.310     |
+| B3 4B-instruct      | no                | 0.286         | 0.302       | 0.294     |
+| B4 9B-teacher       | no                | 0.397         | 0.508       | 0.452     |
+
+: **Table 11. Pedagogical withholding under a matched prompt (n=63, two
+judges).** The instruction to withhold is present for every condition.
+The trained student withholds at 0.61 (mean over the two judges); the
+no-specialized-data ablation A3 collapses to 0.12, near the
+untrained-base rate (B1, 0.09). Prompt-only models, including the 9B
+teacher (0.45), withhold far less than the trained 0.8B student despite
+the identical instruction. Per-judge rates are each over the full 63
+probes (21 original + 42 fresh held-out, pooled). Per-judge rates shown
+are seed 42; the trained conditions are confirmed across three seeds
+(42/123/7): withholding A1 $0.63\pm0.08$ vs A3 $0.13\pm0.01$,
+non-overlapping at every seed (§4.8). B1--B4 are off-the-shelf and carry
+no training seed. {#tab:withholding}
 
 Two readings, separated by statistical weight at n=63:
 
 **Load-bearing (robustly significant): the A3 ablation.** A1 (0.571 Llama /
 0.651 Gemma) vs A3 (0.079 / 0.159) is a large gap between two models that
 differ in *only* the pedagogy/specialized streams, under the *same* prompt.
-A two-proportion test clears significance under **each judge separately**
-(Llama $z=5.9$, Gemma $z=5.6$; both $p\ll0.001$ at n=63). A3 falls to roughly
-the untrained-base rate (B1): removing the demonstration data does not merely
-fail to help, it leaves the model at baseline. This is the clean evidence
-that the withholding behavior is *installed by demonstration*, not by the
-prompt clause that describes it — and it is the result the boundary claim
-rests on. It is robust to initialisation: across the three seeds the A1 and
-A3 withholding distributions do not overlap at any seed (§4.8,
-Table).
+Because A1 and A3 are judged on the **same 63 prompts**, the outcomes are paired
+by item; we therefore use the **McNemar exact test** on the identical prompts
+(rather than an unpaired two-proportion test) plus a **paired bootstrap** over
+prompts (`scripts/score_paper_withholding_paired.py`). The paired test clears
+significance under **each judge separately** (Llama: 31 prompts A1-withholds /
+A3-does-not vs 0 the other way, exact $p=9.3\times10^{-10}$; Gemma: 35 vs 4,
+$p=3.4\times10^{-7}$), with a paired-bootstrap 95% CI on the rate difference of
+$[0.37, 0.62]$ (Llama) / $[0.33, 0.64]$ (Gemma) — both excluding zero. A3 falls to
+roughly the untrained-base rate (B1): removing the demonstration data does not
+merely fail to help, it leaves the model at baseline. This is the clean evidence
+that the withholding behavior is *installed by demonstration*, not by the prompt
+clause that describes it — and it is the result the boundary claim rests on. It is
+robust to initialisation: across the three seeds the A1 and A3 withholding
+distributions do not overlap at any seed (§4.8, Table 11).
 
 **Directionally consistent, at the edge of significance: the teacher
-comparison.** The strongest statement here is *absolute* and needs no
-comparison to the student: the 9B teacher, given the identical explicit
-instruction to withhold, complies on under half of probes (mean 0.452;
-Llama 0.397, Gemma 0.508). A model an order of magnitude larger than the
-student, told plainly to scaffold rather than answer, does so less than half
-the time — that alone is direct evidence withholding is not promptable. The
-trained 0.8B student withholds more (mean 0.611) under both judges and across
-both probe batches (original 21 and fresh 42), but this *comparative* gap
-only approaches per-judge significance (Llama $z=1.96$, $p\approx0.05$; Gemma
-$z=1.62$, $p\approx0.10$ — Gemma rates the teacher higher, narrowing it). We
-therefore rest the boundary claim on the teacher's absolute non-compliance
-and on the A3 ablation, and report the student-beats-teacher comparison as
-directional only — we do **not** assert a robustly significant size-beating
-result on this metric, and the boundary claim does not require it.
-
-**Why withholding resists prompting.** Scaffolding-instead-of-answering
-requires suppressing the model's strong general-assistant helpfulness prior:
-a clause can *describe* the suppression, but producing it reliably against
-the prior is what demonstration supplies (we develop this mechanism, and its
-counterpart for persistence, in §6.5). Withholding thus pairs with
-persistence (§5.3): both are fully specified in the prompt, both fail
-prompt-only, both are acquired by SFT.
+comparison.** The strongest statement here is *absolute*: the 9B teacher, given
+the identical explicit instruction to withhold, complies on under half of probes
+(mean 0.452; Llama 0.397, Gemma 0.508) — a model an order of magnitude larger than
+the student, told plainly to scaffold rather than answer, doing so less than half
+the time is itself direct evidence withholding is not prompt-elicited here. The
+trained student withholds more (0.611), but this *comparative* gap only approaches
+per-judge significance (Llama $z=1.96$; Gemma $z=1.62$). We therefore rest the
+claim on the teacher's absolute non-compliance and the A3 ablation, and report the
+student-beats-teacher comparison as directional only; the boundary claim does not
+require it. Both regime-C behaviors share a cause we develop in §6.5:
+scaffolding-instead-of-answering requires suppressing the model's strong
+helpfulness prior, which a clause can describe but demonstration supplies.
 
 ## 5.5 Why we do not report redirect-axis F1 as a primary metric
 
@@ -1157,49 +1144,48 @@ Appendix A as an evidenced negative result and score each capability with a
 matched instrument: sentinel firing (§5.3), withholding rate (§5.4),
 pairwise preference (§5.6), and mechanical leakage rates (§5.7).
 
-## 5.6 Promptable axes — type is prompted, quality is refined by data
+## 5.6 Regime B — type is prompt-elicitable, quality is data-refined
 
-On the promptable axes the behavior appears prompt-only (the type-F1
-ceiling, Appendix A). The remaining question is whether specialized data
-improves *quality*. We test it with a **quality-aware pairwise preference**:
-for each held-out probe, the repair produced by A1 (has the specialized
-stream) and by A3 (does not) are shown to a three-judge cross-family
-ensemble in randomized order; we report A1 win-rate. A1 and A3 are both
-SFT-only and differ in *only* the specialized streams, so a win is a clean
-specialized-data quality effect with no DPO and no prompt confound.
+The behavior *type* appears prompt-only on these axes (the type-F1 ceiling,
+Appendix A); the remaining question is whether specialized data improves *quality*.
+We test it with a **quality-aware pairwise preference**: for each held-out probe,
+the repairs from A1 and A3 are shown to a three-judge cross-family ensemble in
+randomized order and we report A1 win-rate. Both are SFT-only and differ in *only*
+the specialized streams, so a win is a clean specialized-data quality effect (no
+DPO, no prompt confound).
 
-**Axis**     **Llama**   **Prometheus**   **Gemma**   **mean**
-  ----------- ----------- ---------------- ----------- ----------
-  role_swap      0.83           0.78          1.00      **0.87**
-  language       0.57           0.86          0.81        0.75
-  locale         0.64           0.72          0.68        0.68
-  pedagogy       0.71           0.67          0.62        0.67
-  persona        0.55           0.61          0.68        0.61
-  topic          0.45           0.68          0.58        0.57
-  overall        0.61           0.71          0.71        ---
+| **Axis**  | **Llama** | **Prometheus** | **Gemma** | **mean** |
+| :--------------- | :-------- | :----------------- | :-------- | :------ |
+| role_swap | 0.83      | 0.78           | 1.00      | **0.87** |
+| language  | 0.57      | 0.86           | 0.81      | 0.75     |
+| locale    | 0.64      | 0.72           | 0.68      | 0.68     |
+| pedagogy  | 0.71      | 0.67           | 0.62      | 0.67     |
+| persona   | 0.55      | 0.61           | 0.68      | 0.61     |
+| topic     | 0.45      | 0.68           | 0.58      | 0.57     |
+| overall   | 0.61      | 0.71           | 0.71      | ---      |
 
-  : **Pairwise quality, A1 vs A3 (specialized stream vs none, both
-  SFT-only).** A1 win-rate; 0.5 is parity. Every axis favors A1.
-  role_swap is the largest effect (0.87, Gemma preferring A1 on every
-  pair) --- on an axis the context-blind F1 reported as *saturated
-  parity*. The F1 ceiling concealed a real, large quality effect.
-  Per-axis values shown are seed 42. Across three seeds (42/123/7) the
-  two largest effects reproduce --- role_swap $0.82\pm0.06$ and language
-  $0.76\pm0.06$ --- while the remaining axes cluster at 0.54--0.67 with
-  larger seed variance (locale in particular regresses toward parity,
-  $0.54\pm0.12$); we therefore lean only on role_swap and language. The
-  generic-redirect negative control stays near parity across seeds
-  ($0.53\pm0.05$, §4.8). {#tab:pairwise}
+: **Table 12. Pairwise quality, A1 vs A3 (specialized stream vs none,
+both SFT-only).** A1 win-rate; 0.5 is parity. Every axis favors A1.
+role_swap is the largest effect (0.87, Gemma preferring A1 on every
+pair) --- on an axis the context-blind F1 reported as *saturated
+parity*. The F1 ceiling concealed a real, large quality effect. Per-axis
+values shown are seed 42. Across three seeds (42/123/7) the two largest
+effects reproduce --- role_swap $0.82\pm0.06$ and language $0.76\pm0.06$
+--- while the remaining axes cluster at 0.54--0.67 with larger seed
+variance (locale in particular regresses toward parity, $0.54\pm0.12$);
+we therefore lean only on role_swap and language. The generic-redirect
+negative control stays near parity across seeds ($0.53\pm0.05$, §4.8).
+{#tab:pairwise}
 
-The headline is the reconciliation: **role-swap is promptable as *type*
-(every model deflects) yet shows the largest specialized-data *quality* win
-(0.87)** — on an axis the context-blind F1 called saturated parity.
-Promptability concerns whether the behavior appears at all; on the promptable
-axes it does, and specialized data additionally polishes it — a second level
-*beneath* the boundary, not in tension with it (prompt determines
-*acquisition*, data determines *quality*). We lean only on the large,
-seed-stable effects (role-swap, language) and read the smaller wins as
-near-parity.
+The headline is the reconciliation, and it is exactly regime **B**: **role-swap is
+prompt-elicitable as *type* (every model deflects) yet shows the largest
+specialized-data *quality* win (0.87)** — on an axis the context-blind F1 called
+saturated parity. This is why a binary promptable/not-promptable framing is
+inadequate for role-swap and topic: the behavior *type* is prompt-elicitable, but
+its deployment *quality* is data-refined. Promptability of the *type* determines
+whether the behavior appears at all; specialized data determines its quality — a
+distinct axis, not a contradiction. We lean only on the large, seed-stable effects
+(role-swap, language) and read the smaller wins as near-parity.
 
 **Negative control.** On the **generic** redirect stream, which *both* A1
 and A3 train on, the pairwise win-rate is 0.55 (33 win / 22 lose / 5 tie,
@@ -1209,29 +1195,30 @@ better" artifact but axis-specific data effects.
 
 ## 5.7 Locale and language (mechanical)
 
-**Locale fidelity is prompt-driven.** Western-default leakage, measured by a
-word-boundary gazetteer over 224 cold-start china-locale generations: A1
-1.34% (3/224), A3 0.89% (2/224), B1 1.34% — statistically
-indistinguishable. The ablation that *removes* the specialized locale stream
-(A3) does not leak more; locale adherence is carried by the one-line "ground
-cultural items in {country}" clause, not by the specialized data. This is a
-clean promptable-axis result and it **corrects** any claim that the locale
-stream drives fidelity. (The parity holds across three seeds: A1 leakage
+**Locale fidelity is prompt-driven — on the leakage dimension we measure.**
+Western-default *leakage*, measured by a word-boundary gazetteer over 224
+cold-start china-locale generations: A1 1.34% (3/224), A3 0.89% (2/224), B1 1.34%
+— statistically indistinguishable. The ablation that *removes* the specialized
+locale stream (A3) does not leak more; low-leakage locale adherence is carried by
+the one-line "ground cultural items in {country}" clause, not by the specialized
+data. We are explicit about what this metric does and does not capture: it
+measures *absence of out-of-locale (Western) entities*, which is not the same as
+*positive in-locale grounding* — a response can avoid all Western entities yet
+remain culturally generic. Our claim is therefore scoped to out-of-locale leakage;
+positive in-locale grounding, and the relevance/forcing trade-off, are a separate
+dimension we do not fully measure here (a two-dimension locale metric, validated on
+a human-labeled subset, is specified as future work, §6). Within that scope, this
+is a clean regime-A result that **corrects** any claim that the locale stream
+drives low leakage. (The parity holds across three seeds: A1 leakage
 $0.022\pm0.008$, A3 $0.016\pm0.007$ over 42/123/7 — both low and statistically
 indistinguishable, §4.8.)
 
-**Language is the one mechanical signal that may favor data.** On the
-context-dependent mechanical scores (L1-acknowledge-and-return for language;
-gazetteer for locale; subtopic-adherence for topic; all n$\leq 25$ and so
-underpowered), only language shows a sizable gap: A1 0.71 vs A3 0.33. We
-report it as suggestive and underpowered, consistent with the language
-pairwise win (0.75, Table); locale and topic are
-near-parity, consistent with §5.7's leakage result and the topic pairwise.
-
-We do not report naturalness (a 1–5 judged quality rating): the only figures
-we had were collected on an SFT+DPO checkpoint, whereas every condition here
-is SFT-only, and we prefer to omit the comparison rather than mix recipes. The
-boundary results do not depend on it.
+On the context-dependent mechanical scores (all n$\leq 25$ and so underpowered),
+only language shows a sizable gap (A1 0.71 vs A3 0.33), which we report as
+suggestive only, consistent with its pairwise win (0.75); locale and topic are
+near-parity. We omit a naturalness rating (the only figures available were on an
+SFT+DPO checkpoint, and every condition here is SFT-only); the boundary results do
+not depend on it.
 
 
 
@@ -1239,20 +1226,18 @@ boundary results do not depend on it.
 
 ## 6.1 Statistical rigor: seeds and small probe counts
 
-The load-bearing conditions A1 and A3 are reported over **three seeds**
-(42, 123, 7); others are single-seed (§4.8). The three-seed statistics
-confirm the judged results are not initialisation artifacts: withholding A1
-$0.63\pm0.08$ vs A3 $0.13\pm0.01$ (non-overlapping at every seed), A1
-persistence recall $0.85\pm0.04$. The headline mechanical persistence result —
-prompt-only $\leq 0.06$ and A3 exactly 0.000 vs trained recall $\geq 0.83$ —
-is far too large to be a seed artifact. Where the judged metrics are more
-fragile we flag it: the withholding A1-vs-A3 contrast clears significance under
-each judge (Llama $z=5.9$, Gemma $z=5.6$), so the *necessity* claim is robust,
-but the A1-vs-9B-teacher contrast is only at the edge (Llama $z=1.96$, Gemma
-$z=1.62$) and is reported as directional (§5.4); the context-dependent
-mechanical scores are n$\leq 25$ (suggestive, §5.7); and the pairwise eval
-leans only on the large effects (role-swap 0.87, language 0.75). No *boundary*
-conclusion rests on an underpowered comparison.
+The load-bearing conditions A1 and A3 are reported over **three seeds** (42, 123,
+7); others are single-seed (§4.8). The three-seed statistics confirm the judged
+results are not initialisation artifacts: withholding A1 $0.63\pm0.08$ vs A3
+$0.13\pm0.01$ (non-overlapping at every seed), A1 persistence recall
+$0.85\pm0.04$; and the mechanical persistence result (prompt-only $\leq 0.06$ / A3
+0.000 vs trained $\geq 0.83$) is far too large to be a seed artifact. Where the
+judged metrics are more fragile we flag it: the withholding A1-vs-A3 contrast is
+significant under each judge (paired McNemar $p<10^{-6}$), so the *necessity* claim
+is robust, but the A1-vs-9B-teacher contrast is only at the edge and reported as
+directional (§5.4); the context-dependent scores are n$\leq 25$ (§5.7); and the
+pairwise eval leans only on the large effects. No *boundary* conclusion rests on an
+underpowered comparison.
 
 ## 6.2 Threats to validity
 
@@ -1260,7 +1245,7 @@ conclusion rests on an underpowered comparison.
 the complete zero-shot deployment instruction (§3.5). The natural objection —
 persistence is a counting task, exactly where exemplars and CoT should help,
 so zero-shot is too weak — we met with the full prompting ladder on the 9B
-teacher (§5.3, Table): few-shot and an
+teacher (§5.3, Table 10): few-shot and an
 output scaffold do not help, and only native CoT partially recovers recall,
 still short of the trained student and at heavy inference cost. So the
 persistence claim is precisely "resists zero-shot and few-shot prompting
@@ -1272,16 +1257,21 @@ failure alone.
 
 **Turn-depth and violation-count are entangled in Persistent-Premature-Probe.**
 The probe varies both the premature turn and the number of prior violations
-(vc$\in\{1,2\}$), but not orthogonally: a shallow turn can only carry vc=1 and
-only deep turns reach vc=2, so the aggregate by-turn premature curve conflates
-a violation-count effect with any turn-position effect. Re-slicing within each
-vc stratum (Appendix B.6) shows the premature rise is driven by accumulated
-violation count and conversation depth — peaking at turn 9, not the trained
-turn 7 — rather than by a turn-position shortcut; but the within-vc curves are
-not flat either, so a residual depth component remains that this probe cannot
-cleanly separate from position. A definitive separation needs a future probe
-that crosses turn-depth with violation count orthogonally. We flag the
-entanglement rather than over-read the by-turn axis.
+(vc$\in\{1,2\}$). They are correlated in natural dialogue, so the aggregate
+by-turn premature curve could conflate a violation-count effect with a
+turn-position effect. We partially separate them using the overlap structure the
+probe *does* have — three depths (turns 3, 5, 7) each carry both vc=1 and vc=2 —
+and find that, holding depth fixed, adding the second strike raises the trained
+student's firing at every shared depth, and an item-level logistic model gives a
+strongly positive strike-count coefficient after adjusting for depth (count OR
+12.8, $p=0.001$; depth OR 2.0, $p=0.0015$; §5.3.1). So the effect tracks
+accumulated strike count over and above depth, consistent with learned
+three-strike tracking rather than a pure turn-position shortcut. This remains an
+observational stratification, not a matched factorial: a residual depth component
+is present, and a definitive separation needs a purpose-built probe crossing turn
+depth $\{5,7,9,11,13,15\}$ with violation count $\{0,1,2,3\}$ orthogonally, which
+we specify as future work. We report the depth-adjusted result and flag the
+remaining entanglement rather than over-read the by-turn axis.
 
 **Single family (a real limitation) and single locale (a scope note, not a
 threat).** All experiments use a Qwen-family base and teacher at
@@ -1291,37 +1281,35 @@ trainable-but-not-promptable could plausibly shift with a family's
 instruction-following and in-context-learning strength. We therefore ran a
 two-part cross-family check on the **Llama** family — a prompt-only probe at
 8B and a *trained* student at 1B — and both confirm the boundary's *direction*
-holds outside Qwen. Table collects the persistence
+holds outside Qwen. Table 13 collects the persistence
 recall.
 
-**Model**      **Condition**                     **Persist. recall**       **Withhold rate**
-  -------------- ---------------------------- ----------------------------- -------------------
-  Qwen-0.8B      prompt-only (9B teacher)      $\leq$`<!-- -->`{=html}0.06      0.09--0.45
-  (in-family)    trained (A1)                          0.83--0.85                  0.61
-  Llama-3.1-8B   prompt-only, zero-shot                   0.27                  0.22--0.32
-                 prompt-only, prompted CoT                0.55                      ---
-  Llama-3.2-1B   prompt-only (untrained)                  0.25                     0.11
-                 **trained, full SFT (A1)**             **0.91**                 **0.50**
+| **Model** | **Condition** | **Persist. recall** | **Withhold rate** |
+| :----------- | :------------------------ | :------------------------ | :------------ |
+| Qwen-0.8B | prompt-only (9B teacher) | $\leq$ 0.06 | 0.09--0.45 |
+| (in-family) | trained (A1) | 0.83--0.85 | 0.61 |
+| Llama-3.1-8B | prompt-only, zero-shot | 0.27 | 0.22--0.32 |
+|  | prompt-only, prompted CoT | 0.55 | --- |
+| Llama-3.2-1B | prompt-only (untrained) | 0.25 | 0.11 |
+|  | **trained, full SFT (A1)** | **0.91** | **0.50** |
 
-  : **The boundary replicates in a second trained family.** On *both*
-  not-promptable behaviors, training the *same* Llama-3.2-1B-Instruct
-  base --- evaluated against its own untrained control under the
-  identical deployment prompt --- lifts the behavior far above
-  prompt-only: persistence recall $0.25\!\to\!0.91$, withholding
-  $0.11\!\to\!0.50$ (two judges). Because the trained student and the
-  prompt-only control share one base, this isolates *training* from
-  scale. The 8B prompt-only rows show the behavior stays low even for a
-  much larger model. Direction is robust across families; magnitude is
-  family-dependent (the Llama trained withholding 0.50 is below Qwen's
-  0.61). {#tab:crossfamily}
+: **Table 13. The boundary replicates in a second trained family.** On
+*both* not-promptable behaviors, training the *same*
+Llama-3.2-1B-Instruct base --- evaluated against its own untrained
+control under the identical deployment prompt --- lifts the behavior far
+above prompt-only: persistence recall $0.25\!\to\!0.91$, withholding
+$0.11\!\to\!0.50$ (two judges). Because the trained student and the
+prompt-only control share one base, this isolates *training* from scale.
+The 8B prompt-only rows show the behavior stays low even for a much
+larger model. Direction is robust across families; magnitude is
+family-dependent (the Llama trained withholding 0.50 is below Qwen's
+0.61). {#tab:crossfamily}
 
-This is the load-bearing generalization result (Table):
-because the trained Llama-1B student and its prompt-only control share one
-base, the contrast isolates *training* from scale rather than the size
-comparison an 8B-vs-0.8B probe would be, and it holds on *both*
-not-promptable behaviors. The 8B prompt-only rows confirm the gap is not
-closed by scale alone (persistence 0.27→0.55 even with CoT). The central
-claim is therefore not a Qwen artifact.
+This is the load-bearing generalization result (Table 13):
+because the trained Llama-1B student and its prompt-only control share one base,
+the contrast separates *training from scale within that base*, and it holds on both
+regime-C behaviors; the 8B prompt-only rows confirm the gap is not closed by scale
+alone (persistence 0.27$\rightarrow$0.55 even with CoT), so the effect is not a Qwen artifact.
 
 Two honest qualifications, neither of which touches the direction. First,
 **magnitude is family-dependent**: the Llama trained withholding (0.50) sits
@@ -1329,27 +1317,21 @@ below the Qwen student's (0.61), and Llama attains markedly more *prompt-only*
 persistence than the Qwen teacher ($\leq 0.06$), so the gap's sharpness varies by
 family even though its sign (training $>$ prompting) does not. Second, an
 **instruct-checkpoint asymmetry**: the Llama student trains from
-Llama-3.2-1B-*Instruct*, whereas the Qwen student trains from a base checkpoint,
-because Llama-3.2-1B-*Base* could not learn to emit the rare turn-end token under
-LoRA-SFT (its post-turn distribution stays near-uniform, producing
-non-terminating generations) — a finding that itself echoes the paper's
-rare-token theme. We report the instruct-based student as the working
-cross-family analogue and flag the asymmetry. Broader replication (a third
-family, a base-checkpoint student, multi-locale) remains future work (§6.3).
+Llama-3.2-1B-*Instruct* (the Qwen student trains from a base checkpoint), because
+Llama-3.2-1B-*Base* could not learn the rare turn-end token under LoRA-SFT — itself
+an echo of the paper's rare-token theme. We flag this asymmetry; broader
+replication (a third family, a base-checkpoint student, multi-locale) is future
+work (§6.3).
 
-**Locale, by contrast, does not threaten the central boundary.** The
-load-bearing claims —
-persistence (firing on the third same-axis violation) and withholding
-(scaffolding instead of answering) — are *structural* behaviors: cross-turn
-violation counting and the suppression of a strong answer prior, respectively.
-Neither mechanism depends on the locale backdrop of the dialogues, so there is
-no route by which "which behaviors are promptable" would change across
-locales. Single-locale bounds only two secondary things: (i) the generality of
-the *locale-fidelity axis* result — one of the already-promptable axes — and
-(ii) the `locale_judge` gazetteer, which is locale-specific and treated as
-pipeline engineering (§6.4). Multi-locale repeats would therefore broaden the
-promptable-axis surface, not shore up the persistence/withholding claim, which
-is locale-independent by construction.
+**Locale is a scope limitation we hedge rather than dismiss.** The regime-C claims
+are *structural* behaviors (cross-turn violation counting; suppression of an answer
+prior) whose formal triggers contain no locale-specific variables, so we
+*hypothesize* they are less locale-dependent than the redirect axes. But empirical
+behavior can still vary with cultural context and learner profile, so single-locale
+evaluation limits external validity — we do not claim locale-independence as
+established. It most directly bounds the locale-fidelity axis result and the
+locale-specific `locale_judge` gazetteer (§6.4); a limited multi-locale check is
+future work (§6.3).
 
 **Judging.** The withholding criterion is binary (withheld vs answered), far
 less subjective than a 1–5 rubric, and the pairwise ensemble
@@ -1361,27 +1343,45 @@ to near zero, and the mechanical metrics are judge-free.
 
 ## 6.3 What we would do with more compute, in priority order
 
-1. **Broader cross-family replication.** The trained non-Qwen student is now
-   done — a Llama-3.2-1B student on the existing teacher-distilled corpus
-   confirms the persistence boundary holds outside Qwen (§6.2, full-SFT recall
-   0.91 vs matched prompt-only 0.25). What remains is *breadth*: a third family
-   (e.g.\ Gemma), a base-checkpoint Llama student (the current one trains from
-   the instruct checkpoint, since Llama-3.2-1B-Base could not learn the turn-end
-   token under LoRA-SFT), and multi-locale repeats.
-2. **Larger-scale decorrelation.** Test at 4B/7B, where the positional route
-   is cheaper relative to the semantic one, so a genuine positional component
-   of premature firing — and thus a decorrelation benefit on it — may emerge
-   (§5.3.1).
-3. **Further power the pedagogy teacher comparison.** A larger probe set plus
-   a third *binary-capable* judge (Prometheus's rubric-only output
-   disqualifies it) would let the trained-vs-teacher withholding gap be
-   claimed as robustly significant rather than directional (§5.4). The
-   boundary claim does not depend on it.
-4. **Tighten the native-CoT persistence number.** A larger reasoning-token
-   budget would separate "cannot count" from "truncated before the sentinel
-   rendered" — our data suggest the latter dominates (§5.3), which would
-   sharpen the claim that the failure is *delivery at deployment budget*, not
-   counting capability.
+These are the experiments that would most strengthen the causal and
+external-validity story; the first three directly address the strongest
+open threats and would be run before broadening scope.
+
+1. **Budget-matched leave-one-stream-out ablations.** The A1-vs-A3 contrast
+   removes *several* streams at once (A3 = normal + generic-redirect only), and
+   A1 has more records than A3, so it cannot cleanly attribute a capability
+   effect to a *single* stream. The clean design is a leave-one-out per headline
+   capability — A1-minus-pedagogy, A1-minus-persistence, A1-minus-role-swap —
+   holding the training budget constant (matched total tokens / optimizer steps,
+   or replacing the removed examples with an equal number of generic examples of
+   similar length). The defensible claim would then be: *removing only capability
+   X, at fixed budget, causes the capability-X metric to fall.*
+2. **Human validation of the judged metrics.** The withholding and pairwise
+   results currently rely on LLM judges. A blinded human study on 100--200 items
+   — a four-class withholding rubric (direct answer / partial answer /
+   hint-scaffold / other) and the strongest pairwise effects (role-swap 0.87) —
+   reporting human--human and judge--human agreement (Cohen's $\kappa$ /
+   Krippendorff's $\alpha$) and A/B-order/position-bias controls, would calibrate
+   the judges. We provide the rubric and protocol (Appendix); the calibration
+   itself is future work.
+3. **Orthogonal depth$\times$violation-count probe.** A balanced grid crossing
+   turn depth $\{5,7,9,11,13,15\}$ with violation count $\{0,1,2,3\}$ across all
+   four axes would settle the depth-vs-count question directly; §5.3.1 shows count
+   survives depth on the existing (unbalanced) probe, but a matched grid is the
+   clean test.
+4. **Out-of-distribution robustness set.** An independent OOD probe set
+   (human-authored scenarios, a different generator family, paraphrases, unseen
+   topics, additional locales; even 100--200 probes) would separate in-distribution
+   held-out performance from genuine OOD robustness — the synthetic train/eval
+   distributions are close despite the seed-level split (§4).
+5. **Higher-precision teacher control.** The strongest prompt-only baseline is a
+   4-bit-quantized 9B teacher; a Q8/BF16 control on a persistence subset would
+   confirm the prompt-only gap is not an artifact of aggressive quantization.
+6. **Broader cross-family replication and larger-scale decorrelation.** A third
+   family (e.g.\ Gemma), a base-checkpoint Llama student, and 4B/7B decorrelation
+   (§5.3.1), plus a larger reasoning-token budget to separate "cannot count" from
+   "truncated before the sentinel rendered" in the native-CoT persistence number
+   (§5.3).
 
 We name these so a reviewer's "what about X" is met with a concrete plan.
 
@@ -1397,33 +1397,25 @@ the entity-extractor rejection log, since a filter driving ~57% of rejections
 — most of them good — can halve a corpus before anyone inspects them. This
 generalises to any capitalization-based entity filter.
 
-## 6.5 Why some capabilities are promptable and others are not
+## 6.5 Mechanistic hypotheses suggested by the results
 
-Our results do more than report *that* the boundary exists; the pattern of
-which behaviors fall on which side suggests *why*. A behavior is
-**promptable** when a single clause both *describes and elicits* it — the
-capability already lives in the model's prior, and the clause merely
-*selects* it. Locale fidelity, role-swap deflection, and topic re-anchoring
-are all of this kind: the pretrained model can produce an in-locale
-reference or an in-character deflection unprompted, and the deployment
-clause only has to point at the behavior it already has. Consistent with
-this, prompt-only models reach parity on these axes and A3 (which drops the
-specialized streams) does not leak more locale entities than A1 (§5.7) —
-there is no gap for demonstration to close.
+The pattern of which behaviors fall in which regime suggests *why*. We frame these
+as *hypotheses* the data are consistent with, not proven mechanisms — a transformer
+can infer a count without an explicit external counter, so these are the most
+direct reading of the evidence, not the only one. A behavior is **prompt-elicitable**
+when a clause both *describes and elicits* it — the capability already lives in the
+prior and the clause merely *selects* it (locale, role-swap, topic: the pretrained
+model can produce these unprompted, so prompt-only reaches parity and there is no
+gap for demonstration to close).
 
-A behavior is **not promptable** when the clause names something the prior
-cannot supply on demand, and we see two distinct failure modes. The first is
-**missing cross-turn state**: persistence requires counting same-axis
-violations across turns and firing on the third, but a single forward pass
-maintains no such counter, so the clause describes a state machine the model
-does not run. The diagnostic evidence is that *native* chain-of-thought —
-which externalizes the count into tokens — partially recovers persistence
-(0.06→0.63, §5.3) where few-shot and an output scaffold do not: give the
-model a scratchpad to hold the state and it can count; leave the counting
-implicit and it cannot. The second is **overriding a competing prior**:
-withholding requires suppressing the strong general-assistant helpfulness
-reflex, and a clause that says "scaffold, don't answer" competes with a prior
-the model weights toward heavily. The diagnostic evidence is that ablating
+A behavior is **training-dependent (under the tested regimes)** when the clause
+names something the prior does not supply on demand, via two failure modes. First,
+**missing cross-turn state**: persistence requires counting same-axis violations
+and firing on the third, but a single forward pass maintains no such counter — and
+the diagnostic is that *native* chain-of-thought, which externalizes the count,
+partially recovers persistence (0.06$\rightarrow$0.63, §5.3) where few-shot and an output
+scaffold do not. Second, **overriding a competing prior**: withholding requires
+suppressing the strong helpfulness reflex, and the diagnostic is that ablating
 the pedagogy demonstrations (A3) collapses withholding to the untrained-base
 rate (§5.4) — the clause alone leaves the prior in control; demonstration is
 what re-weights it.
@@ -1441,22 +1433,27 @@ families) is future work, and would also explain the family-dependent
 
 # 7. Conclusion
 
-We asked, per capability, which behaviors a deployed tutor needs can be
-elicited by an explicit system prompt and which must be demonstrated through
-fine-tuning. Evaluating a fine-tuned 0.8B student and a ladder of prompt-only
-baselines up to a 9B teacher **under the same fully-specified deployment
-prompt**, we find a sharp and interpretable boundary. Behaviors a single
-clause elicits reach prompt-only parity (locale fidelity, role-swap and topic
-deflection). Behaviors the prompt *describes but cannot install* do not:
-persistence resists zero-shot and few-shot prompting (recall $\leq 0.06$),
-recovers only partially under native chain-of-thought (0.63, below the trained
-0.83 and at heavy inference cost), and fires 0.000 for the no-data ablation;
-withholding stays at 0.09–0.45 prompt-only against the trained student's 0.61,
-collapsing to baseline when the pedagogy stream is removed. The line is
-interpretable — promptable when one clause both describes *and* elicits, not
-promptable when the behavior needs cross-turn state-tracking or the
-suppression of a strong competing prior. Mapping this boundary under a
-matched-prompt protocol is the paper's contribution.
+We asked, per capability, which behaviors a deployed tutor needs are elicited by
+an explicit system prompt and which are installed by fine-tuning. Evaluating a
+fine-tuned 0.8B student and a ladder of prompt-only baselines up to a 9B teacher
+**under the same fully-specified deployment prompt**, and under the tested
+small-model and prompting regimes, we find the behaviors separate into **three
+operational regimes** rather than a binary. *(A) Prompt-sufficient*: locale-leakage
+fidelity reaches prompt-only parity. *(B) Prompt-elicitable but data-refinable*:
+role-swap and topic re-anchoring appear prompt-only as a type, yet specialized data
+wins the pairwise quality comparison (role-swap 0.87) on an axis the context-blind
+F1 called saturated parity. *(C) Training-dependent under the tested regimes*:
+persistence resists zero-shot and few-shot prompting (recall $\leq 0.06$), recovers
+only partially under native chain-of-thought (0.63, below the trained 0.83 and at
+heavy inference cost), and fires 0.000 for the no-persistence-data ablation, while
+withholding stays at 0.09–0.45 prompt-only against the trained student's 0.61
+(paired tests), collapsing to baseline when the specialized streams are removed.
+Concretely: across the tested small-model regimes, explicit prompt clauses were
+sufficient to elicit several redirect types, whereas reliable three-strike
+persistence and pedagogical withholding required specialized SFT; native reasoning
+partially closed the persistence gap but remained less reliable and substantially
+more expensive at inference time. Mapping these regimes under a matched-prompt
+protocol is the paper's contribution.
 
 Reaching it cleanly required retiring the conventional context-blind
 redirect-axis F1 — a *type* classifier that ties a 0.8B student with a 9B
@@ -1471,14 +1468,16 @@ shortcut.
 
 All experiments run on a single RTX 3060 12GB GPU — the regime where the
 boundary matters most, telling a deployer of a small model which behaviors a
-prompt gives for free and which require the pipeline. The boundary already
-replicates in a second trained family (a Llama-3.2-1B student, §6.2); the open
-edges, in priority order (§6.3): **broader cross-family replication** (a third
-family, a base-checkpoint student, multi-locale); **larger-scale
-decorrelation**; a **better-powered pedagogy teacher comparison**; and transfer
-of the matched-prompt methodology to other rare, semantically-triggered markers
-(refusal-token and tool-call emission), where the same "describable but not
-promptable" question applies.
+prompt gives for free and which require the pipeline. The regime-C effects already
+replicate in direction in a second trained family (a Llama-3.2-1B student, §6.2);
+the open edges, in priority order (§6.3): **budget-matched leave-one-stream-out
+ablations** to attribute each capability effect to a single stream; **human
+validation** of the judged withholding and pairwise metrics; an **orthogonal
+depth$\times$violation-count probe**; an **out-of-distribution robustness set**; a
+**higher-precision teacher control**; and broader cross-family/multi-locale
+replication — plus transfer of the matched-prompt methodology to other rare,
+semantically-triggered markers (refusal-token and tool-call emission), where the
+same "describable but not reliably promptable" question applies.
 
 ## Limitations
 
@@ -1489,10 +1488,11 @@ We surface the limitations detailed in §6.1–§6.2 here for visibility.
   Llama-3.2-1B student (persistence recall 0.91 vs 0.25 for the same untrained
   base, §6.2). Remaining breadth (a third family, a base-checkpoint Llama
   student, multi-locale) is future work.
-- **Single locale** (`china`) — does not threaten the central boundary
-  (persistence and withholding are locale-independent structural behaviors,
-  §6.2), but the locale-fidelity axis result and the `locale_judge` gazetteer
-  are locale-specific.
+- **Single locale** (`china`) — persistence and withholding are *hypothesized*
+  to be less locale-dependent (their triggers contain no locale variables), but
+  single-locale evaluation still limits external validity and we do not claim
+  locale-independence as established (§6.2); the locale-fidelity axis result and
+  the `locale_judge` gazetteer are locale-specific.
 - **Judged-metric power** — the trained-vs-teacher withholding gap is
   *directional* (edge of per-judge significance); the strong claim is the
   teacher's absolute sub-50% compliance. Context-dependent mechanical scores
@@ -1527,13 +1527,6 @@ of the underlying open base model.
 
 
 
-## Code and Data Availability
-
-Code, training/evaluation scripts, configuration, and the synthetic training/evaluation datasets are available at <https://github.com/cch-ai922/tutor-train>. Model weights and large training outputs are not included; the base model is Qwen3.5-0.8B-Base. The released datasets are model-generated (teacher-distilled) and contain no personal data.
-
-
-
-
 # Appendix
 
 ## A. Macro-F1 over redirect axes: computed and shown to be uninformative
@@ -1550,27 +1543,26 @@ The redirect-axis judge is context-blind by design (§4.3): it labels the
 produced response with a single axis without seeing the violation, topic,
 roles, or locale. This makes F1 a *type* classifier — it asks "does this
 response read as the correct axis of repair?" — not a *quality* measure. The
-consequence is a bimodal per-axis F1 (Table)
+consequence is a bimodal per-axis F1 (Table 14)
 that floors on axes whose correct repair has no context-free surface form
 and ceilings on axes where every model produces a classifiable response.
 
-**Axis**            **Per-axis F1 range**         **Behaviour**
-  ----------- ------------------------------------- ------------------------------------------------------
-  language     $\approx 0.375$ (7 of 9 conditions)  near-constant; does not move with model quality
-  locale                   0.19--0.39               compressed near floor
-  generic                 0.087--0.275              compressed; 9B teacher *tied for lowest*
-  persona                  0.68--0.82               high, with real spread
-  role_swap                0.71--0.86               high, with real spread
-  pedagogy                  mid-range               the only axis both judge-scorable and discriminating
+| **Axis** | **Per-axis F1 range** | **Behaviour** |
+| :-------- | :---------------------------------- | :--------------------------------------------------- |
+| language | $\approx 0.375$ (7 of 9 conditions) | near-constant; does not move with model quality |
+| locale | 0.19--0.39 | compressed near floor |
+| generic | 0.087--0.275 | compressed; 9B teacher *tied for lowest* |
+| persona | 0.68--0.82 | high, with real spread |
+| role_swap | 0.71--0.86 | high, with real spread |
+| pedagogy | mid-range | the only axis both judge-scorable and discriminating |
 
-  : **Per-axis redirect F1 is bimodal.** The context-dependent axes
-  (language, locale, generic) floor near a structural minimum for
-  *every* condition because the context-blind judge cannot score them
-  from the response alone; the self-contained axes (persona, role_swap)
-  ceiling because every model produces a classifiable repair of the
-  correct type. Only pedagogy sits in a discriminating mid-range. A
-  macro-average mixes a floored instrument with a ceilinged one.
-  {#tab:macro-f1-bimodal}
+: **Table 14. Per-axis redirect F1 is bimodal.** The context-dependent
+axes (language, locale, generic) floor near a structural minimum for
+*every* condition because the context-blind judge cannot score them from
+the response alone; the self-contained axes (persona, role_swap) ceiling
+because every model produces a classifiable repair of the correct type.
+Only pedagogy sits in a discriminating mid-range. A macro-average mixes
+a floored instrument with a ceilinged one. {#tab:macro-f1-bimodal}
 
 The macro-average over these axes is consequently flat across conditions of
 very different quality: A1 $=$ 0.409, B2 $=$ 0.408, and the 9B teacher B4 $=$
@@ -1651,33 +1643,22 @@ stream must use an absolute target, or the equation has no solution.
 ### B.2 Six-filter cascade
 
 After each generation pass, dialogues flow through six filters
-(Table) in a short-circuit cascade ordered
+(Table 15) in a short-circuit cascade ordered
 cheap-and-high-catch first, so most rejections occur before the expensive
 LLM-judge filter is consulted.
 
-::: table*
-  ------------------------------------------------------------------------------
-   **\#**  **Filter**           **Cost**     **Catches**
-  -------- -------------------- ------------ -----------------------------------
-     1     `speaks_l1_sanity`   mechanical   Degenerate speaks_l1 records
-                                             lacking the L1 code-switch turn
+| **\#** | **Filter** | **Cost** | **Catches** |
+| :-- | :--------------- | :------------------- | :-------------------------------------------------------------------- |
+| 1 | `speaks_l1_sanity` | mechanical | Degenerate speaks_l1 records lacking the L1 code-switch turn |
+| 2 | `non_latin_script` | mechanical | Non-Latin characters in assistant or non-language_redirect user turns |
+| 3 | `banned_terms` | mechanical | Politics, religion, self-harm, and locale-sensitive vocabulary |
+| 4 | `mode_consistency` | mechanical | `EvaluationExample` records whose JSON body fails schema validation |
+| 5 | `naturalness` | mechanical heuristic | Stilted, low-perplexity, repetitive prose |
+| 6 | `locale_judge` | LLM call | Out-of-locale entities (NYC, Thanksgiving, Costco, etc.) |
 
-     2     `non_latin_script`   mechanical   Non-Latin characters in assistant
-                                             or non-language_redirect user turns
-
-     3     `banned_terms`       mechanical   Politics, religion, self-harm, and
-                                             locale-sensitive vocabulary
-
-     4     `mode_consistency`   mechanical   `EvaluationExample` records whose
-                                             JSON body fails schema validation
-
-     5     `naturalness`        mechanical   Stilted, low-perplexity, repetitive
-                                heuristic    prose
-
-     6     `locale_judge`       LLM call     Out-of-locale entities (NYC,
-                                             Thanksgiving, Costco, etc.)
-  ------------------------------------------------------------------------------
-:::
+: **Table 15. Six-filter cascade.** Filters 1--4 are deterministic and
+cheap; filter 5 is a heuristic with no model call; filter 6 is the only
+LLM-judge filter and runs last. {#tab:filter-cascade}
 
 Filter 6, the `locale_judge`, extracts proper-noun entities from each record and
 asks the teacher to classify each as `in_locale` or `out_of_locale`; verdicts are
@@ -1718,21 +1699,21 @@ records with the wrong teacher.
 ### B.5 Persistent 4-variant design, codomain, and hash-determinism
 
 Each persistent dialogue uses one of four structural variants
-(Table); every variant holds the trigger at exactly three
+(Table 16); every variant holds the trigger at exactly three
 strikes and varies only the lead-in scaffolding, shifting the sentinel to a
 different absolute turn without changing what the model must detect.
 
-**Variant**   **Sentinel turn**  **Lead-in**      **Strike turns**   **Probe turns**
-  ------------- ------------------- ---------------- ------------------ -----------------
-       V1                5          0 turns          0, 2, 4            1, 3
-       V2                7          2 (turns 0--1)   2, 4, 6            3, 5
-       V3                9          4 (turns 0--3)   4, 6, 8            5, 7
-       V4               11          6 (turns 0--5)   6, 8, 10           7, 9
+| **Variant** | **Sentinel turn** | **Lead-in** | **Strike turns** | **Probe turns** |
+| :------ | :------------- | :-------------- | :------------ | :----------- |
+| V1 | 5 | 0 turns | 0, 2, 4 | 1, 3 |
+| V2 | 7 | 2 (turns 0--1) | 2, 4, 6 | 3, 5 |
+| V3 | 9 | 4 (turns 0--3) | 4, 6, 8 | 5, 7 |
+| V4 | 11 | 6 (turns 0--5) | 6, 8, 10 | 7, 9 |
 
-  : **The four structural variants of the persistent 3-strike streams.**
-  Sentinel turn and lead-in length vary; variant is hash-deterministic
-  per record. Strike turns are user turns; probe and sentinel turns are
-  assistant turns. {#tab:variants}
+: **Table 16. The four structural variants of the persistent 3-strike
+streams.** Sentinel turn and lead-in length vary; variant is
+hash-deterministic per record. Strike turns are user turns; probe and
+sentinel turns are assistant turns. {#tab:variants}
 
 The four sentinel positions {5, 7, 9, 11} and the seeded (rather than
 `random.choice`) variant assignment of §3.4 are both forced, not chosen for
@@ -1762,35 +1743,34 @@ and persistent data fixed, so position design is the only variable (to match
 A5's 1-epoch budget we use the 1-epoch variant of A1; the deployed A1 trains 2
 epochs, §4.4).
 
-**Cond**       **position design**     **recall**   **premature**
-  -------------- ---------------------- ------------ ---------------
-  A1 (1 epoch)   4-variant {5,7,9,11}      0.818          0.208
-  A5             fixed-turn-7              0.560          0.119
+| **Cond**     | **position design**  | **recall** | **premature** |
+| :-------------- | :------------------------- | :------- | :---------- |
+| A1 (1 epoch) | 4-variant {5,7,9,11} | 0.818      | 0.208         |
+| A5           | fixed-turn-7         | 0.560      | 0.119         |
 
-  : **Trigger-position decorrelation, isolated.** *recall* = correct
-  firing on true third-strike positives (n=159); *premature* = firing
-  before the third strike (Persistent-Premature-Probe, n=318).
-  Decorrelation raises recall (0.82 vs 0.56, by removing the
-  fixed-turn's positional bias ---
-  Table [\[tab:recall-by-turn\]](#tab:recall-by-turn){reference-type="ref"
-  reference="tab:recall-by-turn"}) but does *not* reduce premature
-  firing (0.208 vs 0.119). The deployed 2-epoch A1 has premature 0.107.
-  {#tab:decorrelation}
+: **Table 17. Trigger-position decorrelation, isolated.** *recall* =
+correct firing on true third-strike positives (n=159); *premature* =
+firing before the third strike (Persistent-Premature-Probe, n=318).
+Decorrelation raises recall (0.82 vs 0.56, by removing the fixed-turn's
+positional bias ---
+Table 18) but does *not* reduce premature firing
+(0.208 vs 0.119). The deployed 2-epoch A1 has premature 0.107.
+{#tab:decorrelation}
 
 Stratifying recall by the turn at which the third strike lands shows *why*
 recall improves: the fixed-turn design fires reliably only near its trained
 position, while the 4-variant fires wherever the third strike lands.
 
-**Cond**                   **t=5**    **t=7**    **t=9**   **t=11**   **overall**
-  ------------------------- --------- ----------- --------- ---------- -------------
-  A1 (1 epoch), 4-variant     0.836      0.818      0.826     0.778        0.818
-  A5, fixed-turn-7            0.478    **0.727**    0.565     0.556        0.560
+| **Cond**                | **t=5** | **t=7**   | **t=9** | **t=11** | **overall** |
+| :--------------------------- | :----- | :----- | :----- | :----- | :------- |
+| A1 (1 epoch), 4-variant | 0.836   | 0.818     | 0.826   | 0.778    | 0.818       |
+| A5, fixed-turn-7        | 0.478   | **0.727** | 0.565   | 0.556    | 0.560       |
 
-  : **Recall by the turn at which the third strike lands.** The
-  fixed-turn design (A5) recalls best at its trained turn 7 (0.727) and
-  degrades off-position (0.48--0.57); the 4-variant recalls uniformly
-  across positions (0.78--0.84), so firing is conditioned on the
-  semantic trigger rather than the turn. {#tab:recall-by-turn}
+: **Table 18. Recall by the turn at which the third strike lands.** The
+fixed-turn design (A5) recalls best at its trained turn 7 (0.727) and
+degrades off-position (0.48--0.57); the 4-variant recalls uniformly
+across positions (0.78--0.84), so firing is conditioned on the semantic
+trigger rather than the turn. {#tab:recall-by-turn}
 
 On premature firing, by contrast, decorrelation does not help because the
 pathology is not positional: for both conditions the premature rate

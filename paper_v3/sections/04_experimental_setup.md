@@ -44,6 +44,50 @@ corpus; the remaining ~4/5 are deep benign dialogues that end normally without a
 marker — so "conversation depth" alone is already decorrelated from firing by the
 shared majority data (relevant to the mechanism, §6).
 
+**Exact corpus composition.** The full stream-level composition of the untrimmed
+base corpus (`data/sft_filtered`), counted by `scripts/score_corpus_composition.py`:
+
+| Stream | Dialogues | Assistant turns | ~Tokens | Marker-positive | Mean asst turns |
+|--------|-----------|-----------------|---------|-----------------|-----------------|
+| normal | 1399 | 9464 | 414990 | 0 | 6.76 |
+| generic redirect | 496 | 3337 | 121897 | 0 | 6.73 |
+| specialized redirect — topic | 132 | 853 | 32802 | 0 | 6.46 |
+| specialized redirect — language | 119 | 774 | 28305 | 0 | 6.50 |
+| specialized redirect — persona | 141 | 976 | 38866 | 0 | 6.92 |
+| specialized redirect — role-swap | 149 | 1031 | 36885 | 0 | 6.92 |
+| specialized redirect — locale | 150 | 1028 | 36142 | 0 | 6.85 |
+| specialized redirect — pedagogy | 142 | 1010 | 39564 | 0 | 7.11 |
+| persistent off-topic | 130 | 642 | 15639 | 130 | 4.94 |
+| persistent language | 162 | 825 | 20069 | 162 | 5.09 |
+| persistent persona | 176 | 937 | 25194 | 176 | 5.32 |
+| persistent role-swap | 146 | 741 | 18587 | 146 | 5.08 |
+| **TOTAL** | **3342** | **21618** | **828940** | **614** | — |
+
+Tokens are a reproducible whitespace-token proxy over assistant turns (a
+model-tokenizer count would differ in absolute value but not in the composition it
+implies). Only the 614 persistent, marker-positive dialogues carry the sentinel;
+the trim manipulation touches only these.
+
+**Removed-tail statistics (the trim delta).** Over all 614 matched persistent
+dialogues, the trim removes exactly the post-marker continuation and nothing else:
+mean/median **1** post-marker assistant turn removed per dialogue (min 1, max 1),
+mean **14.3** ~tokens (median 13, min 3, max 39). The pre-marker context and the
+marker turn itself are byte-identical between the trimmed and untrimmed corpora.
+Equivalently, tabulating assistant turns in the persistent streams by their firing
+target:
+
+| Corpus | Pre-marker (no fire) | Marker turn (fire) | Post-marker (no fire) |
+|--------|----------------------|--------------------|------------------------|
+| untrimmed | 1917 | 614 | 614 |
+| trimmed | 1917 | 614 | **0** |
+
+The trim's *entire* effect on the training distribution is to delete the 614
+post-marker "escalated-context-but-no-further-fire" assistant turns — exactly the
+sub-threshold counterexamples the mechanism of §6.1 turns on. This makes precise,
+and bounds, the reviewer's concern that trimming changes many things at once: with
+pre-marker context and marker turn held identical, the only manipulated quantity
+is the presence of these counterexamples (and the ~14 tokens they carry).
+
 ## 4.4 How each cell's persistent data is produced (exact provenance)
 
 The trim/marker/position variants are produced by mechanical transforms of a
@@ -96,6 +140,18 @@ seed split, `scripts/build_eval_sets.py`), written to
 generation "fires" iff it contains a `[SESSION_END...]` marker. The axis, if
 present, is the token inside `[SESSION_END: <axis>]`.
 
+**Split unit and leakage checks.** The split is performed at the level of the
+**source scenario seed id** (a 12-hex content hash of the source scenario), not
+the individual record: every dialogue and every probe item derived from a
+scenario carries that scenario's seed id, so all variants of a scenario are
+assigned to the same side of the split. This prevents variant-level leakage across
+training and evaluation. We verify this holds:
+`scripts/score_leakage_check.py` confirms that of the 224 held-out (eval) scenario
+ids, **0 appear among the 747 training scenario ids** — a clean seed-level split.
+The same script finds **0 exact-duplicate and 0 normalized-duplicate**
+(lowercased, whitespace-collapsed) probe contexts across all 17 evaluation probes,
+so no eval item is a trivial restatement of another.
+
 **Disambiguated trim-study layout.** Because the paper_v2 output dirs encode
 trim status confusingly (for A5/A6/A7 the *trimmed*-model generations live under
 `outputs/paper_v2/eval/`, the untrimmed under `eval_untrim/`; A1's pair lives
@@ -126,9 +182,57 @@ each dir carrying a `_SOURCE.json` provenance record.
   `score_mixed_violation_probe.py` (§5.4; output
   `outputs/paper_v3/score/mixed_violation.json`).
 
-## 4.8 Statistical note
+## 4.8 Hardware and training configuration
 
-All numbers are single training seed (seed 42). We additionally retrain the
+All cells share the configuration below (from `config/paper_v2/training_a1_1ep.yaml`
+and its per-cell siblings, which differ only in data paths); reported so the
+training budget the data-shape claim is conditioned on is fully explicit.
+
+| Setting | Value |
+|---------|-------|
+| Base model | Qwen3.5 0.8B-Base (`vendor/models/Qwen_3.5_0.8B-Base`) |
+| Adapter | LoRA/QLoRA [@hu2022lora; @dettmers2023qlora] |
+| LoRA rank / alpha / dropout | 16 / 32 / 0.05 |
+| LoRA target modules | q,k,v,o,gate,up,down projections |
+| Quantization | 4-bit NF4, double-quant, bf16 compute |
+| Epochs | 1 |
+| Optimizer | paged AdamW 8-bit |
+| Learning rate | 2e-4, cosine schedule, warmup ratio 0.05 |
+| Effective batch size | 8 (per-device 1 × grad-accum 8) |
+| Max sequence length | 1792 tokens |
+| Precision / grad checkpointing | bf16 / enabled |
+| Attention impl. | SDPA |
+| Training seed / shuffle seed | 42 (primary); 7 (replication) |
+| GPU | single 12 GB consumer card |
+
+The off-family replication (§5.5b) uses the same recipe on Llama-3.2-1B-Base; its
+exact config is in Appendix A / `outputs/paper_v3/phase3/`.
+
+## 4.9 Statistical note
+
+The main design is single training seed (seed 42). We additionally retrain the
 primary A1 trim/untrim pair at an independent seed (seed 7) and reproduce the
-trim effect (§5.1). The trim effect (~+0.5, §5) is far larger than plausible seed
-variance; the attribution effect (typed ~0.96 vs generic undefined) is structural.
+trim effect (§5.1); two seeds is a limitation we state explicitly (§6.6) and
+address with a pre-registered ≥3-seed protocol in future work (§6.7). The trim
+effect (~+0.5, §5) is far larger than plausible seed variance and is corroborated
+by a factorial item-level model (§5.1b); the attribution effect (typed ~0.96 vs
+generic undefined) is structural.
+
+## 4.10 Ethics, data, and licensing
+
+**Ethics.** All datasets in this study are *synthetic*: dialogues are generated by
+a teacher LLM from templated scenarios, contain no human-subject data and no
+personally identifiable information, and no human participants were involved.
+The study therefore raises no human-subjects concerns; any journal-specific ethics
+declaration can be satisfied on this basis.
+
+**Licensing.** The base models (Qwen3.5, Llama-3.2) are used under their
+respective model licenses; synthetic data, training/scoring scripts, adapters, and
+prompts derived in this work are released for research use consistent with those
+licenses and the project repository's license. Redistribution of any base-model
+weights follows the upstream license terms and is not performed here.
+
+**Author information.** *[To be completed for the non-anonymous submission: author
+name(s), affiliation or "Independent Researcher," corresponding-author contact
+email, and ORCID where available. The current "Independent Research" placeholder
+should be replaced per the target journal's requirements.]*

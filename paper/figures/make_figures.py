@@ -55,45 +55,59 @@ def _save(fig, name):
 # Figure 1 — the boundary map (the thesis in one picture)
 # ---------------------------------------------------------------------------
 def fig_boundary():
-    # (label, prompt-only value, trained value, is_promptable)
+    # Three-regime boundary map. Each capability is shown with its OWN validated,
+    # capability-specific metric (no context-blind type-F1; reviewer #4/#23). To
+    # avoid combining heterogeneous constructs on one scale we group rows into the
+    # three regimes and annotate each row with its metric name.
+    #   Regime A: prompt-sufficient (prompt-only ~ trained)
+    #   Regime B: prompt-elicitable but data-refinable -> shown as A1-vs-A3
+    #             pairwise QUALITY win-rate (0.5 = parity), the validated quality
+    #             metric that replaces type-F1
+    #   Regime C: training-dependent (prompt-only vs trained student)
+    # (label, prompt-only-or-parity value, trained-or-winrate value, regime, metric)
     rows = [
-        ("Locale fidelity\n(1 - leakage)", 0.9866, 0.9866, True),      # 1.34% leakage
-        ("Role-swap\n(type F1)", 0.78, 0.80, True),
-        ("Topic re-anchor\n(type F1)", 0.80, 0.82, True),
-        ("Withholding\n(rate)", 0.45, 0.61, False),                    # 9B teacher 0.45
-        ("Persistence\n(recall)", 0.06, 0.83, False),
+        ("Locale fidelity", 0.9866, 0.9866, "A", "1 - Western leakage"),
+        ("Role-swap quality", 0.50, 0.87, "B", "A1-vs-A3 pairwise win-rate"),
+        ("Topic re-anchor quality", 0.50, 0.57, "B", "A1-vs-A3 pairwise win-rate"),
+        ("Withholding", 0.45, 0.61, "C", "withholding rate (2 judges)"),
+        ("Persistence", 0.06, 0.83, "C", "sentinel recall"),
     ]
-    labels = [r[0] for r in rows]
+    labels = [f"{r[0]}\n({r[4]})" for r in rows]
     prompt_vals = [r[1] for r in rows]
     train_vals = [r[2] for r in rows]
+    regimes = [r[3] for r in rows]
 
-    fig, ax = plt.subplots(figsize=(6.6, 3.6))
+    fig, ax = plt.subplots(figsize=(7.0, 3.9))
     y = range(len(rows))
     h = 0.36
+    # For regime B the "prompt-only" bar is parity (0.5) and the trained bar is
+    # the data-quality win-rate; label the legend to reflect this.
     ax.barh([i + h / 2 for i in y], prompt_vals, height=h,
-            color=C_PROMPT, label="Prompt-only (best)")
+            color=C_PROMPT, label="Prompt-only best (B: parity 0.5)")
     ax.barh([i - h / 2 for i in y], train_vals, height=h,
-            color=C_TRAIN, label="Trained 0.8B student")
+            color=C_TRAIN, label="Trained student (B: data win-rate)")
 
     ax.set_yticks(list(y))
-    ax.set_yticklabels(labels)
+    ax.set_yticklabels(labels, fontsize=7.5)
     ax.invert_yaxis()
     ax.set_xlim(0, 1.0)
-    ax.set_xlabel("score (higher = behavior present)")
+    ax.set_xlabel("capability-specific score (see per-row metric)")
 
-    # value annotations
     for i, (p, t) in enumerate(zip(prompt_vals, train_vals)):
         ax.text(p + 0.01, i + h / 2, f"{p:.2f}", va="center", fontsize=7.5, color=C_PROMPT)
         ax.text(t + 0.01, i - h / 2, f"{t:.2f}", va="center", fontsize=7.5, color=C_TRAIN)
 
-    # separator between promptable (top 3) and not-promptable (bottom 2)
+    # regime separators
+    ax.axhline(0.5, color=C_NEUTRAL, ls=":", lw=0.9)
     ax.axhline(2.5, color=C_NEUTRAL, ls="--", lw=1)
-    ax.text(0.30, 0.98, "PROMPTABLE\n(prompt reaches parity)", ha="center", va="center",
-            fontsize=7.5, color=C_PROMPTABLE, fontweight="bold")
-    ax.text(0.30, 3.55, "NOT PROMPTABLE\n(training required)", ha="center", va="center",
-            fontsize=7.5, color=C_NOTPROMPT, fontweight="bold")
+    ax.text(0.62, 0.0, "A: prompt-sufficient", va="center",
+            fontsize=7, color=C_PROMPTABLE, fontweight="bold")
+    ax.text(0.62, 1.5, "B: prompt-elicitable,\ndata-refinable", va="center",
+            fontsize=7, color=C_NEUTRAL, fontweight="bold")
+    ax.text(0.62, 3.5, "C: training-dependent\n(tested regimes)", va="center",
+            fontsize=7, color=C_NOTPROMPT, fontweight="bold")
 
-    ax.legend(loc="lower center", bbox_to_anchor=(0.5, 1.01), ncol=2, frameon=False)
+    ax.legend(loc="lower center", bbox_to_anchor=(0.5, 1.01), ncol=2, frameon=False, fontsize=7.5)
     ax.spines[["top", "right"]].set_visible(False)
     _save(fig, "fig_boundary.png")
 

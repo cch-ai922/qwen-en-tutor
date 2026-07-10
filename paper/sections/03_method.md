@@ -61,30 +61,19 @@ collapsing them obscures both.
 
 ## 3.3 An invariant-based taxonomy of tutor behavior
 
-We fix the taxonomy not by intuition but by reading it off the
-deployment system prompt. A tutor is the keeper of a set of
-**interaction invariants**, each corresponding to one commitment the
-rendered prompt already makes: language of instruction, lesson topic,
-role structure, persona, pedagogical contract, and locale frame, plus a
-general-appropriateness commitment inherited from the underlying
-assistant. A learner *violation* breaks exactly one commitment, and the
-correct redirect is the **minimal repair** that restores it.
-
-Grounding the axis list in the deployment contract makes it auditable
-and operational: anyone holding the prompt can check the invariant list
-against its enumerated clauses (adding or removing a clause adds or
-removes one axis), and two violations occupy distinct axes when their
-repair must consult different *scenario fields* (language→L1,
-locale→country, persona→role-identity, topic→active-topic). We therefore
-claim completeness only *relative to a given deployment's commitment
-set*. One caveat matters for the evaluation: the repair-shape signal is
-*not uniform across axes* — persona, role-swap, and pedagogical
-withholding carry a context-free surface signature, while locale,
-language, topic, and the generic catch-all are identifiable only
-relative to scenario context. §4.3, §5.5, and Appendix A make this
-bimodality explicit and adapt the evaluation accordingly.
-Table~\ref{tab:invariant-triples} states the invariant, violation, and
-minimal repair for each single-shot axis.
+We fix the taxonomy by reading it off the deployment system prompt rather than by
+intuition. A tutor keeps a set of **interaction invariants**, each corresponding
+to one commitment the prompt already makes: language, topic, role, persona,
+pedagogical contract, and locale, plus a general-appropriateness commitment
+inherited from the assistant. A learner *violation* breaks exactly one commitment;
+the correct redirect is the **minimal repair** that restores it. Grounding the axis
+list in the deployment contract makes it auditable — adding or removing a clause
+adds or removes one axis — so we claim completeness only *relative to a given
+deployment's commitment set*. One bimodality matters for evaluation: persona,
+role-swap, and pedagogical withholding carry a context-free surface signature,
+while locale, language, topic, and the catch-all are identifiable only relative to
+scenario context (§4.3, §5.5, Appendix A adapt the evaluation accordingly).
+Table~\ref{tab:invariant-triples} states each single-shot axis.
 
 ```{=latex}
 \begin{table*}[t]
@@ -108,17 +97,15 @@ General appropriateness (safety)     & Politics / religion / distress (\texttt{r
 \end{table*}
 ```
 
-One caveat: the final row (general appropriateness) is a
-general-assistant safety behavior rather than a tutoring-specific
-invariant, so we treat it as the catch-all. The principle earns its
-place by converting "a generic redirect stream is insufficient" from a
-blanket assertion into a *per-axis* falsifiable prediction — specialized
-data should help exactly on axes whose repair is not already supplied by
-assistant priors or a prompt clause. §5.4 tests this and finds it borne
-out, with the benefit concentrated on pedagogical withholding.
+The final row (general appropriateness) is a general-assistant safety behavior, so
+we treat it as the catch-all. The taxonomy earns its place by converting "a generic
+redirect stream is insufficient" into a *per-axis* falsifiable prediction —
+specialized data should help exactly on axes whose repair is not already supplied
+by assistant priors or a prompt clause — which §5.4 finds borne out, concentrated
+on pedagogical withholding.
 
-The pipeline realises this taxonomy through twelve parallel streams in
-three groups.
+The pipeline realises this taxonomy through twelve parallel streams in three
+groups.
 
 **Normal (1 stream).** Standard scaffolded tutor dialogues. The
 teacher plays both learner and tutor turns over ~12 turns, with the
@@ -136,20 +123,15 @@ invariant (Table~\ref{tab:invariant-triples}, third column). Training on a singl
 "redirect" stream, as most prior tutor datasets do, collapses these
 axis-specific repair shapes into one averaged behavior.
 
-**Persistent 3-strike streams (4 streams).** Persistence is
-*orthogonal* to the invariant axis: any violation can be one-off or
-repeated. A persistent stream produces dialogues where the learner
-persists in the same violation across three probe turns; the tutor
-probes twice, then ends the session with a sentinel marker on the third
-strike. We give persistent variants to four axes —
-`persistent_off_topic`, `persistent_language_violation`,
-`persistent_persona_break`, `persistent_role_swap` — and not all seven,
-because a persistent axis earns its own stream only where *repeated*
-violation changes the correct response (escalation to a hard
-session-end). A repeated locale slip is most naturally just corrected
-again in-locale, so no distinct escalation is trained. (One borderline
-case: `persistent_pedagogy` is a plausible extension we do not currently
-include.)
+**Persistent 3-strike streams (4 streams).** Persistence is *orthogonal* to the
+invariant axis: any violation can be one-off or repeated. A persistent stream has
+the learner persist in the same violation across three probe turns; the tutor
+probes twice, then ends the session with a sentinel on the third strike. We give
+persistent variants to four axes (`persistent_off_topic`,
+`persistent_language_violation`, `persistent_persona_break`,
+`persistent_role_swap`) and not all seven, because a persistent stream earns its
+place only where *repeated* violation changes the correct response (escalation to a
+hard session-end); a repeated locale slip is just corrected again in-locale.
 
 ## 3.4 Trigger-position decorrelation (bounded side-result)
 
@@ -218,39 +200,18 @@ important to me"). Brevity itself is the boundary. Do NOT lecture -- redirect, t
 sentinel.
 ```
 
-The teacher is a general-purpose multilingual model with strong Western
-cultural defaults. A naive "tutor for English learners in China" system
-prompt produces dialogues with NYC, Thanksgiving, and Costco references at
-non-trivial rates. The `[locale]` block above addresses this; it is
-parameterized from `config/locale.yaml` and enumerates: (i) the country and
-a country adjective; (ii) per-locale learner-description language; (iii) a
-per-locale `avoid_default_cultures` list; and (iv) a per-locale
-`avoided_topics` list combining safety and cultural sensitivity.
-
-Most generation streams require **strict-Latin output** in user turns, since
-the learner is a non-native English learner. The `language_redirect` stream
-is the exception: by design the learner code-switches into L1 mid-dialogue.
-We split the locale block into two variants accordingly:
-
-- **`locale_instruction_block`** (default): strict-Latin output rule; L1
-  characters are forbidden in user turns and trigger the `non_latin_script`
-  filter.
-- **`locale_instruction_block_allow_l1`** (allow-L1 variant): the
-  strict-Latin rule is dropped; L1 characters are permitted in the
-  code-switch turn. The `non_latin_script` filter respects the
-  `scenario_type` field and skips user turns for `language_redirect`
-  records.
-
-This split is necessary because the strict-Latin rule and the
-`language_redirect` intent contradict each other. Before we introduced the
-allow-L1 variant, every `language_redirect` example failed the
-`non_latin_script` filter and the stream had ~0% pass rate; after the split,
-the stream reaches the global ~85–90% post-filter pass rate.
-
-A related but distinct decision is to model only the *tutor* side of
-redirect behavior in our SFT. We do not optimize the user-side persona, only
-the tutor's response to user behavior. This keeps the contributed-behavior
-axis sharply defined.
+The teacher is a general-purpose multilingual model with strong Western defaults
+(a naive "tutor in China" prompt yields NYC/Thanksgiving/Costco references at
+non-trivial rates); the `[locale]` block above, parameterized from
+`config/locale.yaml`, addresses this by enumerating the country, per-locale learner
+language, an `avoid_default_cultures` list, and an `avoided_topics` list. One
+locale-engineering detail (full description in Appendix B): most streams require
+strict-Latin user turns, but `language_redirect` by design code-switches into L1,
+so we split the locale block into default (strict-Latin) and allow-L1 variants — a
+split that lifts the `language_redirect` pass rate from ~0% (every record failing
+the `non_latin_script` filter) to the global ~85–90%. We model only the *tutor*
+side of redirect behavior in SFT, keeping the contributed-behavior axis sharply
+defined.
 
 ## 3.6 Yield, filtering, and unused pipeline capabilities
 
